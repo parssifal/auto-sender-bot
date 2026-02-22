@@ -17,6 +17,8 @@ def test_timezone_setup_keyboard_requests_location() -> None:
     assert kb.keyboard
     assert kb.keyboard[0]
     assert kb.keyboard[0][0].request_location is True
+    assert kb.one_time_keyboard is False
+    assert kb.is_persistent is True
 
 
 def test_is_valid_tz_name() -> None:

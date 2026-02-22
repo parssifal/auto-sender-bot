@@ -61,7 +61,8 @@ def _timezone_setup_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Отправить геопозицию", request_location=True)],
         ],
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
         input_field_placeholder="Или введите Europe/Moscow вручную",
     )
 
@@ -501,7 +502,8 @@ def build_router(store: StateStore) -> Router:
         await state.set_state(TimezoneStates.waiting_tz)
         await message.answer(
             "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
-            "Или введите вручную IANA TZ (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
+            "Если Telegram не отправит геопозицию, проверьте разрешение геолокации для Telegram на устройстве.\n"
+            "Также можно ввести вручную IANA TZ (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
             parse_mode="Markdown",
             reply_markup=_timezone_setup_kb(),
         )
@@ -524,6 +526,14 @@ def build_router(store: StateStore) -> Router:
             return
 
         tz_raw = (message.text or "").strip()
+        if tz_raw == "Отправить геопозицию":
+            await message.answer(
+                "Геопозиция не была отправлена в чат. Разрешите доступ к геолокации для Telegram "
+                "и нажмите кнопку снова, либо введите TZ вручную (`Europe/Moscow`).",
+                parse_mode="Markdown",
+                reply_markup=_timezone_setup_kb(),
+            )
+            return
         if tz_raw:
             if not _is_valid_tz_name(tz_raw):
                 await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
