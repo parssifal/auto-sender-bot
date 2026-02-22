@@ -22,12 +22,27 @@ from aiogram.types import (
 from core.state import Destination, StateStore
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime
+from telegram.i18n import (
+    DEFAULT_LANGUAGE,
+    key_values,
+    language_choice_rows,
+    language_display_name,
+    normalize_language,
+    resolve_language_choice,
+    resolve_timezone_choice,
+    timezone_choice_rows,
+    tr,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TimezoneStates(StatesGroup):
     waiting_tz = State()
+
+
+class LanguageStates(StatesGroup):
+    waiting_lang = State()
 
 
 class DestinationsStates(StatesGroup):
@@ -45,46 +60,43 @@ class ScheduleStates(StatesGroup):
     confirming = State()
 
 
-_QUICK_TZ_CHOICES: dict[str, str] = {
-    "Москва (UTC+3)": "Europe/Moscow",
-    "Берлин (UTC+1)": "Europe/Berlin",
-    "Лондон (UTC+0)": "Europe/London",
-    "Нью-Йорк (UTC-5)": "America/New_York",
-    "Лос-Анджелес (UTC-8)": "America/Los_Angeles",
-    "Дубай (UTC+4)": "Asia/Dubai",
-    "Алматы (UTC+5)": "Asia/Almaty",
-    "Дели (UTC+5:30)": "Asia/Kolkata",
-    "Сингапур (UTC+8)": "Asia/Singapore",
-    "Токио (UTC+9)": "Asia/Tokyo",
-}
+_MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
+_MENU_QUEUE_TEXTS = key_values("menu_queue")
+_MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
+_MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
+_MENU_LANGUAGE_TEXTS = key_values("menu_language")
+_TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 
 
-def _main_menu_kb() -> ReplyKeyboardMarkup:
+def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Запланировать"), KeyboardButton(text="Очередь")],
-            [KeyboardButton(text="Мои каналы/чаты"), KeyboardButton(text="Часовой пояс")],
+            [KeyboardButton(text=tr(lang, "menu_schedule")), KeyboardButton(text=tr(lang, "menu_queue"))],
+            [KeyboardButton(text=tr(lang, "menu_destinations")), KeyboardButton(text=tr(lang, "menu_timezone"))],
+            [KeyboardButton(text=tr(lang, "menu_language"))],
         ],
         resize_keyboard=True,
     )
 
 
-def _timezone_setup_kb() -> ReplyKeyboardMarkup:
+def _timezone_setup_kb(lang: str) -> ReplyKeyboardMarkup:
+    keyboard: list[list[KeyboardButton]] = [[KeyboardButton(text=tr(lang, "timezone_location_button"), request_location=True)]]
+    for row in timezone_choice_rows(lang):
+        keyboard.append([KeyboardButton(text=label) for label in row])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Отправить геопозицию", request_location=True)],
-            [KeyboardButton(text="Москва (UTC+3)")],
-            [KeyboardButton(text="Берлин (UTC+1)"), KeyboardButton(text="Лондон (UTC+0)")],
-            [KeyboardButton(text="Нью-Йорк (UTC-5)"), KeyboardButton(text="Лос-Анджелес (UTC-8)")],
-            [KeyboardButton(text="Дубай (UTC+4)"), KeyboardButton(text="Алматы (UTC+5)")],
-            [KeyboardButton(text="Дели (UTC+5:30)"), KeyboardButton(text="Сингапур (UTC+8)")],
-            [KeyboardButton(text="Токио (UTC+9)")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
         one_time_keyboard=False,
         is_persistent=True,
-        input_field_placeholder="Или введите Europe/Moscow вручную",
+        input_field_placeholder="Europe/Moscow",
     )
+
+
+def _language_kb() -> ReplyKeyboardMarkup:
+    keyboard: list[list[KeyboardButton]] = []
+    for row in language_choice_rows():
+        keyboard.append([KeyboardButton(text=label) for label in row])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
 def _destinations_kb(destinations: list[Destination], page: int, has_more: bool) -> InlineKeyboardMarkup:
@@ -106,55 +118,62 @@ def _destinations_kb(destinations: list[Destination], page: int, has_more: bool)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _schedule_kind_kb() -> InlineKeyboardMarkup:
+def _schedule_kind_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Текст", callback_data="skind:text"),
-                InlineKeyboardButton(text="Медиа (фото/видео)", callback_data="skind:media"),
+                InlineKeyboardButton(text=tr(lang, "btn_text"), callback_data="skind:text"),
+                InlineKeyboardButton(text=tr(lang, "btn_media"), callback_data="skind:media"),
             ],
-            [InlineKeyboardButton(text="Отмена", callback_data="scancel")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
     )
 
 
-def _media_collect_kb() -> InlineKeyboardMarkup:
+def _media_collect_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Готово", callback_data="smedia:done"),
-                InlineKeyboardButton(text="Очистить", callback_data="smedia:clear"),
+                InlineKeyboardButton(text=tr(lang, "btn_done"), callback_data="smedia:done"),
+                InlineKeyboardButton(text=tr(lang, "btn_clear"), callback_data="smedia:clear"),
             ],
-            [InlineKeyboardButton(text="Отмена", callback_data="scancel")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
     )
 
 
-def _caption_pos_kb() -> InlineKeyboardMarkup:
+def _caption_pos_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Подпись сверху", callback_data="scap:above"),
-                InlineKeyboardButton(text="Подпись снизу", callback_data="scap:below"),
+                InlineKeyboardButton(text=tr(lang, "btn_caption_above"), callback_data="scap:above"),
+                InlineKeyboardButton(text=tr(lang, "btn_caption_below"), callback_data="scap:below"),
             ],
-            [InlineKeyboardButton(text="Отмена", callback_data="scancel")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
     )
 
 
-def _confirm_kb() -> InlineKeyboardMarkup:
+def _confirm_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Подтвердить", callback_data="sconf:yes")],
-            [InlineKeyboardButton(text="Отмена", callback_data="scancel")],
+            [InlineKeyboardButton(text=tr(lang, "btn_confirm"), callback_data="sconf:yes")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
     )
 
 
-def _queue_cancel_kb(posts: list[dict[str, str]]) -> InlineKeyboardMarkup:
+def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in posts:
-        rows.append([InlineKeyboardButton(text=f"Отменить {item['label']}", callback_data=f"qcancel:{item['id']}")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_queue_cancel", label=item["label"]),
+                    callback_data=f"qcancel:{item['id']}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -167,15 +186,12 @@ def _format_local(epoch_utc: int, tz_name: str) -> str:
     return dt.strftime("%d.%m.%Y %H:%M")
 
 
-def _format_rights_check_error(exc: Exception, *, subject: str) -> str:
+def _format_rights_check_error(exc: Exception, *, subject: str, lang: str = DEFAULT_LANGUAGE) -> str:
     if isinstance(exc, TelegramForbiddenError):
         text = str(exc).lower()
         if "not a member" in text or "bot was kicked" in text:
-            return (
-                "Бот не состоит в этом канале/чате. Добавьте бота администратором с правом "
-                "публикации и повторите привязку через /link или /link_forward."
-            )
-    return f"Не удалось проверить права {subject}: {exc}"
+            return tr(lang, "rights_not_member")
+    return tr(lang, "rights_check_failed", subject=subject, error=exc)
 
 
 def _is_valid_tz_name(tz_name: str) -> bool:
@@ -187,7 +203,7 @@ def _is_valid_tz_name(tz_name: str) -> bool:
 
 
 def _resolve_timezone_input(tz_raw: str) -> str | None:
-    mapped = _QUICK_TZ_CHOICES.get(tz_raw)
+    mapped = resolve_timezone_choice(tz_raw)
     if mapped:
         return mapped
     if _is_valid_tz_name(tz_raw):
@@ -195,35 +211,43 @@ def _resolve_timezone_input(tz_raw: str) -> str | None:
     return None
 
 
-async def _check_user_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
+async def _check_user_admin(bot: Bot, chat_id: int, user_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
     except Exception as exc:
-        return False, _format_rights_check_error(exc, subject="пользователя")
+        return False, _format_rights_check_error(exc, subject=tr(lang, "rights_subject_user"), lang=lang)
     if member.status not in {"creator", "administrator"}:
-        return False, "Нужны права администратора в этом чате/канале."
+        return False, tr(lang, "rights_user_admin_required")
     return True, ""
 
 
-async def _check_bot_admin_and_post(bot: Bot, chat_id: int) -> tuple[bool, str]:
+async def _check_bot_admin_and_post(bot: Bot, chat_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
     try:
         me = await bot.me()
         member = await bot.get_chat_member(chat_id=chat_id, user_id=me.id)
     except Exception as exc:
-        return False, _format_rights_check_error(exc, subject="бота")
+        return False, _format_rights_check_error(exc, subject=tr(lang, "rights_subject_bot"), lang=lang)
 
     if member.status != "administrator":
-        return False, "Бот должен быть администратором в этом чате/канале."
+        return False, tr(lang, "rights_bot_admin_required")
     can_post = getattr(member, "can_post_messages", None)
     if can_post is False:
-        return False, "В канале боту нужно право публиковать сообщения (can_post_messages)."
+        return False, tr(lang, "rights_bot_can_post_required")
     return True, ""
 
 
 def build_router(store: StateStore) -> Router:
     router = Router()
 
+    async def _user_lang(user_id: int) -> str:
+        saved = await store.get_user_language(user_id)
+        return normalize_language(saved)
+
+    async def _main_menu_for(user_id: int) -> ReplyKeyboardMarkup:
+        return _main_menu_kb(await _user_lang(user_id))
+
     async def _render_destinations(message: Message, page: int) -> None:
+        lang = await _user_lang(message.from_user.id)
         page_size = 5
         offset = page * page_size
         items = await store.list_user_destinations(user_id=message.from_user.id, offset=offset, limit=page_size + 1)
@@ -231,38 +255,36 @@ def build_router(store: StateStore) -> Router:
         items = items[:page_size]
         if not items:
             await message.answer(
-                "У вас пока нет привязанных каналов/чатов.\n\n"
-                "Добавьте бота администратором в канал/чат, затем вернитесь сюда и откройте /schedule.\n"
-                "Если канал приватный без @username — используйте /destinations и привязку через пересланное сообщение.",
-                reply_markup=_main_menu_kb(),
+                tr(lang, "no_destinations"),
+                reply_markup=await _main_menu_for(message.from_user.id),
             )
             return
-        await message.answer("Выберите канал/чат:", reply_markup=_destinations_kb(items, page=page, has_more=has_more))
+        await message.answer(tr(lang, "choose_destination"), reply_markup=_destinations_kb(items, page=page, has_more=has_more))
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         await state.clear()
         await message.answer(
-            "Это бот для отложенных публикаций.\n"
-            "1) Добавьте бота администратором в канал/чат (с правом постинга).\n"
-            "2) Настройте часовой пояс (/timezone).\n"
-            "3) Используйте /schedule для планирования.",
-            reply_markup=_main_menu_kb(),
+            tr(lang, "start_message"),
+            reply_markup=_main_menu_kb(lang),
         )
 
     @router.message(Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext) -> None:
+        lang = await _user_lang(message.from_user.id)
         await state.clear()
-        await message.answer("Ок, отменено.", reply_markup=_main_menu_kb())
+        await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(message.from_user.id))
 
-    @router.message(F.text == "Запланировать")
+    @router.message(F.text.in_(_MENU_SCHEDULE_TEXTS))
     @router.message(Command("schedule"))
     async def cmd_schedule(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer("Сначала задайте часовой пояс: /timezone", reply_markup=_main_menu_kb())
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
             return
 
         await state.clear()
@@ -279,59 +301,62 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data.startswith("sdsel:"))
     async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         chat_id = int(query.data.split(":")[1])
         await state.update_data(chat_id=chat_id)
         await state.set_state(ScheduleStates.entering_datetime)
         await query.answer()
-        await query.message.answer("Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).", parse_mode="Markdown")
+        await query.message.answer(tr(lang, "enter_datetime"), parse_mode="Markdown")
 
     @router.message(ScheduleStates.entering_datetime)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer("Сначала задайте часовой пояс: /timezone", reply_markup=_main_menu_kb())
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
             await state.clear()
             return
 
         try:
             parsed: ParsedScheduleTime = parse_local_datetime(message.text, tz_name=tz_name)
         except Exception:
-            await message.answer("Неверный формат. Пример: `12.03.2026 12:15`", parse_mode="Markdown")
+            await message.answer(tr(lang, "invalid_datetime_format"), parse_mode="Markdown")
             return
 
         now_utc = int(time.time())
         if parsed.utc_epoch <= now_utc + 30:
-            await message.answer("Время должно быть в будущем (минимум +30 секунд).")
+            await message.answer(tr(lang, "datetime_future_required"))
             return
 
         await state.update_data(scheduled_at_utc=parsed.utc_epoch, scheduled_local=str(parsed.local_dt))
         await state.set_state(ScheduleStates.choosing_kind)
-        await message.answer("Что вы хотите запланировать?", reply_markup=_schedule_kind_kb())
+        await message.answer(tr(lang, "schedule_kind_prompt"), reply_markup=_schedule_kind_kb(lang))
 
     @router.callback_query(F.data.startswith("skind:"))
     async def cb_kind(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         kind = query.data.split(":")[1]
         await query.answer()
         if kind == "text":
             await state.update_data(kind="text")
             await state.set_state(ScheduleStates.entering_text)
-            await query.message.answer("Отправьте текст сообщения одним сообщением.")
+            await query.message.answer(tr(lang, "schedule_text_prompt"))
         elif kind == "media":
             await state.update_data(kind="media", media_items=[], caption=None, caption_entities_json=None)
             await state.set_state(ScheduleStates.media_collect)
             await query.message.answer(
-                "Отправьте фото/видео (можно несколько или альбом 2–10). "
-                "Подпись отправьте текстом (можно после медиа).",
-                reply_markup=_media_collect_kb(),
+                tr(lang, "schedule_media_prompt"),
+                reply_markup=_media_collect_kb(lang),
             )
         else:
-            await query.message.answer("Неизвестный тип.")
+            await query.message.answer(tr(lang, "schedule_unknown_type"))
 
     @router.message(ScheduleStates.entering_text)
     async def schedule_enter_text(message: Message, state: FSMContext) -> None:
+        lang = await _user_lang(message.from_user.id)
         if not message.text:
-            await message.answer("Нужен текст.")
+            await message.answer(tr(lang, "text_required"))
             return
         entities_json = store.dump_entities(message.entities)
         await state.update_data(text=message.text, entities_json=entities_json)
@@ -341,16 +366,20 @@ def build_router(store: StateStore) -> Router:
         tz_name = await store.get_user_timezone(message.from_user.id) or "UTC"
         local_time = _format_local(int(data["scheduled_at_utc"]), tz_name)
         await message.answer(
-            f"Подтвердите:\n"
-            f"- Куда: `{data['chat_id']}`\n"
-            f"- Когда: {local_time} ({tz_name})\n"
-            f"- Тип: текст\n",
-            parse_mode="Markdown",
-            reply_markup=_confirm_kb(),
+            tr(
+                lang,
+                "confirm_template",
+                where=str(data["chat_id"]),
+                local_time=local_time,
+                tz_name=tz_name,
+                kind=tr(lang, "kind_text"),
+            ),
+            reply_markup=_confirm_kb(lang),
         )
 
     @router.message(ScheduleStates.media_collect)
     async def schedule_collect_media(message: Message, state: FSMContext) -> None:
+        lang = await _user_lang(message.from_user.id)
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
         caption: str | None = data.get("caption")
@@ -360,12 +389,12 @@ def build_router(store: StateStore) -> Router:
             caption = message.text
             caption_entities_json = store.dump_entities(message.entities)
             await state.update_data(caption=caption, caption_entities_json=caption_entities_json)
-            await message.answer(f"Подпись обновлена. Медиа: {len(media)}/10", reply_markup=_media_collect_kb())
+            await message.answer(tr(lang, "caption_updated", count=len(media)), reply_markup=_media_collect_kb(lang))
             return
 
         if message.photo:
             if len(media) >= 10:
-                await message.answer("Лимит 10 медиа. Нажмите «Готово» или сделайте второй пост.", reply_markup=_media_collect_kb())
+                await message.answer(tr(lang, "media_limit"), reply_markup=_media_collect_kb(lang))
                 return
             file_id = message.photo[-1].file_id
             media.append({"type": "photo", "file_id": file_id})
@@ -374,7 +403,7 @@ def build_router(store: StateStore) -> Router:
                 caption_entities_json = store.dump_entities(message.caption_entities)
         elif message.video:
             if len(media) >= 10:
-                await message.answer("Лимит 10 медиа. Нажмите «Готово» или сделайте второй пост.", reply_markup=_media_collect_kb())
+                await message.answer(tr(lang, "media_limit"), reply_markup=_media_collect_kb(lang))
                 return
             file_id = message.video.file_id
             media.append({"type": "video", "file_id": file_id})
@@ -382,31 +411,33 @@ def build_router(store: StateStore) -> Router:
                 caption = message.caption
                 caption_entities_json = store.dump_entities(message.caption_entities)
         else:
-            await message.answer("Пожалуйста, отправьте фото или видео (или подпись текстом).", reply_markup=_media_collect_kb())
+            await message.answer(tr(lang, "media_send_prompt"), reply_markup=_media_collect_kb(lang))
             return
 
         await state.update_data(media_items=media, caption=caption, caption_entities_json=caption_entities_json)
-        await message.answer(f"Добавлено: {len(media)}/10 медиа.", reply_markup=_media_collect_kb())
+        await message.answer(tr(lang, "media_added", count=len(media)), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:clear")
     async def cb_media_clear(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         await query.answer()
         await state.update_data(media_items=[], caption=None, caption_entities_json=None)
-        await query.message.answer("Очищено. Отправьте фото/видео заново.", reply_markup=_media_collect_kb())
+        await query.message.answer(tr(lang, "media_cleared"), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:done")
     async def cb_media_done(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         await query.answer()
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
         caption = (data.get("caption") or "").strip()
         if not media:
-            await query.message.answer("Сначала отправьте хотя бы одно фото/видео.", reply_markup=_media_collect_kb())
+            await query.message.answer(tr(lang, "media_need_at_least_one"), reply_markup=_media_collect_kb(lang))
             return
 
         if caption:
             await state.set_state(ScheduleStates.choosing_caption_position)
-            await query.message.answer("Где должна быть подпись?", reply_markup=_caption_pos_kb())
+            await query.message.answer(tr(lang, "caption_position_prompt"), reply_markup=_caption_pos_kb(lang))
         else:
             await state.update_data(caption_above=False)
             await _send_confirmation(query.message, state, store)
@@ -419,6 +450,7 @@ def build_router(store: StateStore) -> Router:
         await _send_confirmation(query.message, state, store)
 
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore) -> None:
+        lang = await _user_lang(message.from_user.id)
         data = await state.get_data()
         await state.set_state(ScheduleStates.confirming)
         tz_name = await store_.get_user_timezone(message.from_user.id) or "UTC"
@@ -426,34 +458,32 @@ def build_router(store: StateStore) -> Router:
         chat_id = int(data["chat_id"])
         kind = data.get("kind")
         if kind == "text":
-            summary = "текст"
+            summary = tr(lang, "kind_text")
         else:
             media = list(data.get("media_items", []))
-            summary = f"медиа x{len(media)}"
+            summary = tr(lang, "kind_media", count=len(media))
         title = await store_.get_destination_title(chat_id) or str(chat_id)
         await message.answer(
-            "Подтвердите:\n"
-            f"- Куда: {title}\n"
-            f"- Когда: {local_time} ({tz_name})\n"
-            f"- Тип: {summary}\n",
-            reply_markup=_confirm_kb(),
+            tr(lang, "confirm_template", where=title, local_time=local_time, tz_name=tz_name, kind=summary),
+            reply_markup=_confirm_kb(lang),
         )
 
     @router.callback_query(F.data == "sconf:yes")
     async def cb_confirm_yes(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         await query.answer()
         data = await state.get_data()
         user_id = query.from_user.id
         chat_id = int(data["chat_id"])
 
-        ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id)
+        ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
         if not ok:
-            await query.message.answer(err, reply_markup=_main_menu_kb())
+            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
             await state.clear()
             return
-        ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id)
+        ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
         if not ok:
-            await query.message.answer(err, reply_markup=_main_menu_kb())
+            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
             await state.clear()
             return
 
@@ -483,24 +513,26 @@ def build_router(store: StateStore) -> Router:
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(scheduled_at_utc, tz_name)
         await query.message.answer(
-            f"Ок! Запланировано на {local_time} ({tz_name}). id={_short_id(post_id)}",
-            reply_markup=_main_menu_kb(),
+            tr(lang, "scheduled_ok", local_time=local_time, tz_name=tz_name, post_id=_short_id(post_id)),
+            reply_markup=await _main_menu_for(query.from_user.id),
         )
 
     @router.callback_query(F.data == "scancel")
     async def cb_cancel(query: CallbackQuery, state: FSMContext) -> None:
+        lang = await _user_lang(query.from_user.id)
         await query.answer()
         await state.clear()
-        await query.message.answer("Ок, отменено.", reply_markup=_main_menu_kb())
+        await query.message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(query.from_user.id))
 
-    @router.message(F.text == "Очередь")
+    @router.message(F.text.in_(_MENU_QUEUE_TEXTS))
     @router.message(Command("queue"))
     async def cmd_queue(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id) or "UTC"
         posts = await store.list_pending_posts(user_id=message.from_user.id, limit=10)
         if not posts:
-            await message.answer("Очередь пуста.", reply_markup=_main_menu_kb())
+            await message.answer(tr(lang, "queue_empty"), reply_markup=await _main_menu_for(message.from_user.id))
             return
         lines: list[str] = []
         cancel_buttons: list[dict[str, str]] = []
@@ -509,121 +541,148 @@ def build_router(store: StateStore) -> Router:
             title = await store.get_destination_title(p.chat_id) or str(p.chat_id)
             label = _short_id(p.id)
             if p.kind == "text":
-                k = "text"
+                k = tr(lang, "kind_text")
             else:
                 media = await store.get_post_media(p.id)
-                k = f"media x{len(media)}"
+                k = tr(lang, "kind_media", count=len(media))
             lines.append(f"{label} — {when} — {title} — {k}")
             cancel_buttons.append({"id": p.id, "label": label})
-        await message.answer("Ближайшие посты:\n" + "\n".join(lines), reply_markup=_queue_cancel_kb(cancel_buttons))
+        await message.answer(
+            tr(lang, "queue_header", lines="\n".join(lines)),
+            reply_markup=_queue_cancel_kb(cancel_buttons, lang),
+        )
 
     @router.callback_query(F.data.startswith("qcancel:"))
     async def cb_queue_cancel(query: CallbackQuery) -> None:
+        lang = await _user_lang(query.from_user.id)
         post_id = query.data.split(":")[1]
         ok = await store.cancel_post(user_id=query.from_user.id, post_id=post_id)
-        await query.answer("Отменено" if ok else "Не найдено/уже отправлено", show_alert=False)
-        await query.message.answer("Готово.", reply_markup=_main_menu_kb())
+        await query.answer(tr(lang, "queue_cancel_ok") if ok else tr(lang, "queue_cancel_missing"), show_alert=False)
+        await query.message.answer(tr(lang, "done"), reply_markup=await _main_menu_for(query.from_user.id))
 
-    @router.message(F.text == "Часовой пояс")
+    @router.message(F.text.in_(_MENU_TIMEZONE_TEXTS))
     @router.message(Command("timezone"))
     async def cmd_timezone(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         await state.set_state(TimezoneStates.waiting_tz)
         if message.chat.type != "private":
             await message.answer(
-                "Автоопределение по геопозиции работает только в личном чате с ботом.\n"
-                "В этом чате введите IANA TZ вручную (например `Europe/Moscow`).",
+                tr(lang, "timezone_private_only"),
                 parse_mode="Markdown",
-                reply_markup=_main_menu_kb(),
+                reply_markup=await _main_menu_for(message.from_user.id),
             )
             return
         await message.answer(
-            "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
-            "На Desktop можно выбрать TZ кнопками ниже без ручного ввода.\n"
-            "Если Telegram не отправит геопозицию, проверьте разрешение геолокации для Telegram на устройстве.\n"
-            "Также можно ввести вручную IANA TZ (например `Europe/Moscow`, `Europe/London`, `UTC`).",
+            tr(lang, "timezone_prompt"),
             parse_mode="Markdown",
-            reply_markup=_timezone_setup_kb(),
+            reply_markup=_timezone_setup_kb(lang),
         )
 
     @router.message(TimezoneStates.waiting_tz)
     async def set_timezone(message: Message, state: FSMContext) -> None:
+        lang = await _user_lang(message.from_user.id)
         location = message.location
         if location is not None:
             tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
             if not tz_name:
                 await message.answer(
-                    "Не удалось определить часовой пояс по геопозиции. "
-                    "Введите его вручную, например `Europe/Moscow`.",
+                    tr(lang, "timezone_auto_failed"),
                     parse_mode="Markdown",
                 )
                 return
             await store.set_user_timezone(message.from_user.id, tz_name)
             await state.clear()
-            await message.answer(f"Ок, TZ сохранён автоматически: {tz_name}", reply_markup=_main_menu_kb())
+            await message.answer(
+                tr(lang, "timezone_auto_saved", tz_name=tz_name),
+                reply_markup=await _main_menu_for(message.from_user.id),
+            )
             return
 
         tz_raw = (message.text or "").strip()
-        if tz_raw == "Отправить геопозицию":
+        if tz_raw in _TZ_LOCATION_BUTTON_TEXTS:
             await message.answer(
-                "Геопозиция не была отправлена в чат. Разрешите доступ к геолокации для Telegram "
-                "и нажмите кнопку снова, либо выберите TZ кнопкой ниже, либо введите TZ вручную (`Europe/Moscow`).",
+                tr(lang, "timezone_location_not_sent"),
                 parse_mode="Markdown",
-                reply_markup=_timezone_setup_kb(),
+                reply_markup=_timezone_setup_kb(lang),
             )
             return
         if tz_raw:
             resolved_tz = _resolve_timezone_input(tz_raw)
             if not resolved_tz:
-                await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
+                await message.answer(tr(lang, "timezone_invalid"), parse_mode="Markdown")
                 return
             await store.set_user_timezone(message.from_user.id, resolved_tz)
             await state.clear()
-            await message.answer(f"Ок, TZ сохранён: {resolved_tz}", reply_markup=_main_menu_kb())
+            await message.answer(
+                tr(lang, "timezone_saved", tz_name=resolved_tz),
+                reply_markup=await _main_menu_for(message.from_user.id),
+            )
             return
 
         await message.answer(
-            "Отправьте геопозицию кнопкой или введите IANA TZ вручную, например `Europe/Moscow`.",
+            tr(lang, "timezone_prompt_short"),
             parse_mode="Markdown",
-            reply_markup=_timezone_setup_kb(),
+            reply_markup=_timezone_setup_kb(lang),
         )
 
-    @router.message(F.text == "Мои каналы/чаты")
+    @router.message(F.text.in_(_MENU_LANGUAGE_TEXTS))
+    @router.message(Command("language"))
+    async def cmd_language(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
+        await state.set_state(LanguageStates.waiting_lang)
+        await message.answer(tr(lang, "language_prompt"), reply_markup=_language_kb())
+
+    @router.message(LanguageStates.waiting_lang)
+    async def set_language(message: Message, state: FSMContext) -> None:
+        chosen = resolve_language_choice((message.text or "").strip())
+        current_lang = await _user_lang(message.from_user.id)
+        if not chosen:
+            await message.answer(tr(current_lang, "language_invalid"), reply_markup=_language_kb())
+            return
+        await store.set_user_language(message.from_user.id, chosen)
+        await state.clear()
+        await message.answer(
+            tr(chosen, "language_saved", language_name=language_display_name(chosen)),
+            reply_markup=_main_menu_kb(chosen),
+        )
+
+    @router.message(F.text.in_(_MENU_DESTINATIONS_TEXTS))
     @router.message(Command("destinations"))
     async def cmd_destinations(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         total = await store.count_user_destinations(message.from_user.id)
         await message.answer(
-            f"Привязано: {total}\n\n"
-            "Добавить:\n"
-            "- пришлите @username канала/чата командой: /link @channelusername\n"
-            "- или перешлите сообщение из канала/чата после команды /link_forward\n",
-            reply_markup=_main_menu_kb(),
+            tr(lang, "destinations_info", total=total),
+            reply_markup=await _main_menu_for(message.from_user.id),
         )
 
     @router.message(Command("link"))
     async def cmd_link(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) != 2:
-            await message.answer("Использование: /link @channelusername")
+            await message.answer(tr(lang, "link_usage"))
             return
         username = parts[1].strip()
         if not username.startswith("@"):
-            await message.answer("Нужен @username, например /link @mychannel")
+            await message.answer(tr(lang, "link_need_username"))
             return
 
         try:
             chat = await message.bot.get_chat(username)
         except Exception as exc:
-            await message.answer(f"Не удалось найти чат {username}: {exc}")
+            await message.answer(tr(lang, "link_not_found", username=username, error=exc))
             return
 
-        ok, err = await _check_user_admin(message.bot, chat_id=chat.id, user_id=message.from_user.id)
+        ok, err = await _check_user_admin(message.bot, chat_id=chat.id, user_id=message.from_user.id, lang=lang)
         if not ok:
             await message.answer(err)
             return
-        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=chat.id)
+        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=chat.id, lang=lang)
         if not ok:
             await message.answer(err)
             return
@@ -637,16 +696,21 @@ def build_router(store: StateStore) -> Router:
             bot_can_post=True,
         )
         await store.link_user_destination(message.from_user.id, chat.id, linked_via="username")
-        await message.answer(f"Ок, привязано: {chat.title or username}", reply_markup=_main_menu_kb())
+        await message.answer(
+            tr(lang, "link_ok", title=chat.title or username),
+            reply_markup=await _main_menu_for(message.from_user.id),
+        )
 
     @router.message(Command("link_forward"))
     async def cmd_link_forward(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
         await state.set_state(DestinationsStates.waiting_forward)
-        await message.answer("Перешлите сообщение из канала/чата, который хотите привязать.")
+        await message.answer(tr(lang, "link_forward_prompt"))
 
     @router.message(DestinationsStates.waiting_forward)
     async def handle_link_forward(message: Message, state: FSMContext) -> None:
+        lang = await _user_lang(message.from_user.id)
         # Support both legacy forward_from_chat and new forward_origin structures.
         forward_chat = getattr(message, "forward_from_chat", None)
         if forward_chat is None:
@@ -654,14 +718,14 @@ def build_router(store: StateStore) -> Router:
             forward_chat = getattr(origin, "chat", None) if origin else None
 
         if not forward_chat:
-            await message.answer("Не вижу пересланный чат. Перешлите сообщение именно из канала/чата.")
+            await message.answer(tr(lang, "link_forward_not_seen"))
             return
 
-        ok, err = await _check_user_admin(message.bot, chat_id=forward_chat.id, user_id=message.from_user.id)
+        ok, err = await _check_user_admin(message.bot, chat_id=forward_chat.id, user_id=message.from_user.id, lang=lang)
         if not ok:
             await message.answer(err)
             return
-        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=forward_chat.id)
+        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=forward_chat.id, lang=lang)
         if not ok:
             await message.answer(err)
             return
@@ -676,7 +740,10 @@ def build_router(store: StateStore) -> Router:
         )
         await store.link_user_destination(message.from_user.id, forward_chat.id, linked_via="forward")
         await state.clear()
-        await message.answer(f"Ок, привязано: {forward_chat.title}", reply_markup=_main_menu_kb())
+        await message.answer(
+            tr(lang, "link_ok", title=forward_chat.title),
+            reply_markup=await _main_menu_for(message.from_user.id),
+        )
 
     @router.my_chat_member()
     async def on_my_chat_member(event) -> None:

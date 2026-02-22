@@ -22,7 +22,7 @@ async def test_check_user_admin_returns_membership_hint_for_forbidden() -> None:
     ok, err = await _check_user_admin(bot=_ForbiddenUserCheckBot(), chat_id=-100, user_id=42)  # type: ignore[arg-type]
 
     assert ok is False
-    assert "Бот не состоит в этом канале/чате." in err
+    assert "Bot is not in this channel/chat." in err
     assert "Telegram server says" not in err
 
 
@@ -31,5 +31,5 @@ async def test_check_bot_admin_returns_membership_hint_for_forbidden() -> None:
     ok, err = await _check_bot_admin_and_post(bot=_ForbiddenBotCheckBot(), chat_id=-100)  # type: ignore[arg-type]
 
     assert ok is False
-    assert "Бот не состоит в этом канале/чате." in err
+    assert "Bot is not in this channel/chat." in err
     assert "Telegram server says" not in err

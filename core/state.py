@@ -56,6 +56,7 @@ class StateStore:
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 timezone TEXT NULL,
+                language TEXT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
@@ -114,14 +115,19 @@ class StateStore:
             );
             """
         )
+
+        user_columns = await self._conn.execute_fetchall("PRAGMA table_info(users)")
+        user_column_names = {str(row["name"]) for row in user_columns}
+        if "language" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN language TEXT NULL")
         await self._conn.commit()
 
     async def ensure_user(self, user_id: int) -> None:
         now = int(time.time())
         await self._conn.execute(
             """
-            INSERT INTO users(user_id, timezone, created_at, updated_at)
-            VALUES(?, NULL, ?, ?)
+            INSERT INTO users(user_id, timezone, language, created_at, updated_at)
+            VALUES(?, NULL, NULL, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET updated_at=excluded.updated_at
             """,
             (user_id, now, now),
@@ -140,6 +146,21 @@ class StateStore:
         await self._conn.execute(
             "UPDATE users SET timezone=?, updated_at=? WHERE user_id=?",
             (tz_name, now, user_id),
+        )
+        await self._conn.commit()
+
+    async def get_user_language(self, user_id: int) -> str | None:
+        row = await self._execute_fetchone(
+            "SELECT language FROM users WHERE user_id=?",
+            (user_id,),
+        )
+        return None if row is None else row["language"]
+
+    async def set_user_language(self, user_id: int, language: str) -> None:
+        now = int(time.time())
+        await self._conn.execute(
+            "UPDATE users SET language=?, updated_at=? WHERE user_id=?",
+            (language, now, user_id),
         )
         await self._conn.commit()
 

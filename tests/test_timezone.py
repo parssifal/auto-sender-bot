@@ -13,7 +13,7 @@ def test_timezone_from_coordinates_invalid_bounds() -> None:
 
 
 def test_timezone_setup_keyboard_requests_location() -> None:
-    kb = _timezone_setup_kb()
+    kb = _timezone_setup_kb("ru")
     assert kb.keyboard
     assert kb.keyboard[0]
     assert kb.keyboard[0][0].request_location is True
@@ -31,5 +31,6 @@ def test_is_valid_tz_name() -> None:
 
 def test_resolve_timezone_input() -> None:
     assert _resolve_timezone_input("Москва (UTC+3)") == "Europe/Moscow"
+    assert _resolve_timezone_input("Moscow (UTC+3)") == "Europe/Moscow"
     assert _resolve_timezone_input("Europe/London") == "Europe/London"
     assert _resolve_timezone_input("Not/A_Real_TZ") is None
