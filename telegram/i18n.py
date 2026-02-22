@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 DEFAULT_LANGUAGE = "en"
-SUPPORTED_LANGUAGES = ("en", "ru")
+SUPPORTED_LANGUAGES = ("en", "ru", "uk", "de", "ar", "hi", "zh", "ja")
 
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
@@ -94,7 +94,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_saved": "Language saved: {language_name}",
         "language_invalid": "Unknown language. Choose one of the buttons.",
         "language_option_en": "English",
-        "language_option_ru": "Russian",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
         "btn_text": "Text",
         "btn_media": "Media (photo/video)",
         "btn_cancel": "Cancel",
@@ -196,6 +202,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "Неизвестный язык. Выберите вариант кнопкой.",
         "language_option_en": "English",
         "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
         "btn_text": "Текст",
         "btn_media": "Медиа (фото/видео)",
         "btn_cancel": "Отмена",
@@ -206,10 +218,124 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
     },
+    "uk": {
+        "menu_schedule": "Запланувати",
+        "menu_queue": "Черга",
+        "menu_destinations": "Мої канали/чати",
+        "menu_timezone": "Часовий пояс",
+        "menu_language": "Мова",
+        "timezone_location_button": "Надіслати геолокацію",
+        "language_prompt": "Оберіть мову інтерфейсу:",
+        "language_saved": "Мову збережено: {language_name}",
+        "language_invalid": "Невідома мова. Виберіть кнопку.",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
+    "de": {
+        "menu_schedule": "Planen",
+        "menu_queue": "Warteschlange",
+        "menu_destinations": "Meine Kanäle/Chats",
+        "menu_timezone": "Zeitzone",
+        "menu_language": "Sprache",
+        "timezone_location_button": "Standort senden",
+        "language_prompt": "Oberflächensprache wählen:",
+        "language_saved": "Sprache gespeichert: {language_name}",
+        "language_invalid": "Unbekannte Sprache. Bitte über die Buttons wählen.",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
+    "ar": {
+        "menu_schedule": "جدولة",
+        "menu_queue": "الطابور",
+        "menu_destinations": "قنواتي/دردشاتي",
+        "menu_timezone": "المنطقة الزمنية",
+        "menu_language": "اللغة",
+        "timezone_location_button": "إرسال الموقع",
+        "language_prompt": "اختر لغة الواجهة:",
+        "language_saved": "تم حفظ اللغة: {language_name}",
+        "language_invalid": "لغة غير معروفة. اختر من الأزرار.",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
+    "hi": {
+        "menu_schedule": "शेड्यूल",
+        "menu_queue": "कतार",
+        "menu_destinations": "मेरे चैनल/चैट",
+        "menu_timezone": "समय क्षेत्र",
+        "menu_language": "भाषा",
+        "timezone_location_button": "लोकेशन भेजें",
+        "language_prompt": "इंटरफ़ेस भाषा चुनें:",
+        "language_saved": "भाषा सहेजी गई: {language_name}",
+        "language_invalid": "अज्ञात भाषा। बटन से चुनें।",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
+    "zh": {
+        "menu_schedule": "计划",
+        "menu_queue": "队列",
+        "menu_destinations": "我的频道/群聊",
+        "menu_timezone": "时区",
+        "menu_language": "语言",
+        "timezone_location_button": "发送位置",
+        "language_prompt": "请选择界面语言:",
+        "language_saved": "语言已保存: {language_name}",
+        "language_invalid": "未知语言，请使用按钮选择。",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
+    "ja": {
+        "menu_schedule": "予約",
+        "menu_queue": "キュー",
+        "menu_destinations": "自分のチャンネル/チャット",
+        "menu_timezone": "タイムゾーン",
+        "menu_language": "言語",
+        "timezone_location_button": "位置情報を送信",
+        "language_prompt": "表示言語を選択してください:",
+        "language_saved": "言語を保存しました: {language_name}",
+        "language_invalid": "不明な言語です。ボタンから選択してください。",
+        "language_option_en": "English",
+        "language_option_ru": "Русский",
+        "language_option_uk": "Українська",
+        "language_option_de": "Deutsch",
+        "language_option_ar": "العربية",
+        "language_option_hi": "हिन्दी",
+        "language_option_zh": "中文",
+        "language_option_ja": "日本語",
+    },
 }
 
 _TZ_CHOICE_IDS = (
-    ("moscow",),
+    ("moscow", "kyiv"),
     ("berlin", "london"),
     ("new_york", "los_angeles"),
     ("dubai", "almaty"),
@@ -219,6 +345,7 @@ _TZ_CHOICE_IDS = (
 
 _TZ_BY_ID: dict[str, str] = {
     "moscow": "Europe/Moscow",
+    "kyiv": "Europe/Kyiv",
     "berlin": "Europe/Berlin",
     "london": "Europe/London",
     "new_york": "America/New_York",
@@ -233,6 +360,7 @@ _TZ_BY_ID: dict[str, str] = {
 _TZ_LABELS: dict[str, dict[str, str]] = {
     "en": {
         "moscow": "Moscow (UTC+3)",
+        "kyiv": "Kyiv (UTC+2)",
         "berlin": "Berlin (UTC+1)",
         "london": "London (UTC+0)",
         "new_york": "New York (UTC-5)",
@@ -245,6 +373,7 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "moscow": "Москва (UTC+3)",
+        "kyiv": "Киев (UTC+2)",
         "berlin": "Берлин (UTC+1)",
         "london": "Лондон (UTC+0)",
         "new_york": "Нью-Йорк (UTC-5)",
@@ -254,6 +383,84 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
         "delhi": "Дели (UTC+5:30)",
         "singapore": "Сингапур (UTC+8)",
         "tokyo": "Токио (UTC+9)",
+    },
+    "uk": {
+        "moscow": "Москва (UTC+3)",
+        "kyiv": "Київ (UTC+2)",
+        "berlin": "Берлін (UTC+1)",
+        "london": "Лондон (UTC+0)",
+        "new_york": "Нью-Йорк (UTC-5)",
+        "los_angeles": "Лос-Анджелес (UTC-8)",
+        "dubai": "Дубай (UTC+4)",
+        "almaty": "Алмати (UTC+5)",
+        "delhi": "Делі (UTC+5:30)",
+        "singapore": "Сінгапур (UTC+8)",
+        "tokyo": "Токіо (UTC+9)",
+    },
+    "de": {
+        "moscow": "Moskau (UTC+3)",
+        "kyiv": "Kyjiw (UTC+2)",
+        "berlin": "Berlin (UTC+1)",
+        "london": "London (UTC+0)",
+        "new_york": "New York (UTC-5)",
+        "los_angeles": "Los Angeles (UTC-8)",
+        "dubai": "Dubai (UTC+4)",
+        "almaty": "Almaty (UTC+5)",
+        "delhi": "Delhi (UTC+5:30)",
+        "singapore": "Singapur (UTC+8)",
+        "tokyo": "Tokio (UTC+9)",
+    },
+    "ar": {
+        "moscow": "موسكو (UTC+3)",
+        "kyiv": "كييف (UTC+2)",
+        "berlin": "برلين (UTC+1)",
+        "london": "لندن (UTC+0)",
+        "new_york": "نيويورك (UTC-5)",
+        "los_angeles": "لوس أنجلوس (UTC-8)",
+        "dubai": "دبي (UTC+4)",
+        "almaty": "ألماتي (UTC+5)",
+        "delhi": "دلهي (UTC+5:30)",
+        "singapore": "سنغافورة (UTC+8)",
+        "tokyo": "طوكيو (UTC+9)",
+    },
+    "hi": {
+        "moscow": "मॉस्को (UTC+3)",
+        "kyiv": "कीव (UTC+2)",
+        "berlin": "बर्लिन (UTC+1)",
+        "london": "लंदन (UTC+0)",
+        "new_york": "न्यूयॉर्क (UTC-5)",
+        "los_angeles": "लॉस एंजेलिस (UTC-8)",
+        "dubai": "दुबई (UTC+4)",
+        "almaty": "अल्माटी (UTC+5)",
+        "delhi": "दिल्ली (UTC+5:30)",
+        "singapore": "सिंगापुर (UTC+8)",
+        "tokyo": "टोक्यो (UTC+9)",
+    },
+    "zh": {
+        "moscow": "莫斯科 (UTC+3)",
+        "kyiv": "基辅 (UTC+2)",
+        "berlin": "柏林 (UTC+1)",
+        "london": "伦敦 (UTC+0)",
+        "new_york": "纽约 (UTC-5)",
+        "los_angeles": "洛杉矶 (UTC-8)",
+        "dubai": "迪拜 (UTC+4)",
+        "almaty": "阿拉木图 (UTC+5)",
+        "delhi": "德里 (UTC+5:30)",
+        "singapore": "新加坡 (UTC+8)",
+        "tokyo": "东京 (UTC+9)",
+    },
+    "ja": {
+        "moscow": "モスクワ (UTC+3)",
+        "kyiv": "キーウ (UTC+2)",
+        "berlin": "ベルリン (UTC+1)",
+        "london": "ロンドン (UTC+0)",
+        "new_york": "ニューヨーク (UTC-5)",
+        "los_angeles": "ロサンゼルス (UTC-8)",
+        "dubai": "ドバイ (UTC+4)",
+        "almaty": "アルマトイ (UTC+5)",
+        "delhi": "デリー (UTC+5:30)",
+        "singapore": "シンガポール (UTC+8)",
+        "tokyo": "東京 (UTC+9)",
     },
 }
 
@@ -277,35 +484,37 @@ def tr(language: str | None, key: str, **kwargs: object) -> str:
 def key_values(key: str) -> tuple[str, ...]:
     out: list[str] = []
     for lang in SUPPORTED_LANGUAGES:
-        value = _TRANSLATIONS[lang].get(key)
+        value = _TRANSLATIONS.get(lang, {}).get(key)
         if value and value not in out:
             out.append(value)
     return tuple(out)
 
 
 def language_choice_rows() -> list[list[str]]:
-    return [[tr("en", "language_option_en"), tr("en", "language_option_ru")]]
+    labels = [tr("en", f"language_option_{code}") for code in SUPPORTED_LANGUAGES]
+    return [labels[i : i + 2] for i in range(0, len(labels), 2)]
 
 
 def resolve_language_choice(text: str) -> str | None:
     raw = text.strip()
     if raw.lower() in SUPPORTED_LANGUAGES:
         return raw.lower()
-    en_label_en = tr("en", "language_option_en")
-    en_label_ru = tr("en", "language_option_ru")
-    ru_label_ru = tr("ru", "language_option_ru")
-    if raw == en_label_en:
-        return "en"
-    if raw in {en_label_ru, ru_label_ru}:
-        return "ru"
+
+    for code in SUPPORTED_LANGUAGES:
+        key = f"language_option_{code}"
+        labels = {tr("en", key)}
+        for lang in SUPPORTED_LANGUAGES:
+            value = _TRANSLATIONS.get(lang, {}).get(key)
+            if value:
+                labels.add(value)
+        if raw in labels:
+            return code
     return None
 
 
 def language_display_name(language: str) -> str:
     lang = normalize_language(language)
-    if lang == "ru":
-        return tr("ru", "language_option_ru")
-    return tr("en", "language_option_en")
+    return tr("en", f"language_option_{lang}")
 
 
 def timezone_choice_rows(language: str | None) -> list[list[str]]:

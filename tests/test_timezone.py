@@ -19,7 +19,10 @@ def test_timezone_setup_keyboard_requests_location() -> None:
     assert kb.keyboard[0][0].request_location is True
     flat_texts = [btn.text for row in kb.keyboard for btn in row]
     assert "Москва (UTC+3)" in flat_texts
+    assert "Киев (UTC+2)" in flat_texts
+    assert "Берлин (UTC+1)" in flat_texts
     assert "Нью-Йорк (UTC-5)" in flat_texts
+    assert "Токио (UTC+9)" in flat_texts
     assert kb.one_time_keyboard is False
     assert kb.is_persistent is True
 
@@ -31,6 +34,8 @@ def test_is_valid_tz_name() -> None:
 
 def test_resolve_timezone_input() -> None:
     assert _resolve_timezone_input("Москва (UTC+3)") == "Europe/Moscow"
+    assert _resolve_timezone_input("Киев (UTC+2)") == "Europe/Kyiv"
     assert _resolve_timezone_input("Moscow (UTC+3)") == "Europe/Moscow"
+    assert _resolve_timezone_input("Tokyo (UTC+9)") == "Asia/Tokyo"
     assert _resolve_timezone_input("Europe/London") == "Europe/London"
     assert _resolve_timezone_input("Not/A_Real_TZ") is None
