@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -133,11 +134,22 @@ def _format_local(epoch_utc: int, tz_name: str) -> str:
     return dt.strftime("%d.%m.%Y %H:%M")
 
 
+def _format_rights_check_error(exc: Exception, *, subject: str) -> str:
+    if isinstance(exc, TelegramForbiddenError):
+        text = str(exc).lower()
+        if "not a member" in text or "bot was kicked" in text:
+            return (
+                "Бот не состоит в этом канале/чате. Добавьте бота администратором с правом "
+                "публикации и повторите привязку через /link или /link_forward."
+            )
+    return f"Не удалось проверить права {subject}: {exc}"
+
+
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
     except Exception as exc:
-        return False, f"Не удалось проверить права пользователя: {exc}"
+        return False, _format_rights_check_error(exc, subject="пользователя")
     if member.status not in {"creator", "administrator"}:
         return False, "Нужны права администратора в этом чате/канале."
     return True, ""
@@ -148,7 +160,7 @@ async def _check_bot_admin_and_post(bot: Bot, chat_id: int) -> tuple[bool, str]:
         me = await bot.me()
         member = await bot.get_chat_member(chat_id=chat_id, user_id=me.id)
     except Exception as exc:
-        return False, f"Не удалось проверить права бота: {exc}"
+        return False, _format_rights_check_error(exc, subject="бота")
 
     if member.status != "administrator":
         return False, "Бот должен быть администратором в этом чате/канале."
