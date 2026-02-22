@@ -506,30 +506,38 @@ def build_router(store: StateStore) -> Router:
             reply_markup=_timezone_setup_kb(),
         )
 
-    @router.message(TimezoneStates.waiting_tz, F.location)
-    async def set_timezone_from_location(message: Message, state: FSMContext) -> None:
+    @router.message(TimezoneStates.waiting_tz)
+    async def set_timezone(message: Message, state: FSMContext) -> None:
         location = message.location
-        if location is None:
-            await message.answer("Не удалось прочитать геопозицию. Попробуйте ещё раз или введите TZ вручную.")
+        if location is not None:
+            tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
+            if not tz_name:
+                await message.answer(
+                    "Не удалось определить часовой пояс по геопозиции. "
+                    "Введите его вручную, например `Europe/Moscow`.",
+                    parse_mode="Markdown",
+                )
+                return
+            await store.set_user_timezone(message.from_user.id, tz_name)
+            await state.clear()
+            await message.answer(f"Ок, TZ сохранён автоматически: {tz_name}", reply_markup=_main_menu_kb())
             return
 
-        tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
-        if not tz_name:
-            await message.answer("Не удалось определить часовой пояс по геопозиции. Введите его вручную, например `Europe/Moscow`.", parse_mode="Markdown")
-            return
-        await store.set_user_timezone(message.from_user.id, tz_name)
-        await state.clear()
-        await message.answer(f"Ок, TZ сохранён автоматически: {tz_name}", reply_markup=_main_menu_kb())
-
-    @router.message(TimezoneStates.waiting_tz, F.text)
-    async def set_timezone_from_text(message: Message, state: FSMContext) -> None:
         tz_raw = (message.text or "").strip()
-        if not _is_valid_tz_name(tz_raw):
-            await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
+        if tz_raw:
+            if not _is_valid_tz_name(tz_raw):
+                await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
+                return
+            await store.set_user_timezone(message.from_user.id, tz_raw)
+            await state.clear()
+            await message.answer(f"Ок, TZ сохранён: {tz_raw}", reply_markup=_main_menu_kb())
             return
-        await store.set_user_timezone(message.from_user.id, tz_raw)
-        await state.clear()
-        await message.answer(f"Ок, TZ сохранён: {tz_raw}", reply_markup=_main_menu_kb())
+
+        await message.answer(
+            "Отправьте геопозицию кнопкой или введите IANA TZ вручную, например `Europe/Moscow`.",
+            parse_mode="Markdown",
+            reply_markup=_timezone_setup_kb(),
+        )
 
     @router.message(F.text == "Мои каналы/чаты")
     @router.message(Command("destinations"))
