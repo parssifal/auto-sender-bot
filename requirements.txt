@@ -1,2 +1,3 @@
 aiogram==3.25.0
 aiosqlite==0.21.0
+timezonefinder==8.2.0

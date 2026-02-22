@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from core.state import Destination, StateStore
+from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,17 @@ def _main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Мои каналы/чаты"), KeyboardButton(text="Часовой пояс")],
         ],
         resize_keyboard=True,
+    )
+
+
+def _timezone_setup_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Отправить геопозицию", request_location=True)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Или введите Europe/Moscow вручную",
     )
 
 
@@ -143,6 +155,14 @@ def _format_rights_check_error(exc: Exception, *, subject: str) -> str:
                 "публикации и повторите привязку через /link или /link_forward."
             )
     return f"Не удалось проверить права {subject}: {exc}"
+
+
+def _is_valid_tz_name(tz_name: str) -> bool:
+    try:
+        ZoneInfo(tz_name)
+    except Exception:
+        return False
+    return True
 
 
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
@@ -480,16 +500,31 @@ def build_router(store: StateStore) -> Router:
         await store.ensure_user(message.from_user.id)
         await state.set_state(TimezoneStates.waiting_tz)
         await message.answer(
-            "Отправьте часовой пояс в формате IANA (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
+            "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
+            "Или введите вручную IANA TZ (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
             parse_mode="Markdown",
+            reply_markup=_timezone_setup_kb(),
         )
 
-    @router.message(TimezoneStates.waiting_tz)
-    async def set_timezone(message: Message, state: FSMContext) -> None:
+    @router.message(TimezoneStates.waiting_tz, F.location)
+    async def set_timezone_from_location(message: Message, state: FSMContext) -> None:
+        location = message.location
+        if location is None:
+            await message.answer("Не удалось прочитать геопозицию. Попробуйте ещё раз или введите TZ вручную.")
+            return
+
+        tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
+        if not tz_name:
+            await message.answer("Не удалось определить часовой пояс по геопозиции. Введите его вручную, например `Europe/Moscow`.", parse_mode="Markdown")
+            return
+        await store.set_user_timezone(message.from_user.id, tz_name)
+        await state.clear()
+        await message.answer(f"Ок, TZ сохранён автоматически: {tz_name}", reply_markup=_main_menu_kb())
+
+    @router.message(TimezoneStates.waiting_tz, F.text)
+    async def set_timezone_from_text(message: Message, state: FSMContext) -> None:
         tz_raw = (message.text or "").strip()
-        try:
-            ZoneInfo(tz_raw)
-        except Exception:
+        if not _is_valid_tz_name(tz_raw):
             await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
             return
         await store.set_user_timezone(message.from_user.id, tz_raw)
