@@ -42,6 +42,8 @@ async def test_send_media_group_caption_only_first_item() -> None:
     assert getattr(built[0], "show_caption_above_media") is True
     assert built[1].caption is None
     assert built[2].caption is None
+    assert getattr(built[1], "show_caption_above_media") is True
+    assert getattr(built[2], "show_caption_above_media") is True
 
 
 @pytest.mark.asyncio

@@ -97,11 +97,14 @@ async def send_media_post(
             media_type = item["type"]
             file_id = item["file_id"]
             common_kwargs: dict[str, Any] = {}
+            if caption_text and not send_caption_separately:
+                # Telegram media groups require this flag to be identical on every item.
+                common_kwargs["show_caption_above_media"] = caption_above_value
             if idx == 0 and (caption_text and not send_caption_separately):
                 common_kwargs = {
+                    "show_caption_above_media": caption_above_value,
                     "caption": caption_text,
                     "caption_entities": caption_entities,
-                    "show_caption_above_media": caption_above_value,
                 }
             if media_type == "photo":
                 media.append(InputMediaPhoto(media=file_id, **common_kwargs))
