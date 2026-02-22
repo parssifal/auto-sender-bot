@@ -45,6 +45,21 @@ class ScheduleStates(StatesGroup):
     confirming = State()
 
 
+_QUICK_TZ_CHOICES: dict[str, str] = {
+    "Москва (UTC+3)": "Europe/Moscow",
+    "Киев (UTC+2)": "Europe/Kyiv",
+    "Берлин (UTC+1)": "Europe/Berlin",
+    "Лондон (UTC+0)": "Europe/London",
+    "Нью-Йорк (UTC-5)": "America/New_York",
+    "Лос-Анджелес (UTC-8)": "America/Los_Angeles",
+    "Дубай (UTC+4)": "Asia/Dubai",
+    "Алматы (UTC+5)": "Asia/Almaty",
+    "Дели (UTC+5:30)": "Asia/Kolkata",
+    "Сингапур (UTC+8)": "Asia/Singapore",
+    "Токио (UTC+9)": "Asia/Tokyo",
+}
+
+
 def _main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -59,6 +74,12 @@ def _timezone_setup_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Отправить геопозицию", request_location=True)],
+            [KeyboardButton(text="Москва (UTC+3)"), KeyboardButton(text="Киев (UTC+2)")],
+            [KeyboardButton(text="Берлин (UTC+1)"), KeyboardButton(text="Лондон (UTC+0)")],
+            [KeyboardButton(text="Нью-Йорк (UTC-5)"), KeyboardButton(text="Лос-Анджелес (UTC-8)")],
+            [KeyboardButton(text="Дубай (UTC+4)"), KeyboardButton(text="Алматы (UTC+5)")],
+            [KeyboardButton(text="Дели (UTC+5:30)"), KeyboardButton(text="Сингапур (UTC+8)")],
+            [KeyboardButton(text="Токио (UTC+9)")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -164,6 +185,15 @@ def _is_valid_tz_name(tz_name: str) -> bool:
     except Exception:
         return False
     return True
+
+
+def _resolve_timezone_input(tz_raw: str) -> str | None:
+    mapped = _QUICK_TZ_CHOICES.get(tz_raw)
+    if mapped:
+        return mapped
+    if _is_valid_tz_name(tz_raw):
+        return tz_raw
+    return None
 
 
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
@@ -510,6 +540,7 @@ def build_router(store: StateStore) -> Router:
             return
         await message.answer(
             "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
+            "На Desktop можно выбрать TZ кнопками ниже без ручного ввода.\n"
             "Если Telegram не отправит геопозицию, проверьте разрешение геолокации для Telegram на устройстве.\n"
             "Также можно ввести вручную IANA TZ (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
             parse_mode="Markdown",
@@ -537,18 +568,19 @@ def build_router(store: StateStore) -> Router:
         if tz_raw == "Отправить геопозицию":
             await message.answer(
                 "Геопозиция не была отправлена в чат. Разрешите доступ к геолокации для Telegram "
-                "и нажмите кнопку снова, либо введите TZ вручную (`Europe/Moscow`).",
+                "и нажмите кнопку снова, либо выберите TZ кнопкой ниже, либо введите TZ вручную (`Europe/Moscow`).",
                 parse_mode="Markdown",
                 reply_markup=_timezone_setup_kb(),
             )
             return
         if tz_raw:
-            if not _is_valid_tz_name(tz_raw):
+            resolved_tz = _resolve_timezone_input(tz_raw)
+            if not resolved_tz:
                 await message.answer("Не похоже на IANA TZ. Пример: `Europe/Moscow`", parse_mode="Markdown")
                 return
-            await store.set_user_timezone(message.from_user.id, tz_raw)
+            await store.set_user_timezone(message.from_user.id, resolved_tz)
             await state.clear()
-            await message.answer(f"Ок, TZ сохранён: {tz_raw}", reply_markup=_main_menu_kb())
+            await message.answer(f"Ок, TZ сохранён: {resolved_tz}", reply_markup=_main_menu_kb())
             return
 
         await message.answer(
