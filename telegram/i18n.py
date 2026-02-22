@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 DEFAULT_LANGUAGE = "en"
-SUPPORTED_LANGUAGES = ("en", "ru", "uk", "de", "ar", "hi", "zh", "ja")
+SUPPORTED_LANGUAGES = ("en", "ru", "de", "ar", "hi", "zh", "ja")
 
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
@@ -95,7 +95,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "Unknown language. Choose one of the buttons.",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -202,7 +201,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "Неизвестный язык. Выберите вариант кнопкой.",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -218,25 +216,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
     },
-    "uk": {
-        "menu_schedule": "Запланувати",
-        "menu_queue": "Черга",
-        "menu_destinations": "Мої канали/чати",
-        "menu_timezone": "Часовий пояс",
-        "menu_language": "Мова",
-        "timezone_location_button": "Надіслати геолокацію",
-        "language_prompt": "Оберіть мову інтерфейсу:",
-        "language_saved": "Мову збережено: {language_name}",
-        "language_invalid": "Невідома мова. Виберіть кнопку.",
-        "language_option_en": "English",
-        "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
-        "language_option_de": "Deutsch",
-        "language_option_ar": "العربية",
-        "language_option_hi": "हिन्दी",
-        "language_option_zh": "中文",
-        "language_option_ja": "日本語",
-    },
     "de": {
         "menu_schedule": "Planen",
         "menu_queue": "Warteschlange",
@@ -249,7 +228,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "Unbekannte Sprache. Bitte über die Buttons wählen.",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -268,7 +246,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "لغة غير معروفة. اختر من الأزرار.",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -287,7 +264,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "अज्ञात भाषा। बटन से चुनें।",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -306,7 +282,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "未知语言，请使用按钮选择。",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -325,7 +300,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_invalid": "不明な言語です。ボタンから選択してください。",
         "language_option_en": "English",
         "language_option_ru": "Русский",
-        "language_option_uk": "Українська",
         "language_option_de": "Deutsch",
         "language_option_ar": "العربية",
         "language_option_hi": "हिन्दी",
@@ -335,7 +309,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 _TZ_CHOICE_IDS = (
-    ("moscow", "kyiv"),
+    ("moscow",),
     ("berlin", "london"),
     ("new_york", "los_angeles"),
     ("dubai", "almaty"),
@@ -345,7 +319,6 @@ _TZ_CHOICE_IDS = (
 
 _TZ_BY_ID: dict[str, str] = {
     "moscow": "Europe/Moscow",
-    "kyiv": "Europe/Kyiv",
     "berlin": "Europe/Berlin",
     "london": "Europe/London",
     "new_york": "America/New_York",
@@ -360,7 +333,6 @@ _TZ_BY_ID: dict[str, str] = {
 _TZ_LABELS: dict[str, dict[str, str]] = {
     "en": {
         "moscow": "Moscow (UTC+3)",
-        "kyiv": "Kyiv (UTC+2)",
         "berlin": "Berlin (UTC+1)",
         "london": "London (UTC+0)",
         "new_york": "New York (UTC-5)",
@@ -373,7 +345,6 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "moscow": "Москва (UTC+3)",
-        "kyiv": "Киев (UTC+2)",
         "berlin": "Берлин (UTC+1)",
         "london": "Лондон (UTC+0)",
         "new_york": "Нью-Йорк (UTC-5)",
@@ -384,22 +355,8 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
         "singapore": "Сингапур (UTC+8)",
         "tokyo": "Токио (UTC+9)",
     },
-    "uk": {
-        "moscow": "Москва (UTC+3)",
-        "kyiv": "Київ (UTC+2)",
-        "berlin": "Берлін (UTC+1)",
-        "london": "Лондон (UTC+0)",
-        "new_york": "Нью-Йорк (UTC-5)",
-        "los_angeles": "Лос-Анджелес (UTC-8)",
-        "dubai": "Дубай (UTC+4)",
-        "almaty": "Алмати (UTC+5)",
-        "delhi": "Делі (UTC+5:30)",
-        "singapore": "Сінгапур (UTC+8)",
-        "tokyo": "Токіо (UTC+9)",
-    },
     "de": {
         "moscow": "Moskau (UTC+3)",
-        "kyiv": "Kyjiw (UTC+2)",
         "berlin": "Berlin (UTC+1)",
         "london": "London (UTC+0)",
         "new_york": "New York (UTC-5)",
@@ -412,7 +369,6 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "ar": {
         "moscow": "موسكو (UTC+3)",
-        "kyiv": "كييف (UTC+2)",
         "berlin": "برلين (UTC+1)",
         "london": "لندن (UTC+0)",
         "new_york": "نيويورك (UTC-5)",
@@ -425,7 +381,6 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "hi": {
         "moscow": "मॉस्को (UTC+3)",
-        "kyiv": "कीव (UTC+2)",
         "berlin": "बर्लिन (UTC+1)",
         "london": "लंदन (UTC+0)",
         "new_york": "न्यूयॉर्क (UTC-5)",
@@ -438,7 +393,6 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "zh": {
         "moscow": "莫斯科 (UTC+3)",
-        "kyiv": "基辅 (UTC+2)",
         "berlin": "柏林 (UTC+1)",
         "london": "伦敦 (UTC+0)",
         "new_york": "纽约 (UTC-5)",
@@ -451,7 +405,6 @@ _TZ_LABELS: dict[str, dict[str, str]] = {
     },
     "ja": {
         "moscow": "モスクワ (UTC+3)",
-        "kyiv": "キーウ (UTC+2)",
         "berlin": "ベルリン (UTC+1)",
         "london": "ロンドン (UTC+0)",
         "new_york": "ニューヨーク (UTC-5)",

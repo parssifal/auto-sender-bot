@@ -18,7 +18,6 @@ def test_language_choice_resolution() -> None:
     assert resolve_language_choice("en") == "en"
     assert resolve_language_choice("English") == "en"
     assert resolve_language_choice("Русский") == "ru"
-    assert resolve_language_choice("Українська") == "uk"
     assert resolve_language_choice("Deutsch") == "de"
     assert resolve_language_choice("العربية") == "ar"
     assert resolve_language_choice("हिन्दी") == "hi"
@@ -30,16 +29,14 @@ def test_language_choice_resolution() -> None:
 def test_timezone_choices_are_localized() -> None:
     en_rows = timezone_choice_rows("en")
     ru_rows = timezone_choice_rows("ru")
-    zh_rows = timezone_choice_rows("zh")
     assert any("Moscow (UTC+3)" in row for row in en_rows)
     assert any("Москва (UTC+3)" in row for row in ru_rows)
-    assert any("基辅 (UTC+2)" in row for row in zh_rows)
 
 
 def test_timezone_choice_resolution() -> None:
     assert resolve_timezone_choice("Moscow (UTC+3)") == "Europe/Moscow"
     assert resolve_timezone_choice("Москва (UTC+3)") == "Europe/Moscow"
-    assert resolve_timezone_choice("كييف (UTC+2)") == "Europe/Kyiv"
+    assert resolve_timezone_choice("دبي (UTC+4)") == "Asia/Dubai"
     assert resolve_timezone_choice("東京 (UTC+9)") == "Asia/Tokyo"
     assert resolve_timezone_choice("Unknown City") is None
 
