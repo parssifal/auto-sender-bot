@@ -500,6 +500,14 @@ def build_router(store: StateStore) -> Router:
     async def cmd_timezone(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         await state.set_state(TimezoneStates.waiting_tz)
+        if message.chat.type != "private":
+            await message.answer(
+                "Автоопределение по геопозиции работает только в личном чате с ботом.\n"
+                "В этом чате введите IANA TZ вручную (например `Europe/Moscow`).",
+                parse_mode="Markdown",
+                reply_markup=_main_menu_kb(),
+            )
+            return
         await message.answer(
             "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
             "Если Telegram не отправит геопозицию, проверьте разрешение геолокации для Telegram на устройстве.\n"
