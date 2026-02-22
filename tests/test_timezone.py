@@ -31,5 +31,5 @@ def test_is_valid_tz_name() -> None:
 
 def test_resolve_timezone_input() -> None:
     assert _resolve_timezone_input("Москва (UTC+3)") == "Europe/Moscow"
-    assert _resolve_timezone_input("Europe/Kyiv") == "Europe/Kyiv"
+    assert _resolve_timezone_input("Europe/London") == "Europe/London"
     assert _resolve_timezone_input("Not/A_Real_TZ") is None

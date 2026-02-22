@@ -47,7 +47,6 @@ class ScheduleStates(StatesGroup):
 
 _QUICK_TZ_CHOICES: dict[str, str] = {
     "Москва (UTC+3)": "Europe/Moscow",
-    "Киев (UTC+2)": "Europe/Kyiv",
     "Берлин (UTC+1)": "Europe/Berlin",
     "Лондон (UTC+0)": "Europe/London",
     "Нью-Йорк (UTC-5)": "America/New_York",
@@ -74,7 +73,7 @@ def _timezone_setup_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Отправить геопозицию", request_location=True)],
-            [KeyboardButton(text="Москва (UTC+3)"), KeyboardButton(text="Киев (UTC+2)")],
+            [KeyboardButton(text="Москва (UTC+3)")],
             [KeyboardButton(text="Берлин (UTC+1)"), KeyboardButton(text="Лондон (UTC+0)")],
             [KeyboardButton(text="Нью-Йорк (UTC-5)"), KeyboardButton(text="Лос-Анджелес (UTC-8)")],
             [KeyboardButton(text="Дубай (UTC+4)"), KeyboardButton(text="Алматы (UTC+5)")],
@@ -542,7 +541,7 @@ def build_router(store: StateStore) -> Router:
             "Отправьте геопозицию кнопкой ниже, и я определю часовой пояс автоматически.\n"
             "На Desktop можно выбрать TZ кнопками ниже без ручного ввода.\n"
             "Если Telegram не отправит геопозицию, проверьте разрешение геолокации для Telegram на устройстве.\n"
-            "Также можно ввести вручную IANA TZ (например `Europe/Moscow`, `Europe/Kyiv`, `UTC`).",
+            "Также можно ввести вручную IANA TZ (например `Europe/Moscow`, `Europe/London`, `UTC`).",
             parse_mode="Markdown",
             reply_markup=_timezone_setup_kb(),
         )
