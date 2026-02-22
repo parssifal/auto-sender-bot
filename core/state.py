@@ -43,6 +43,13 @@ class StateStore:
     def __init__(self, conn: aiosqlite.Connection):
         self._conn = conn
 
+    async def _execute_fetchone(self, query: str, params: tuple[object, ...] = ()) -> aiosqlite.Row | None:
+        cur = await self._conn.execute(query, params)
+        try:
+            return await cur.fetchone()
+        finally:
+            await cur.close()
+
     async def migrate(self) -> None:
         await self._conn.executescript(
             """
@@ -122,7 +129,7 @@ class StateStore:
         await self._conn.commit()
 
     async def get_user_timezone(self, user_id: int) -> str | None:
-        row = await self._conn.execute_fetchone(
+        row = await self._execute_fetchone(
             "SELECT timezone FROM users WHERE user_id=?",
             (user_id,),
         )
@@ -177,7 +184,7 @@ class StateStore:
         await self._conn.commit()
 
     async def count_user_destinations(self, user_id: int) -> int:
-        row = await self._conn.execute_fetchone(
+        row = await self._execute_fetchone(
             "SELECT COUNT(1) AS cnt FROM user_destinations WHERE user_id=?",
             (user_id,),
         )
@@ -373,7 +380,7 @@ class StateStore:
         return out
 
     async def get_destination_title(self, chat_id: int) -> str | None:
-        row = await self._conn.execute_fetchone(
+        row = await self._execute_fetchone(
             "SELECT title FROM destinations WHERE chat_id=?",
             (chat_id,),
         )
