@@ -492,9 +492,8 @@ def build_router(store: StateStore) -> Router:
         await message.answer(
             f"Привязано: {total}\n\n"
             "Добавить:\n"
-            "- пришлите `@username` канала/чата командой: /link @channelusername\n"
+            "- пришлите @username канала/чата командой: /link @channelusername\n"
             "- или перешлите сообщение из канала/чата после команды /link_forward\n",
-            parse_mode="Markdown",
             reply_markup=_main_menu_kb(),
         )
 
