@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from core.config import load_config
@@ -30,7 +31,8 @@ async def amain() -> None:
     dp = Dispatcher(storage=storage)
     dp.include_router(build_router(store=store))
 
-    bot = Bot(token=cfg.bot_token)
+    session = AiohttpSession(timeout=cfg.telegram_http_timeout_seconds)
+    bot = Bot(token=cfg.bot_token, session=session)
 
     stop_event = asyncio.Event()
     scheduler_task = asyncio.create_task(
@@ -38,7 +40,7 @@ async def amain() -> None:
     )
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, polling_timeout=cfg.telegram_polling_timeout_seconds)
     finally:
         stop_event.set()
         scheduler_task.cancel()

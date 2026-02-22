@@ -11,6 +11,8 @@ class Config:
     db_path: str
     log_level: str = "INFO"
     scheduler_poll_seconds: float = 2.0
+    telegram_polling_timeout_seconds: int = 30
+    telegram_http_timeout_seconds: float = 75.0
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -60,9 +62,31 @@ def load_config() -> Config:
         except ValueError as exc:
             raise RuntimeError("SCHEDULER_POLL_SECONDS must be a number") from exc
 
+    polling_timeout_raw = os.getenv("TELEGRAM_POLLING_TIMEOUT_SECONDS")
+    telegram_polling_timeout_seconds = 30
+    if polling_timeout_raw:
+        try:
+            telegram_polling_timeout_seconds = int(polling_timeout_raw)
+        except ValueError as exc:
+            raise RuntimeError("TELEGRAM_POLLING_TIMEOUT_SECONDS must be an integer") from exc
+    if telegram_polling_timeout_seconds <= 0:
+        raise RuntimeError("TELEGRAM_POLLING_TIMEOUT_SECONDS must be > 0")
+
+    http_timeout_raw = os.getenv("TELEGRAM_HTTP_TIMEOUT_SECONDS")
+    telegram_http_timeout_seconds = 75.0
+    if http_timeout_raw:
+        try:
+            telegram_http_timeout_seconds = float(http_timeout_raw)
+        except ValueError as exc:
+            raise RuntimeError("TELEGRAM_HTTP_TIMEOUT_SECONDS must be a number") from exc
+    if telegram_http_timeout_seconds <= 0:
+        raise RuntimeError("TELEGRAM_HTTP_TIMEOUT_SECONDS must be > 0")
+
     return Config(
         bot_token=bot_token,
         db_path=db_path,
         log_level=log_level,
         scheduler_poll_seconds=scheduler_poll_seconds,
+        telegram_polling_timeout_seconds=telegram_polling_timeout_seconds,
+        telegram_http_timeout_seconds=telegram_http_timeout_seconds,
     )
