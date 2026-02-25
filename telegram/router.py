@@ -53,10 +53,7 @@ class DestinationsStates(StatesGroup):
 class ScheduleStates(StatesGroup):
     choosing_destination = State()
     entering_datetime = State()
-    choosing_kind = State()
-    entering_text = State()
-    media_collect = State()
-    choosing_caption_position = State()
+    collecting_post = State()
     confirming = State()
 
 
@@ -118,36 +115,12 @@ def _destinations_kb(destinations: list[Destination], page: int, has_more: bool)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _schedule_kind_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=tr(lang, "btn_text"), callback_data="skind:text"),
-                InlineKeyboardButton(text=tr(lang, "btn_media"), callback_data="skind:media"),
-            ],
-            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
-        ]
-    )
-
-
 def _media_collect_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=tr(lang, "btn_done"), callback_data="smedia:done"),
                 InlineKeyboardButton(text=tr(lang, "btn_clear"), callback_data="smedia:clear"),
-            ],
-            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
-        ]
-    )
-
-
-def _caption_pos_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=tr(lang, "btn_caption_above"), callback_data="scap:above"),
-                InlineKeyboardButton(text=tr(lang, "btn_caption_below"), callback_data="scap:below"),
             ],
             [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
@@ -209,6 +182,33 @@ def _resolve_timezone_input(tz_raw: str) -> str | None:
     if _is_valid_tz_name(tz_raw):
         return tz_raw
     return None
+
+
+def _extract_media_item(message: Message) -> dict[str, str] | None:
+    if message.photo:
+        return {"type": "photo", "file_id": message.photo[-1].file_id}
+    if message.video:
+        return {"type": "video", "file_id": message.video.file_id}
+    return None
+
+
+def _resolve_caption_above(
+    *,
+    current: bool,
+    had_media_before: bool,
+    text_before_media: bool,
+    text_after_media: bool,
+    explicit_above: bool | None,
+) -> bool:
+    if text_after_media:
+        return False
+    if explicit_above is not None:
+        return explicit_above
+    if not had_media_before and text_before_media:
+        return True
+    if had_media_before:
+        return current
+    return False
 
 
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
@@ -329,99 +329,112 @@ def build_router(store: StateStore) -> Router:
             await message.answer(tr(lang, "datetime_future_required"))
             return
 
-        await state.update_data(scheduled_at_utc=parsed.utc_epoch, scheduled_local=str(parsed.local_dt))
-        await state.set_state(ScheduleStates.choosing_kind)
-        await message.answer(tr(lang, "schedule_kind_prompt"), reply_markup=_schedule_kind_kb(lang))
-
-    @router.callback_query(F.data.startswith("skind:"))
-    async def cb_kind(query: CallbackQuery, state: FSMContext) -> None:
-        lang = await _user_lang(query.from_user.id)
-        kind = query.data.split(":")[1]
-        await query.answer()
-        if kind == "text":
-            await state.update_data(kind="text")
-            await state.set_state(ScheduleStates.entering_text)
-            await query.message.answer(tr(lang, "schedule_text_prompt"))
-        elif kind == "media":
-            await state.update_data(kind="media", media_items=[], caption=None, caption_entities_json=None)
-            await state.set_state(ScheduleStates.media_collect)
-            await query.message.answer(
-                tr(lang, "schedule_media_prompt"),
-                reply_markup=_media_collect_kb(lang),
-            )
-        else:
-            await query.message.answer(tr(lang, "schedule_unknown_type"))
-
-    @router.message(ScheduleStates.entering_text)
-    async def schedule_enter_text(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(message.from_user.id)
-        if not message.text:
-            await message.answer(tr(lang, "text_required"))
-            return
-        entities_json = store.dump_entities(message.entities)
-        await state.update_data(text=message.text, entities_json=entities_json)
-        await state.set_state(ScheduleStates.confirming)
-
-        data = await state.get_data()
-        tz_name = await store.get_user_timezone(message.from_user.id) or "UTC"
-        local_time = _format_local(int(data["scheduled_at_utc"]), tz_name)
-        await message.answer(
-            tr(
-                lang,
-                "confirm_template",
-                where=str(data["chat_id"]),
-                local_time=local_time,
-                tz_name=tz_name,
-                kind=tr(lang, "kind_text"),
-            ),
-            reply_markup=_confirm_kb(lang),
+        await state.update_data(
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            kind=None,
+            text=None,
+            entities_json=None,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=False,
+            media_items=[],
+            draft_text=None,
+            draft_entities_json=None,
+            text_before_media=False,
         )
+        await state.set_state(ScheduleStates.collecting_post)
+        await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
 
-    @router.message(ScheduleStates.media_collect)
-    async def schedule_collect_media(message: Message, state: FSMContext) -> None:
+    @router.message(ScheduleStates.collecting_post)
+    async def schedule_collect_post(message: Message, state: FSMContext) -> None:
         lang = await _user_lang(message.from_user.id)
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
-        caption: str | None = data.get("caption")
-        caption_entities_json: str | None = data.get("caption_entities_json")
+        draft_text: str | None = data.get("draft_text")
+        draft_entities_json: str | None = data.get("draft_entities_json")
+        caption_above = bool(data.get("caption_above", False))
+        text_before_media = bool(data.get("text_before_media", False))
+        media_item = _extract_media_item(message)
 
-        if message.text and not message.photo and not message.video:
-            caption = message.text
-            caption_entities_json = store.dump_entities(message.entities)
-            await state.update_data(caption=caption, caption_entities_json=caption_entities_json)
-            await message.answer(tr(lang, "caption_updated", count=len(media)), reply_markup=_media_collect_kb(lang))
+        if message.text and media_item is None:
+            draft_text = message.text
+            draft_entities_json = store.dump_entities(message.entities)
+            text_after_media = bool(media)
+            text_before_media = not text_after_media
+            caption_above = _resolve_caption_above(
+                current=caption_above,
+                had_media_before=bool(media),
+                text_before_media=text_before_media,
+                text_after_media=text_after_media,
+                explicit_above=None,
+            )
+            await state.update_data(
+                draft_text=draft_text,
+                draft_entities_json=draft_entities_json,
+                caption_above=caption_above,
+                text_before_media=text_before_media,
+            )
+            if media:
+                await message.answer(tr(lang, "caption_updated", count=len(media)), reply_markup=_media_collect_kb(lang))
+            else:
+                await message.answer(tr(lang, "text_saved"), reply_markup=_media_collect_kb(lang))
             return
 
-        if message.photo:
-            if len(media) >= 10:
-                await message.answer(tr(lang, "media_limit"), reply_markup=_media_collect_kb(lang))
-                return
-            file_id = message.photo[-1].file_id
-            media.append({"type": "photo", "file_id": file_id})
-            if message.caption:
-                caption = message.caption
-                caption_entities_json = store.dump_entities(message.caption_entities)
-        elif message.video:
-            if len(media) >= 10:
-                await message.answer(tr(lang, "media_limit"), reply_markup=_media_collect_kb(lang))
-                return
-            file_id = message.video.file_id
-            media.append({"type": "video", "file_id": file_id})
-            if message.caption:
-                caption = message.caption
-                caption_entities_json = store.dump_entities(message.caption_entities)
-        else:
+        if media_item is None:
             await message.answer(tr(lang, "media_send_prompt"), reply_markup=_media_collect_kb(lang))
             return
 
-        await state.update_data(media_items=media, caption=caption, caption_entities_json=caption_entities_json)
+        if len(media) >= 10:
+            await message.answer(tr(lang, "media_limit"), reply_markup=_media_collect_kb(lang))
+            return
+
+        had_media_before = bool(media)
+        media.append(media_item)
+
+        explicit_above: bool | None = None
+        caption_from_message = (message.caption or "").strip()
+        if caption_from_message:
+            draft_text = message.caption
+            draft_entities_json = store.dump_entities(message.caption_entities)
+            incoming = getattr(message, "show_caption_above_media", None)
+            explicit_above = None if incoming is None else bool(incoming)
+            text_before_media = False
+
+        caption_above = _resolve_caption_above(
+            current=caption_above,
+            had_media_before=had_media_before,
+            text_before_media=text_before_media,
+            text_after_media=False,
+            explicit_above=explicit_above,
+        )
+
+        await state.update_data(
+            media_items=media,
+            draft_text=draft_text,
+            draft_entities_json=draft_entities_json,
+            caption_above=caption_above,
+            text_before_media=text_before_media,
+        )
         await message.answer(tr(lang, "media_added", count=len(media)), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:clear")
     async def cb_media_clear(query: CallbackQuery, state: FSMContext) -> None:
         lang = await _user_lang(query.from_user.id)
         await query.answer()
-        await state.update_data(media_items=[], caption=None, caption_entities_json=None)
+        await state.update_data(
+            media_items=[],
+            text=None,
+            entities_json=None,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=False,
+            kind=None,
+            draft_text=None,
+            draft_entities_json=None,
+            text_before_media=False,
+        )
+        await state.set_state(ScheduleStates.collecting_post)
         await query.message.answer(tr(lang, "media_cleared"), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:done")
@@ -430,24 +443,33 @@ def build_router(store: StateStore) -> Router:
         await query.answer()
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
-        caption = (data.get("caption") or "").strip()
-        if not media:
-            await query.message.answer(tr(lang, "media_need_at_least_one"), reply_markup=_media_collect_kb(lang))
+        draft_text = data.get("draft_text")
+        draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
+
+        if media:
+            await state.update_data(
+                kind="media",
+                caption=draft_text if draft_text_valid else None,
+                caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
+                text=None,
+                entities_json=None,
+            )
+            await _send_confirmation(query.message, state, store)
             return
 
-        if caption:
-            await state.set_state(ScheduleStates.choosing_caption_position)
-            await query.message.answer(tr(lang, "caption_position_prompt"), reply_markup=_caption_pos_kb(lang))
-        else:
-            await state.update_data(caption_above=False)
+        if draft_text_valid:
+            await state.update_data(
+                kind="text",
+                text=draft_text,
+                entities_json=data.get("draft_entities_json"),
+                caption=None,
+                caption_entities_json=None,
+                caption_above=False,
+            )
             await _send_confirmation(query.message, state, store)
+            return
 
-    @router.callback_query(F.data.startswith("scap:"))
-    async def cb_caption_pos(query: CallbackQuery, state: FSMContext) -> None:
-        await query.answer()
-        pos = query.data.split(":")[1]
-        await state.update_data(caption_above=(pos == "above"))
-        await _send_confirmation(query.message, state, store)
+        await query.message.answer(tr(lang, "post_need_content"), reply_markup=_media_collect_kb(lang))
 
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore) -> None:
         lang = await _user_lang(message.from_user.id)
@@ -510,11 +532,16 @@ def build_router(store: StateStore) -> Router:
             )
 
         await state.clear()
+        await state.set_state(ScheduleStates.entering_datetime)
+        await state.update_data(chat_id=chat_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(scheduled_at_utc, tz_name)
+        title = await store.get_destination_title(chat_id) or str(chat_id)
         await query.message.answer(
             tr(lang, "scheduled_ok", local_time=local_time, tz_name=tz_name, post_id=_short_id(post_id)),
-            reply_markup=await _main_menu_for(query.from_user.id),
+        )
+        await query.message.answer(
+            tr(lang, "schedule_next_prompt", where=title),
         )
 
     @router.callback_query(F.data == "scancel")

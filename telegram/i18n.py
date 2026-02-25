@@ -30,19 +30,30 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_kind_prompt": "What do you want to schedule?",
         "schedule_text_prompt": "Send message text in one message.",
         "schedule_media_prompt": "Send photo/video (single media or album 2-10). Send caption as text (can be after media).",
+        "schedule_post_prompt": (
+            "Send a post: text, photo, or video.\n"
+            "If text is sent before media, it will be above media; if after media, below media.\n"
+            "Tap \"Done\" when your post is ready."
+        ),
         "schedule_unknown_type": "Unknown type.",
         "text_required": "Text is required.",
         "confirm_template": "Confirm:\n- Where: {where}\n- When: {local_time} ({tz_name})\n- Type: {kind}\n",
         "kind_text": "text",
         "kind_media": "media x{count}",
+        "text_saved": "Text saved. Tap \"Done\" to schedule text, or send photo/video to switch to media.",
         "caption_updated": "Caption updated. Media: {count}/10",
         "media_limit": "Limit is 10 media. Tap \"Done\" or create another post.",
-        "media_send_prompt": "Please send a photo or video (or caption as text).",
+        "media_send_prompt": "Please send text, a photo, or a video.",
         "media_added": "Added: {count}/10 media.",
-        "media_cleared": "Cleared. Send photo/video again.",
+        "media_cleared": "Draft cleared. Send text/photo/video again.",
+        "post_need_content": "Send text or at least one photo/video first.",
         "media_need_at_least_one": "Send at least one photo/video first.",
         "caption_position_prompt": "Where should the caption be?",
         "scheduled_ok": "Done! Scheduled for {local_time} ({tz_name}). id={post_id}",
+        "schedule_next_prompt": (
+            "Send next date and time for the same destination ({where}) in format DD.MM.YYYY HH:MM.\n"
+            "Use /schedule to choose another channel/chat, or /cancel to stop."
+        ),
         "queue_empty": "Queue is empty.",
         "queue_header": "Upcoming posts:\n{lines}",
         "queue_cancel_ok": "Cancelled",
@@ -136,19 +147,30 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_kind_prompt": "Что вы хотите запланировать?",
         "schedule_text_prompt": "Отправьте текст сообщения одним сообщением.",
         "schedule_media_prompt": "Отправьте фото/видео (можно несколько или альбом 2–10). Подпись отправьте текстом (можно после медиа).",
+        "schedule_post_prompt": (
+            "Отправьте пост: текст, фото или видео.\n"
+            "Если текст отправлен до медиа — он будет сверху, если после медиа — снизу.\n"
+            "Когда пост готов, нажмите «Готово»."
+        ),
         "schedule_unknown_type": "Неизвестный тип.",
         "text_required": "Нужен текст.",
         "confirm_template": "Подтвердите:\n- Куда: {where}\n- Когда: {local_time} ({tz_name})\n- Тип: {kind}\n",
         "kind_text": "текст",
         "kind_media": "медиа x{count}",
+        "text_saved": "Текст сохранён. Нажмите «Готово», чтобы запланировать текст, или отправьте фото/видео, чтобы сделать медиа-пост.",
         "caption_updated": "Подпись обновлена. Медиа: {count}/10",
         "media_limit": "Лимит 10 медиа. Нажмите «Готово» или сделайте второй пост.",
-        "media_send_prompt": "Пожалуйста, отправьте фото или видео (или подпись текстом).",
+        "media_send_prompt": "Пожалуйста, отправьте текст, фото или видео.",
         "media_added": "Добавлено: {count}/10 медиа.",
-        "media_cleared": "Очищено. Отправьте фото/видео заново.",
+        "media_cleared": "Черновик очищен. Отправьте текст/фото/видео заново.",
+        "post_need_content": "Сначала отправьте текст или хотя бы одно фото/видео.",
         "media_need_at_least_one": "Сначала отправьте хотя бы одно фото/видео.",
         "caption_position_prompt": "Где должна быть подпись?",
         "scheduled_ok": "Ок! Запланировано на {local_time} ({tz_name}). id={post_id}",
+        "schedule_next_prompt": (
+            "Введите следующую дату и время для этого же канала/чата ({where}) в формате ДД.ММ.ГГГГ ЧЧ:ММ.\n"
+            "Используйте /schedule, чтобы выбрать другой канал/чат, или /cancel для выхода."
+        ),
         "queue_empty": "Очередь пуста.",
         "queue_header": "Ближайшие посты:\n{lines}",
         "queue_cancel_ok": "Отменено",
