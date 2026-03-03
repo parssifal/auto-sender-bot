@@ -20,6 +20,15 @@ class Destination:
 
 
 @dataclass(frozen=True)
+class Team:
+    id: str
+    owner_user_id: int
+    name: str
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
 class ScheduledPostRow:
     id: str
     user_id: int
@@ -117,6 +126,18 @@ class StateStore:
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
                 FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (owner_user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_teams_owner_created
+                ON teams(owner_user_id, created_at);
 
             CREATE TABLE IF NOT EXISTS scheduled_posts (
                 id TEXT PRIMARY KEY,
@@ -318,6 +339,39 @@ class StateStore:
                 )
             )
         return out
+
+    async def create_team(self, owner_user_id: int, name: str) -> str:
+        now = int(time.time())
+        team_id = uuid.uuid4().hex
+        await self._conn.execute(
+            """
+            INSERT INTO teams(id, owner_user_id, name, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (team_id, owner_user_id, name, now, now),
+        )
+        await self._conn.commit()
+        return team_id
+
+    async def get_team(self, team_id: str) -> Team | None:
+        row = await self._execute_fetchone(
+            "SELECT * FROM teams WHERE id=?",
+            (team_id,),
+        )
+        return None if row is None else self._row_to_team(row)
+
+    async def list_owned_teams(self, owner_user_id: int, offset: int = 0, limit: int = 20) -> list[Team]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT *
+            FROM teams
+            WHERE owner_user_id=?
+            ORDER BY created_at DESC, id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (owner_user_id, limit, offset),
+        )
+        return [self._row_to_team(row) for row in rows]
 
     async def create_scheduled_text_post(
         self,
@@ -968,6 +1022,16 @@ class StateStore:
             created_at=int(row["created_at"]),
             sent_at=row["sent_at"],
             last_error=row["last_error"],
+        )
+
+    @staticmethod
+    def _row_to_team(row: aiosqlite.Row) -> Team:
+        return Team(
+            id=str(row["id"]),
+            owner_user_id=int(row["owner_user_id"]),
+            name=str(row["name"]),
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
         )
 
     @staticmethod
