@@ -873,6 +873,18 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
+    async def _resolve_broadcast_destination_lines(user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
+        destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(user_id)}
+        valid_chat_ids: list[int] = []
+        labels: list[str] = []
+        for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
+            destination = destination_map.get(chat_id)
+            if destination is None:
+                continue
+            valid_chat_ids.append(chat_id)
+            labels.append(f"- {_destination_label(destination.title, destination.username)}")
+        return valid_chat_ids, "\n".join(labels)
+
     async def _move_repeat_to_destination_selection(
         message: Message,
         state: FSMContext,
@@ -2555,6 +2567,7 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(BroadcastStates.collecting_post)
     @router.message(DraftStates.editing_post)
     @router.message(DraftStates.collecting_post)
     @router.message(RepeatStates.collecting_post)
@@ -2635,6 +2648,7 @@ def build_router(store: StateStore) -> Router:
         lang = await _user_lang(query.from_user.id)
         current_state = await state.get_state()
         if current_state not in {
+            BroadcastStates.collecting_post.state,
             ScheduleStates.collecting_post.state,
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
@@ -2646,6 +2660,8 @@ def build_router(store: StateStore) -> Router:
         await query.answer()
         if current_state == RepeatStates.collecting_post.state:
             collecting_state = RepeatStates.collecting_post
+        elif current_state == BroadcastStates.collecting_post.state:
+            collecting_state = BroadcastStates.collecting_post
         elif current_state == DraftStates.editing_post.state:
             collecting_state = DraftStates.editing_post
         elif current_state == DraftStates.collecting_post.state:
@@ -2671,6 +2687,7 @@ def build_router(store: StateStore) -> Router:
     async def cb_media_done(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
         if current_state not in {
+            BroadcastStates.collecting_post.state,
             ScheduleStates.collecting_post.state,
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
@@ -2743,18 +2760,25 @@ def build_router(store: StateStore) -> Router:
         data = await state.get_data()
         current_state = await state.get_state()
         is_repeat = current_state == RepeatStates.collecting_post.state
-        await state.set_state(RepeatStates.confirming if is_repeat else ScheduleStates.confirming)
+        is_broadcast = current_state == BroadcastStates.collecting_post.state
         tz_name = await store_.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(int(data["scheduled_at_utc"]), tz_name)
-        chat_id = int(data["chat_id"])
         kind = data.get("kind")
         if kind == "text":
             summary = tr(lang, "kind_text")
+            preview = _draft_preview_text(data.get("text"), fallback=tr(lang, "draft_preview_empty"), limit=240)
         else:
             media = list(data.get("media_items", []))
             summary = tr(lang, "kind_media", count=len(media))
-        title = await store_.get_destination_title(chat_id) or str(chat_id)
+            preview = _draft_preview_text(
+                data.get("caption"),
+                fallback=tr(lang, "draft_preview_media_no_caption"),
+                limit=240,
+            )
         if is_repeat:
+            await state.set_state(RepeatStates.confirming)
+            chat_id = int(data["chat_id"])
+            title = await store_.get_destination_title(chat_id) or str(chat_id)
             interval_label = _repeat_interval_label(lang, str(data.get("interval_type") or ""))
             text = tr(
                 lang,
@@ -2765,14 +2789,44 @@ def build_router(store: StateStore) -> Router:
                 interval=interval_label,
                 kind=summary,
             )
+        elif is_broadcast:
+            selected_chat_ids, where_lines = await _resolve_broadcast_destination_lines(
+                user_id,
+                _normalize_selected_chat_ids(data.get("selected_chat_ids")),
+            )
+            if not selected_chat_ids:
+                await state.update_data(selected_chat_ids=[], dest_page=0)
+                await state.set_state(BroadcastStates.choosing_destinations)
+                await _render_broadcast_destinations(message, state, user_id=user_id, page=0, edit=False)
+                return
+            await state.update_data(selected_chat_ids=selected_chat_ids)
+            await state.set_state(BroadcastStates.confirming)
+            text = tr(
+                lang,
+                "broadcast_confirm_template",
+                count=len(selected_chat_ids),
+                where_lines=where_lines,
+                local_time=local_time,
+                tz_name=tz_name,
+                kind=summary,
+                preview=preview,
+            )
         else:
+            await state.set_state(ScheduleStates.confirming)
+            chat_id = int(data["chat_id"])
+            title = await store_.get_destination_title(chat_id) or str(chat_id)
             text = tr(lang, "confirm_template", where=title, local_time=local_time, tz_name=tz_name, kind=summary)
         await message.answer(text, reply_markup=_confirm_kb(lang))
 
     @router.callback_query(F.data == "sconf:yes")
     async def cb_confirm_yes(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.confirming.state, RepeatStates.confirming.state, DraftStates.confirming.state}:
+        if current_state not in {
+            ScheduleStates.confirming.state,
+            RepeatStates.confirming.state,
+            DraftStates.confirming.state,
+            BroadcastStates.confirming.state,
+        }:
             await query.answer()
             return
 
@@ -2783,6 +2837,10 @@ def build_router(store: StateStore) -> Router:
         scheduled_at_utc = int(data["scheduled_at_utc"])
         kind = data.get("kind")
         tz_name = await store.get_user_timezone(user_id) or "UTC"
+
+        if current_state == BroadcastStates.confirming.state:
+            await query.message.answer(tr(lang, "broadcast_action_unavailable"), reply_markup=_confirm_kb(lang))
+            return
 
         if current_state == RepeatStates.confirming.state:
             chat_id = int(data["chat_id"])

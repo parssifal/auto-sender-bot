@@ -26,6 +26,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "broadcast_choose_destinations": "Choose one or more channels/chats.\nSelected: {count}",
         "broadcast_choose_one": "Choose at least one channel/chat first.",
         "broadcast_destination_missing": "This channel/chat is no longer available. Refresh the list.",
+        "broadcast_action_unavailable": "Broadcast saving is not available yet.",
         "timezone_required": "Set timezone first: /timezone",
         "enter_datetime": (
             "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).\n"
@@ -51,6 +52,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- First run: {local_time} ({tz_name})\n"
             "- Interval: {interval}\n"
             "- Type: {kind}\n"
+        ),
+        "broadcast_confirm_template": (
+            "Confirm broadcast:\n"
+            "- Channels ({count}):\n{where_lines}\n"
+            "- When: {local_time} ({tz_name})\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}\n"
         ),
         "repeat_created_ok": (
             "Done! Recurring post created: {interval}, first run {local_time} ({tz_name}). "
@@ -315,6 +323,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "broadcast_choose_destinations": "Выберите один или несколько каналов/чатов.\nВыбрано: {count}",
         "broadcast_choose_one": "Сначала выберите хотя бы один канал/чат.",
         "broadcast_destination_missing": "Этот канал/чат больше недоступен. Обновите список.",
+        "broadcast_action_unavailable": "Сохранение бродкаста пока недоступно.",
         "timezone_required": "Сначала задайте часовой пояс: /timezone",
         "enter_datetime": (
             "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).\n"
@@ -340,6 +349,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Первый запуск: {local_time} ({tz_name})\n"
             "- Интервал: {interval}\n"
             "- Тип: {kind}\n"
+        ),
+        "broadcast_confirm_template": (
+            "Подтвердите бродкаст:\n"
+            "- Каналы ({count}):\n{where_lines}\n"
+            "- Когда: {local_time} ({tz_name})\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}\n"
         ),
         "repeat_created_ok": (
             "Ок! Повторяющийся пост создан: {interval}, первый запуск {local_time} ({tz_name}). "

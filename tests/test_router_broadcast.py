@@ -54,6 +54,35 @@ class BroadcastFlowHarness:
         }
         await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
 
+    async def feed_photo(
+        self,
+        file_id: str,
+        *,
+        update_id: int,
+        message_id: int,
+        caption: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "update_id": update_id,
+            "message": {
+                "message_id": message_id,
+                "date": 1_700_000_000,
+                "chat": {"id": PRIVATE_CHAT_ID, "type": "private"},
+                "from": {"id": USER_ID, "is_bot": False, "first_name": "Test"},
+                "photo": [
+                    {
+                        "file_id": file_id,
+                        "file_unique_id": f"{file_id}_unique",
+                        "width": 100,
+                        "height": 100,
+                    }
+                ],
+            },
+        }
+        if caption is not None:
+            payload["message"]["caption"] = caption
+        await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
+
     async def feed_callback(self, data: str, *, update_id: int, message_id: int) -> None:
         payload = {
             "update_id": update_id,
@@ -233,6 +262,92 @@ async def test_broadcast_done_moves_to_datetime_prompt(broadcast_flow: Broadcast
     prompt_call = broadcast_flow.last_call()
     assert isinstance(prompt_call, SendMessage)
     assert prompt_call.text == tr("ru", "enter_datetime")
+
+
+@pytest.mark.asyncio
+async def test_broadcast_text_preview_shows_destinations_time_and_preview(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(
+        BroadcastStates.collecting_post.state,
+        data={
+            **_broadcast_seed_data(),
+            "scheduled_at_utc": int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp()),
+            "scheduled_local": "2099-12-31 09:30:00+03:00",
+            "media_items": [],
+            "draft_text": "Важное сообщение для всех каналов",
+            "draft_entities_json": None,
+            "caption_above": False,
+            "text_before_media": False,
+        },
+    )
+
+    await broadcast_flow.feed_callback("smedia:done", update_id=1, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.confirming.state
+    data = await broadcast_flow.get_data()
+    assert data["kind"] == "text"
+    call = broadcast_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr(
+        "ru",
+        "broadcast_confirm_template",
+        count=2,
+        where_lines="- Channel 2 (@channel_2)\n- Channel 1 (@channel_1)",
+        local_time="31.12.2099 09:30",
+        tz_name="Europe/Moscow",
+        kind=tr("ru", "kind_text"),
+        preview="Важное сообщение для всех каналов",
+    )
+    assert "sconf:yes" in _callback_data(call)
+    assert "scancel" in _callback_data(call)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_preview_uses_caption_or_fallback(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(
+        BroadcastStates.collecting_post.state,
+        data={
+            **_broadcast_seed_data(),
+            "scheduled_at_utc": int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp()),
+            "scheduled_local": "2099-12-31 09:30:00+03:00",
+            "media_items": [],
+            "draft_text": None,
+            "draft_entities_json": None,
+            "caption_above": False,
+            "text_before_media": False,
+        },
+    )
+    await broadcast_flow.feed_photo("photo-1", update_id=1, message_id=10, caption="Подпись для медиа")
+
+    await broadcast_flow.feed_callback("smedia:done", update_id=2, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.confirming.state
+    data = await broadcast_flow.get_data()
+    assert data["kind"] == "media"
+    call = broadcast_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert tr("ru", "kind_media", count=1) in call.text
+    assert "Подпись для медиа" in call.text
+
+
+@pytest.mark.asyncio
+async def test_broadcast_confirm_is_guarded_until_batch_creation_is_ready(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(
+        BroadcastStates.confirming.state,
+        data={
+            **_broadcast_seed_data(),
+            "scheduled_at_utc": int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp()),
+            "kind": "text",
+            "text": "Broadcast",
+        },
+    )
+
+    await broadcast_flow.feed_callback("sconf:yes", update_id=1, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.confirming.state
+    call = broadcast_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "broadcast_action_unavailable")
+    assert "sconf:yes" in _callback_data(call)
 
 
 @pytest.mark.asyncio
