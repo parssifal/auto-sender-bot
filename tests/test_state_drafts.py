@@ -402,6 +402,87 @@ async def test_state_store_draft_crud_filters_accessible_scopes(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
+async def test_state_store_get_draft_permissions_respects_personal_and_team_roles(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+        for user_id in (123, 456, 789):
+            await store.ensure_user(user_id)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Draft destination",
+            "draft_destination",
+            "administrator",
+            True,
+        )
+
+        team_id = await store.create_team(123, "Editorial")
+        await store.upsert_team_member(team_id, 456, "editor")
+        await store.upsert_team_member(team_id, 789, "viewer")
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+        personal_draft_id = await store.create_draft(
+            author_user_id=123,
+            chat_id=-1001,
+            kind="text",
+            text="Personal draft",
+            entities_json=None,
+        )
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+        team_draft_id = await store.create_draft(
+            team_id=team_id,
+            author_user_id=123,
+            chat_id=-1001,
+            kind="text",
+            text="Team draft",
+            entities_json=None,
+        )
+
+        personal_permissions = await store.get_draft_permissions(personal_draft_id, 123)
+        assert personal_permissions is not None
+        assert personal_permissions.can_view is True
+        assert personal_permissions.can_edit is True
+        assert personal_permissions.can_delete is True
+        assert personal_permissions.can_publish is True
+
+        personal_outsider_permissions = await store.get_draft_permissions(personal_draft_id, 456)
+        assert personal_outsider_permissions is not None
+        assert personal_outsider_permissions.can_view is False
+        assert personal_outsider_permissions.can_edit is False
+        assert personal_outsider_permissions.can_delete is False
+        assert personal_outsider_permissions.can_publish is False
+
+        editor_permissions = await store.get_draft_permissions(team_draft_id, 456)
+        assert editor_permissions is not None
+        assert editor_permissions.can_view is True
+        assert editor_permissions.can_edit is True
+        assert editor_permissions.can_delete is True
+        assert editor_permissions.can_publish is True
+
+        viewer_permissions = await store.get_draft_permissions(team_draft_id, 789)
+        assert viewer_permissions is not None
+        assert viewer_permissions.can_view is True
+        assert viewer_permissions.can_edit is False
+        assert viewer_permissions.can_delete is False
+        assert viewer_permissions.can_publish is False
+
+        outsider_permissions = await store.get_draft_permissions(team_draft_id, 999)
+        assert outsider_permissions is not None
+        assert outsider_permissions.can_view is False
+        assert outsider_permissions.can_edit is False
+        assert outsider_permissions.can_delete is False
+        assert outsider_permissions.can_publish is False
+
+        assert await store.get_draft_permissions("missing-draft", 123) is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_create_update_and_delete_draft_enforce_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = await open_db(":memory:")
     try:

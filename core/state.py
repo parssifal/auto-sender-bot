@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 import aiosqlite
 
+from core.rbac import DraftPermissions, can_create_team_draft, resolve_draft_permissions
+
 
 @dataclass(frozen=True)
 class Destination:
@@ -580,28 +582,11 @@ class StateStore:
             raise ValueError("Media draft must use caption fields instead of text fields")
         return None, None, caption, caption_entities_json, None if caption_above is None else int(caption_above), items
 
-    async def _ensure_team_write_access(self, team_id: str, user_id: int) -> None:
-        role = await self.get_team_member_role(team_id, user_id)
-        if role not in {"owner", "editor"}:
-            raise ValueError("User must be an owner or editor to write team drafts")
-
     async def _get_draft_access(self, draft_id: str, user_id: int) -> tuple[DraftRow | None, str | None]:
         draft = await self.get_draft(draft_id)
         if draft is None or draft.team_id is None:
             return draft, None
         return draft, await self.get_team_member_role(draft.team_id, user_id)
-
-    @staticmethod
-    def _can_view_draft(draft: DraftRow, user_id: int, team_role: str | None) -> bool:
-        if draft.team_id is None:
-            return draft.author_user_id == user_id
-        return team_role is not None
-
-    @staticmethod
-    def _can_manage_draft(draft: DraftRow, user_id: int, team_role: str | None) -> bool:
-        if draft.team_id is None:
-            return draft.author_user_id == user_id
-        return team_role in {"owner", "editor"}
 
     async def create_draft(
         self,
@@ -618,7 +603,9 @@ class StateStore:
         media_items: list[dict[str, str]] | None = None,
     ) -> str:
         if team_id is not None:
-            await self._ensure_team_write_access(team_id, author_user_id)
+            team_role = await self.get_team_member_role(team_id, author_user_id)
+            if not can_create_team_draft(team_role):
+                raise ValueError("User must be an owner or editor to write team drafts")
 
         normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
             self._normalize_draft_payload(
@@ -701,6 +688,17 @@ class StateStore:
             (draft_id,),
         )
         return [{"type": str(row["type"]), "file_id": str(row["file_id"])} for row in rows]
+
+    async def get_draft_permissions(self, draft_id: str, user_id: int) -> DraftPermissions | None:
+        draft, team_role = await self._get_draft_access(draft_id, user_id)
+        if draft is None:
+            return None
+        return resolve_draft_permissions(
+            draft_author_user_id=draft.author_user_id,
+            acting_user_id=user_id,
+            team_id=draft.team_id,
+            team_role=team_role,
+        )
 
     async def list_drafts(
         self,
@@ -805,8 +803,8 @@ class StateStore:
         caption_above: bool | None = None,
         media_items: list[dict[str, str]] | None = None,
     ) -> bool:
-        draft, team_role = await self._get_draft_access(draft_id, user_id)
-        if draft is None or not self._can_manage_draft(draft, user_id, team_role):
+        permissions = await self.get_draft_permissions(draft_id, user_id)
+        if permissions is None or not permissions.can_edit:
             return False
 
         normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
@@ -867,8 +865,8 @@ class StateStore:
         return True
 
     async def delete_draft(self, draft_id: str, user_id: int) -> bool:
-        draft, team_role = await self._get_draft_access(draft_id, user_id)
-        if draft is None or not self._can_manage_draft(draft, user_id, team_role):
+        permissions = await self.get_draft_permissions(draft_id, user_id)
+        if permissions is None or not permissions.can_delete:
             return False
 
         cur = await self._conn.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
