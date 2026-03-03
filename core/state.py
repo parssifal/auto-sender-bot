@@ -29,6 +29,15 @@ class Team:
 
 
 @dataclass(frozen=True)
+class TeamMember:
+    team_id: str
+    user_id: int
+    role: str
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
 class ScheduledPostRow:
     id: str
     user_id: int
@@ -139,6 +148,25 @@ class StateStore:
             CREATE INDEX IF NOT EXISTS idx_teams_owner_created
                 ON teams(owner_user_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS team_members (
+                team_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (team_id, user_id),
+                CHECK (role IN ('owner', 'editor', 'viewer')),
+                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_team_members_user_team
+                ON team_members(user_id, team_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_single_owner
+                ON team_members(team_id)
+                WHERE role='owner';
+
             CREATE TABLE IF NOT EXISTS scheduled_posts (
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -223,6 +251,34 @@ class StateStore:
         user_column_names = {str(row["name"]) for row in user_columns}
         if "language" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN language TEXT NULL")
+
+        now = int(time.time())
+        await self._conn.execute(
+            """
+            UPDATE team_members
+            SET role='owner', updated_at=?
+            WHERE (team_id, user_id) IN (
+                SELECT id, owner_user_id
+                FROM teams
+            )
+              AND role <> 'owner'
+            """,
+            (now,),
+        )
+        await self._conn.execute(
+            """
+            INSERT INTO team_members(team_id, user_id, role, created_at, updated_at)
+            SELECT t.id, t.owner_user_id, 'owner', ?, ?
+            FROM teams t
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM team_members tm
+                WHERE tm.team_id = t.id
+                  AND tm.user_id = t.owner_user_id
+            )
+            """,
+            (now, now),
+        )
         await self._conn.commit()
 
     async def ensure_user(self, user_id: int) -> None:
@@ -343,14 +399,26 @@ class StateStore:
     async def create_team(self, owner_user_id: int, name: str) -> str:
         now = int(time.time())
         team_id = uuid.uuid4().hex
-        await self._conn.execute(
-            """
-            INSERT INTO teams(id, owner_user_id, name, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?)
-            """,
-            (team_id, owner_user_id, name, now, now),
-        )
-        await self._conn.commit()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute(
+                """
+                INSERT INTO teams(id, owner_user_id, name, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (team_id, owner_user_id, name, now, now),
+            )
+            await self._conn.execute(
+                """
+                INSERT INTO team_members(team_id, user_id, role, created_at, updated_at)
+                VALUES(?, ?, 'owner', ?, ?)
+                """,
+                (team_id, owner_user_id, now, now),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
         return team_id
 
     async def get_team(self, team_id: str) -> Team | None:
@@ -372,6 +440,65 @@ class StateStore:
             (owner_user_id, limit, offset),
         )
         return [self._row_to_team(row) for row in rows]
+
+    async def upsert_team_member(self, team_id: str, user_id: int, role: str) -> TeamMember:
+        team_row = await self._execute_fetchone(
+            "SELECT owner_user_id FROM teams WHERE id=?",
+            (team_id,),
+        )
+        if team_row is not None:
+            owner_user_id = int(team_row["owner_user_id"])
+            if user_id == owner_user_id and role != "owner":
+                raise ValueError("Team owner role cannot be changed via upsert_team_member")
+            if user_id != owner_user_id and role == "owner":
+                raise ValueError("Team owner transfer requires a dedicated flow")
+
+        now = int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO team_members(team_id, user_id, role, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(team_id, user_id) DO UPDATE SET
+                role=excluded.role,
+                updated_at=excluded.updated_at
+            """,
+            (team_id, user_id, role, now, now),
+        )
+        await self._conn.commit()
+
+        row = await self._execute_fetchone(
+            "SELECT * FROM team_members WHERE team_id=? AND user_id=?",
+            (team_id, user_id),
+        )
+        if row is None:
+            raise ValueError(f"Team member {team_id}:{user_id} was not persisted")
+        return self._row_to_team_member(row)
+
+    async def get_team_member_role(self, team_id: str, user_id: int) -> str | None:
+        row = await self._execute_fetchone(
+            "SELECT role FROM team_members WHERE team_id=? AND user_id=?",
+            (team_id, user_id),
+        )
+        return None if row is None else str(row["role"])
+
+    async def list_team_members(self, team_id: str) -> list[TeamMember]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT *
+            FROM team_members
+            WHERE team_id=?
+            ORDER BY
+                CASE role
+                    WHEN 'owner' THEN 0
+                    WHEN 'editor' THEN 1
+                    ELSE 2
+                END,
+                created_at ASC,
+                user_id ASC
+            """,
+            (team_id,),
+        )
+        return [self._row_to_team_member(row) for row in rows]
 
     async def create_scheduled_text_post(
         self,
@@ -1030,6 +1157,16 @@ class StateStore:
             id=str(row["id"]),
             owner_user_id=int(row["owner_user_id"]),
             name=str(row["name"]),
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_team_member(row: aiosqlite.Row) -> TeamMember:
+        return TeamMember(
+            team_id=str(row["team_id"]),
+            user_id=int(row["user_id"]),
+            role=str(row["role"]),
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
         )
