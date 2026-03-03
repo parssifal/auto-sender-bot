@@ -62,6 +62,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "repeat_cancel_usage": "Usage: /repeat_cancel <series_id>",
         "repeat_cancel_ok": "Recurring series stopped. series={pattern_id}",
         "repeat_cancel_missing": "Recurring series not found.",
+        "repeat_list_empty": "No active recurring series.",
+        "repeat_list_header": "Active recurring series:\n\n{lines}",
+        "repeat_list_item": (
+            "series={pattern_id}\n"
+            "- Where: {where}\n"
+            "- Interval: {interval}\n"
+            "- Next: {next_run}\n"
+            "- Count: {count}"
+        ),
+        "repeat_list_next_missing": "unavailable",
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -164,6 +174,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_caption_below": "Caption below",
         "btn_confirm": "Confirm",
         "btn_queue_cancel": "Cancel {label}",
+        "btn_repeat_stop": "Stop {label}",
     },
     "ru": {
         "menu_schedule": "Запланировать",
@@ -223,6 +234,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "repeat_cancel_usage": "Использование: /repeat_cancel <series_id>",
         "repeat_cancel_ok": "Повторяющаяся серия остановлена. series={pattern_id}",
         "repeat_cancel_missing": "Повторяющаяся серия не найдена.",
+        "repeat_list_empty": "Активных повторяющихся серий нет.",
+        "repeat_list_header": "Активные повторяющиеся серии:\n\n{lines}",
+        "repeat_list_item": (
+            "series={pattern_id}\n"
+            "- Куда: {where}\n"
+            "- Интервал: {interval}\n"
+            "- Следующий запуск: {next_run}\n"
+            "- Счётчик: {count}"
+        ),
+        "repeat_list_next_missing": "недоступен",
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",
@@ -325,6 +346,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_caption_below": "Подпись снизу",
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
+        "btn_repeat_stop": "Остановить {label}",
     },
     "de": {
         "menu_schedule": "Planen",

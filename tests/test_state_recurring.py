@@ -232,6 +232,102 @@ async def test_state_store_recurring_pattern_crud_uses_public_methods() -> None:
 
 
 @pytest.mark.asyncio
+async def test_state_store_list_user_recurring_summaries_returns_next_pending_post() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Recurring destination",
+            "recurring_destination",
+            "administrator",
+            True,
+        )
+        pattern_id, post_id = await store.create_recurring_series(
+            user_id=123,
+            chat_id=-1001,
+            interval_type="daily",
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+            kind="text",
+            text="Recurring payload",
+            entities_json=None,
+        )
+
+        summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+        assert len(summaries) == 1
+        summary = summaries[0]
+        assert summary.pattern.id == pattern_id
+        assert summary.destination_title == "Recurring destination"
+        assert summary.destination_username == "recurring_destination"
+        assert summary.next_post_id == post_id
+        assert summary.next_scheduled_at_utc == 1_700_000_000
+        assert summary.next_post_status == "pending"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_list_user_recurring_summaries_filters_by_user_and_active_state() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        active_pattern_id = await _seed_recurring_pattern(store)
+        active_post_id = await store.create_scheduled_text_post(
+            user_id=123,
+            chat_id=-1001,
+            scheduled_at_utc=1_700_000_000,
+            text="Recurring payload",
+            entities_json=None,
+        )
+        await store.create_recurring_instance(active_pattern_id, active_post_id, 1, 1_700_000_000)
+
+        await store.ensure_user(999)
+        other_pattern_id = await store.create_recurring_pattern(
+            user_id=999,
+            chat_id=-1001,
+            interval_type="weekly",
+            weekdays_mask=None,
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_700_000_500,
+        )
+        other_post_id = await store.create_scheduled_text_post(
+            user_id=999,
+            chat_id=-1001,
+            scheduled_at_utc=1_700_000_500,
+            text="Other payload",
+            entities_json=None,
+        )
+        await store.create_recurring_instance(other_pattern_id, other_post_id, 1, 1_700_000_500)
+
+        inactive_pattern_id = await _seed_recurring_pattern(store)
+        inactive_post_id = await store.create_scheduled_text_post(
+            user_id=123,
+            chat_id=-1001,
+            scheduled_at_utc=1_700_000_900,
+            text="Inactive payload",
+            entities_json=None,
+        )
+        await store.create_recurring_instance(inactive_pattern_id, inactive_post_id, 1, 1_700_000_900)
+        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=inactive_pattern_id) is True
+
+        active_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+        assert [item.pattern.id for item in active_summaries] == [active_pattern_id]
+
+        all_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10, include_inactive=True)
+        assert {item.pattern.id for item in all_summaries} == {active_pattern_id, inactive_pattern_id}
+        assert {item.pattern.user_id for item in all_summaries} == {123}
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
     conn = await open_db(":memory:")
     try:

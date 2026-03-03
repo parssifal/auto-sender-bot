@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 import pytest_asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, SendMessage
+from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, SendMessage
 from aiogram.types import Update
 
 from core.db import open_db
@@ -18,6 +20,7 @@ from telegram.router import RepeatStates, build_router
 
 USER_ID = 1001
 PRIVATE_CHAT_ID = USER_ID
+ALT_USER_ID = 2002
 DESTINATION_CHAT_ID = -2001
 BOT_ID = 42
 
@@ -49,14 +52,23 @@ class RepeatFlowHarness:
     storage_key: StorageKey
     conn: Any
 
-    async def feed_message(self, text: str, *, update_id: int, message_id: int) -> None:
+    async def feed_message(
+        self,
+        text: str,
+        *,
+        update_id: int,
+        message_id: int,
+        user_id: int = USER_ID,
+        chat_id: int | None = None,
+    ) -> None:
+        effective_chat_id = user_id if chat_id is None else chat_id
         payload: dict[str, Any] = {
             "update_id": update_id,
             "message": {
                 "message_id": message_id,
                 "date": 1_700_000_000,
-                "chat": {"id": PRIVATE_CHAT_ID, "type": "private"},
-                "from": {"id": USER_ID, "is_bot": False, "first_name": "Test"},
+                "chat": {"id": effective_chat_id, "type": "private"},
+                "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
                 "text": text,
             },
         }
@@ -64,18 +76,27 @@ class RepeatFlowHarness:
             payload["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
         await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
 
-    async def feed_callback(self, data: str, *, update_id: int, message_id: int) -> None:
+    async def feed_callback(
+        self,
+        data: str,
+        *,
+        update_id: int,
+        message_id: int,
+        user_id: int = USER_ID,
+        chat_id: int | None = None,
+    ) -> None:
+        effective_chat_id = user_id if chat_id is None else chat_id
         payload = {
             "update_id": update_id,
             "callback_query": {
                 "id": f"q{update_id}",
-                "from": {"id": USER_ID, "is_bot": False, "first_name": "Test"},
+                "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
                 "chat_instance": "ci",
                 "data": data,
                 "message": {
                     "message_id": message_id,
                     "date": 1_700_000_000,
-                    "chat": {"id": PRIVATE_CHAT_ID, "type": "private"},
+                    "chat": {"id": effective_chat_id, "type": "private"},
                     "from": {"id": BOT_ID, "is_bot": True, "first_name": "Bot"},
                     "text": "stub",
                 },
@@ -104,6 +125,9 @@ async def repeat_flow() -> RepeatFlowHarness:
     await store.ensure_user(USER_ID)
     await store.set_user_language(USER_ID, "ru")
     await store.set_user_timezone(USER_ID, "Europe/Moscow")
+    await store.ensure_user(ALT_USER_ID)
+    await store.set_user_language(ALT_USER_ID, "ru")
+    await store.set_user_timezone(ALT_USER_ID, "Europe/Moscow")
     await store.upsert_destination(
         DESTINATION_CHAT_ID,
         "channel",
@@ -267,3 +291,113 @@ async def test_repeat_cancel_command_stops_series_by_short_id(repeat_flow: Repea
     assert post.status == "cancelled"
 
     assert await repeat_flow.store.list_pending_posts(USER_ID, limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_repeats_command_lists_series_with_next_run_and_stop_button(repeat_flow: RepeatFlowHarness) -> None:
+    start_at_utc = int(datetime(2026, 3, 10, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+    pattern_id, _ = await repeat_flow.store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        interval_type="weekly",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=start_at_utc,
+        kind="text",
+        text="Recurring text",
+        entities_json=None,
+    )
+
+    await repeat_flow.feed_message("/repeats", update_id=20, message_id=30)
+
+    call = repeat_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert tr("ru", "repeat_list_header", lines="X").split("\n", 1)[0] in call.text
+    assert pattern_id[:8] in call.text
+    assert "Test channel (@test_channel)" in call.text
+    assert tr("ru", "repeat_interval_weekly") in call.text
+    assert "10.03.2026 09:30 (Europe/Moscow)" in call.text
+    callbacks = [button.callback_data for row in call.reply_markup.inline_keyboard for button in row]
+    assert f"rstop:0:{pattern_id}" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_repeats_command_supports_pagination_and_stop_callback(repeat_flow: RepeatFlowHarness) -> None:
+    pattern_ids: list[str] = []
+    for idx in range(6):
+        pattern_id, _ = await repeat_flow.store.create_recurring_series(
+            user_id=USER_ID,
+            chat_id=DESTINATION_CHAT_ID,
+            interval_type="daily" if idx % 2 == 0 else "weekdays",
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_900_000_000 + idx * 3_600,
+            kind="text",
+            text=f"Recurring text {idx}",
+            entities_json=None,
+        )
+        pattern_ids.append(pattern_id)
+        await repeat_flow.conn.execute(
+            "UPDATE recurring_patterns SET created_at=?, updated_at=? WHERE id=?",
+            (100 + idx, 100 + idx, pattern_id),
+        )
+        await repeat_flow.conn.commit()
+
+    await repeat_flow.feed_message("/repeats", update_id=21, message_id=31)
+    first_page = repeat_flow.last_call()
+    assert isinstance(first_page, SendMessage)
+    first_callbacks = [button.callback_data for row in first_page.reply_markup.inline_keyboard for button in row]
+    assert "rlpage:1" in first_callbacks
+    assert pattern_ids[0][:8] not in first_page.text
+
+    await repeat_flow.feed_callback("rlpage:1", update_id=22, message_id=31)
+
+    second_page = repeat_flow.last_call()
+    assert isinstance(second_page, EditMessageText)
+    assert pattern_ids[0][:8] in second_page.text
+    second_callbacks = [button.callback_data for row in second_page.reply_markup.inline_keyboard for button in row]
+    assert f"rstop:1:{pattern_ids[0]}" in second_callbacks
+    assert "rlpage:0" in second_callbacks
+
+    await repeat_flow.feed_callback(f"rstop:1:{pattern_ids[0]}", update_id=23, message_id=31)
+
+    stop_recent = repeat_flow.bot.calls[-2:]
+    assert isinstance(stop_recent[0], AnswerCallbackQuery)
+    assert isinstance(stop_recent[1], EditMessageText)
+    assert pattern_ids[0][:8] not in stop_recent[1].text
+    stopped_pattern = await repeat_flow.store.get_recurring_pattern(pattern_ids[0])
+    assert stopped_pattern is not None
+    assert stopped_pattern.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_repeats_stop_callback_is_owner_scoped(repeat_flow: RepeatFlowHarness) -> None:
+    pattern_id, _ = await repeat_flow.store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_900_000_000,
+        kind="text",
+        text="Recurring text",
+        entities_json=None,
+    )
+
+    await repeat_flow.feed_callback(
+        f"rstop:0:{pattern_id}",
+        update_id=24,
+        message_id=40,
+        user_id=ALT_USER_ID,
+        chat_id=ALT_USER_ID,
+    )
+
+    recent = repeat_flow.bot.calls[-2:]
+    assert isinstance(recent[0], AnswerCallbackQuery)
+    assert recent[0].text == tr("ru", "repeat_cancel_missing")
+    assert isinstance(recent[1], EditMessageText)
+    assert recent[1].text == tr("ru", "repeat_list_empty")
+
+    pattern = await repeat_flow.store.get_recurring_pattern(pattern_id)
+    assert pattern is not None
+    assert pattern.is_active is True

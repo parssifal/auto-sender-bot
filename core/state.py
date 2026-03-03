@@ -66,6 +66,16 @@ class RecurringInstance:
     created_at: int
 
 
+@dataclass(frozen=True)
+class RecurringPatternSummary:
+    pattern: RecurringPattern
+    destination_title: str
+    destination_username: str | None
+    next_post_id: str | None
+    next_scheduled_at_utc: int | None
+    next_post_status: str | None
+
+
 class StateStore:
     def __init__(self, conn: aiosqlite.Connection):
         self._conn = conn
@@ -563,6 +573,65 @@ class StateStore:
         rows = await self._conn.execute_fetchall(query, tuple(params))
         return [self._row_to_recurring_pattern(row) for row in rows]
 
+    async def list_user_recurring_summaries(
+        self,
+        user_id: int,
+        *,
+        offset: int = 0,
+        limit: int = 10,
+        include_inactive: bool = False,
+    ) -> list[RecurringPatternSummary]:
+        query = """
+            SELECT
+                rp.*,
+                d.title AS destination_title,
+                d.username AS destination_username,
+                (
+                    SELECT sp.id
+                    FROM recurring_instances ri
+                    JOIN scheduled_posts sp ON sp.id = ri.post_id
+                    WHERE ri.pattern_id = rp.id
+                      AND sp.status IN ('pending', 'sending')
+                    ORDER BY
+                        CASE sp.status WHEN 'pending' THEN 0 ELSE 1 END,
+                        ri.ordinal ASC
+                    LIMIT 1
+                ) AS next_post_id,
+                (
+                    SELECT sp.scheduled_at_utc
+                    FROM recurring_instances ri
+                    JOIN scheduled_posts sp ON sp.id = ri.post_id
+                    WHERE ri.pattern_id = rp.id
+                      AND sp.status IN ('pending', 'sending')
+                    ORDER BY
+                        CASE sp.status WHEN 'pending' THEN 0 ELSE 1 END,
+                        ri.ordinal ASC
+                    LIMIT 1
+                ) AS next_scheduled_at_utc,
+                (
+                    SELECT sp.status
+                    FROM recurring_instances ri
+                    JOIN scheduled_posts sp ON sp.id = ri.post_id
+                    WHERE ri.pattern_id = rp.id
+                      AND sp.status IN ('pending', 'sending')
+                    ORDER BY
+                        CASE sp.status WHEN 'pending' THEN 0 ELSE 1 END,
+                        ri.ordinal ASC
+                    LIMIT 1
+                ) AS next_post_status
+            FROM recurring_patterns rp
+            JOIN destinations d ON d.chat_id = rp.chat_id
+            WHERE rp.user_id=?
+        """
+        params: list[object] = [user_id]
+        if not include_inactive:
+            query += " AND rp.is_active=1"
+        query += " ORDER BY rp.created_at DESC, rp.id ASC LIMIT ? OFFSET ?"
+        params.extend((limit, offset))
+
+        rows = await self._conn.execute_fetchall(query, tuple(params))
+        return [self._row_to_recurring_summary(row) for row in rows]
+
     async def update_recurring_count(self, pattern_id: str, new_count: int) -> bool:
         now = int(time.time())
         cur = await self._conn.execute(
@@ -928,4 +997,17 @@ class StateStore:
             ordinal=int(row["ordinal"]),
             scheduled_for_utc=int(row["scheduled_for_utc"]),
             created_at=int(row["created_at"]),
+        )
+
+    @classmethod
+    def _row_to_recurring_summary(cls, row: aiosqlite.Row) -> RecurringPatternSummary:
+        return RecurringPatternSummary(
+            pattern=cls._row_to_recurring_pattern(row),
+            destination_title=str(row["destination_title"]),
+            destination_username=row["destination_username"],
+            next_post_id=None if row["next_post_id"] is None else str(row["next_post_id"]),
+            next_scheduled_at_utc=(
+                None if row["next_scheduled_at_utc"] is None else int(row["next_scheduled_at_utc"])
+            ),
+            next_post_status=None if row["next_post_status"] is None else str(row["next_post_status"]),
         )

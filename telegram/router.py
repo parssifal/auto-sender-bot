@@ -18,7 +18,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from core.state import Destination, RecurringPattern, StateStore
+from core.state import Destination, RecurringPattern, RecurringPatternSummary, StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -186,6 +186,29 @@ def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _repeats_manage_kb(items: list[RecurringPatternSummary], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_repeat_stop", label=_short_id(item.pattern.id)),
+                    callback_data=f"rstop:{page}:{item.pattern.id}",
+                )
+            ]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"rlpage:{page-1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"rlpage:{page+1}"))
+    if nav:
+        rows.append(nav)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _schedule_quick_labels(lang: str) -> dict[str, str]:
     return {
         "1h": tr(lang, "schedule_quick_1h"),
@@ -344,6 +367,18 @@ def _resolve_recurring_pattern_id(patterns: list[RecurringPattern], pattern_ref:
 def _format_local(epoch_utc: int, tz_name: str) -> str:
     dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
     return dt.strftime("%d.%m.%Y %H:%M")
+
+
+def _destination_label(title: str, username: str | None) -> str:
+    if username:
+        return f"{title} (@{username})"
+    return title
+
+
+def _repeat_count_label(pattern: RecurringPattern) -> str:
+    if pattern.max_occurrences is None:
+        return str(pattern.current_count)
+    return f"{pattern.current_count}/{pattern.max_occurrences}"
 
 
 def _format_rights_check_error(exc: Exception, *, subject: str, lang: str = DEFAULT_LANGUAGE) -> str:
@@ -535,6 +570,52 @@ def build_router(store: StateStore) -> Router:
         await state.set_state(RepeatStates.choosing_destination)
         await _render_destinations(message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
 
+    async def _render_repeats(message: Message, *, user_id: int, page: int, edit: bool) -> None:
+        lang = await _user_lang(user_id)
+        page_size = 5
+        while True:
+            offset = page * page_size
+            items = await store.list_user_recurring_summaries(user_id=user_id, offset=offset, limit=page_size + 1)
+            if items or page == 0:
+                break
+            page -= 1
+
+        has_more = len(items) > page_size
+        items = items[:page_size]
+        if not items:
+            text = tr(lang, "repeat_list_empty")
+            if edit:
+                await message.edit_text(text, reply_markup=None)
+            else:
+                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+            return
+
+        display_tz = await store.get_user_timezone(user_id)
+        lines: list[str] = []
+        for item in items:
+            next_tz = display_tz or item.pattern.timezone
+            next_run = tr(lang, "repeat_list_next_missing")
+            if item.next_scheduled_at_utc is not None:
+                next_run = f"{_format_local(item.next_scheduled_at_utc, next_tz)} ({next_tz})"
+            lines.append(
+                tr(
+                    lang,
+                    "repeat_list_item",
+                    pattern_id=_short_id(item.pattern.id),
+                    where=_destination_label(item.destination_title, item.destination_username),
+                    interval=_repeat_interval_label(lang, item.pattern.interval_type),
+                    next_run=next_run,
+                    count=_repeat_count_label(item.pattern),
+                )
+            )
+
+        text = tr(lang, "repeat_list_header", lines="\n\n".join(lines))
+        reply_markup = _repeats_manage_kb(items, page=page, has_more=has_more, lang=lang)
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -579,6 +660,11 @@ def build_router(store: StateStore) -> Router:
         await state.set_state(RepeatStates.choosing_interval)
         await message.answer(tr(lang, "repeat_choose_interval"), reply_markup=_repeat_interval_kb(lang))
 
+    @router.message(Command("repeats"))
+    async def cmd_repeats(message: Message) -> None:
+        await store.ensure_user(message.from_user.id)
+        await _render_repeats(message, user_id=message.from_user.id, page=0, edit=False)
+
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
@@ -604,6 +690,28 @@ def build_router(store: StateStore) -> Router:
             tr(lang, "repeat_cancel_ok", pattern_id=_short_id(pattern_id)),
             reply_markup=await _main_menu_for(message.from_user.id),
         )
+
+    @router.callback_query(F.data.startswith("rlpage:"))
+    async def cb_repeats_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_repeats(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("rstop:"))
+    async def cb_repeats_stop(query: CallbackQuery) -> None:
+        lang = await _user_lang(query.from_user.id)
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        page = int(parts[1])
+        pattern_id = parts[2]
+        ok = await store.cancel_recurring_pattern(user_id=query.from_user.id, pattern_id=pattern_id)
+        await query.answer(
+            tr(lang, "repeat_cancel_ok", pattern_id=_short_id(pattern_id)) if ok else tr(lang, "repeat_cancel_missing")
+        )
+        await _render_repeats(query.message, user_id=query.from_user.id, page=page, edit=True)
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
