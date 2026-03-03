@@ -99,6 +99,18 @@ def resolve_quick_option(
     return ParsedScheduleTime(local_dt=candidate_local, utc_epoch=int(candidate_utc.timestamp()))
 
 
+def resolve_selected_time(value: date, *, hour: int, minute: int, tz_name: str) -> ParsedScheduleTime:
+    if not 0 <= hour <= 23:
+        raise ValueError("hour must be in range 0..23")
+    if not 0 <= minute <= 59:
+        raise ValueError("minute must be in range 0..59")
+
+    tz = ZoneInfo(tz_name)
+    local_dt = _local_datetime(value, hour=hour, minute=minute, tz=tz)
+    utc_dt = local_dt.astimezone(timezone.utc)
+    return ParsedScheduleTime(local_dt=local_dt, utc_epoch=int(utc_dt.timestamp()))
+
+
 class TimePicker:
     NOOP_CALLBACK = "tp:noop"
 

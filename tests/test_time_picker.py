@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from core.time_picker import TimePicker, generate_calendar, get_quick_options, resolve_quick_option
+from core.time_picker import TimePicker, generate_calendar, get_quick_options, resolve_quick_option, resolve_selected_time
 
 
 def test_generate_calendar_marks_current_month_days() -> None:
@@ -115,3 +115,10 @@ def test_resolve_quick_option_rounds_one_hour_to_next_minute() -> None:
 def test_resolve_quick_option_rejects_unknown_option() -> None:
     with pytest.raises(ValueError):
         resolve_quick_option("weekend", tz_name="UTC")
+
+
+def test_resolve_selected_time_creates_local_and_utc_values() -> None:
+    parsed = resolve_selected_time(date(2026, 3, 12), hour=9, minute=30, tz_name="Europe/Moscow")
+
+    assert parsed.local_dt.isoformat() == "2026-03-12T09:30:00+03:00"
+    assert parsed.utc_epoch == int(datetime(2026, 3, 12, 6, 30, tzinfo=timezone.utc).timestamp())

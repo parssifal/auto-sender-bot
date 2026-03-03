@@ -49,3 +49,10 @@ def test_menu_key_values_contains_languages() -> None:
     assert "予約" in values
     assert tr("en", "menu_language") == "Language"
     assert tr("ru", "menu_language") == "Язык"
+
+
+def test_schedule_picker_keys_have_localization_and_fallback() -> None:
+    assert tr("en", "schedule_weekday_mon") == "Mo"
+    assert tr("ru", "schedule_weekday_mon") == "Пн"
+    assert tr("de", "schedule_weekday_mon") == "Mo"
+    assert tr("ru", "btn_back") == "Назад"

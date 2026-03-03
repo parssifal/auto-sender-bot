@@ -26,14 +26,23 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "timezone_required": "Set timezone first: /timezone",
         "enter_datetime": (
             "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).\n"
-            "Or use the quick buttons below."
+            "Or use the calendar and quick buttons below."
         ),
         "invalid_datetime_format": "Invalid format. Example: `12.03.2026 12:15`",
         "datetime_future_required": "Time must be in the future (minimum +30 seconds).",
+        "schedule_time_prompt": "Choose time for {date_label}, or send full date and time manually.",
+        "schedule_picker_invalid": "This date/time selection is no longer valid. Choose again.",
         "schedule_quick_1h": "In 1 hour",
         "schedule_quick_today_20": "Today 20:00",
         "schedule_quick_tomorrow_9": "Tomorrow 09:00",
         "schedule_quick_next_monday": "Next Monday 09:00",
+        "schedule_weekday_mon": "Mo",
+        "schedule_weekday_tue": "Tu",
+        "schedule_weekday_wed": "We",
+        "schedule_weekday_thu": "Th",
+        "schedule_weekday_fri": "Fr",
+        "schedule_weekday_sat": "Sa",
+        "schedule_weekday_sun": "Su",
         "schedule_kind_prompt": "What do you want to schedule?",
         "schedule_text_prompt": "Send message text in one message.",
         "schedule_media_prompt": "Send photo/video (single media or album 2-10). Send caption as text (can be after media).",
@@ -59,7 +68,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "scheduled_ok": "Done! Scheduled for {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
             "Send next date and time for the same destination ({where}) in format DD.MM.YYYY HH:MM,\n"
-            "or use the quick buttons below.\n"
+            "or use the calendar and quick buttons below.\n"
             "Use /schedule to choose another channel/chat, or /cancel to stop."
         ),
         "queue_empty": "Queue is empty.",
@@ -124,6 +133,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_cancel": "Cancel",
         "btn_done": "Done",
         "btn_clear": "Clear",
+        "btn_back": "Back",
         "btn_caption_above": "Caption above",
         "btn_caption_below": "Caption below",
         "btn_confirm": "Confirm",
@@ -151,14 +161,23 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "timezone_required": "Сначала задайте часовой пояс: /timezone",
         "enter_datetime": (
             "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).\n"
-            "Или используйте быстрые кнопки ниже."
+            "Или используйте календарь и быстрые кнопки ниже."
         ),
         "invalid_datetime_format": "Неверный формат. Пример: `12.03.2026 12:15`",
         "datetime_future_required": "Время должно быть в будущем (минимум +30 секунд).",
+        "schedule_time_prompt": "Выберите время для {date_label} или отправьте полную дату и время вручную.",
+        "schedule_picker_invalid": "Этот выбор даты/времени уже неактуален. Выберите заново.",
         "schedule_quick_1h": "Через 1 час",
         "schedule_quick_today_20": "Сегодня 20:00",
         "schedule_quick_tomorrow_9": "Завтра 09:00",
         "schedule_quick_next_monday": "Следующий понедельник 09:00",
+        "schedule_weekday_mon": "Пн",
+        "schedule_weekday_tue": "Вт",
+        "schedule_weekday_wed": "Ср",
+        "schedule_weekday_thu": "Чт",
+        "schedule_weekday_fri": "Пт",
+        "schedule_weekday_sat": "Сб",
+        "schedule_weekday_sun": "Вс",
         "schedule_kind_prompt": "Что вы хотите запланировать?",
         "schedule_text_prompt": "Отправьте текст сообщения одним сообщением.",
         "schedule_media_prompt": "Отправьте фото/видео (можно несколько или альбом 2–10). Подпись отправьте текстом (можно после медиа).",
@@ -184,7 +203,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "scheduled_ok": "Ок! Запланировано на {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
             "Введите следующую дату и время для этого же канала/чата ({where}) в формате ДД.ММ.ГГГГ ЧЧ:ММ,\n"
-            "или используйте быстрые кнопки ниже.\n"
+            "или используйте календарь и быстрые кнопки ниже.\n"
             "Используйте /schedule, чтобы выбрать другой канал/чат, или /cancel для выхода."
         ),
         "queue_empty": "Очередь пуста.",
@@ -249,6 +268,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_cancel": "Отмена",
         "btn_done": "Готово",
         "btn_clear": "Очистить",
+        "btn_back": "Назад",
         "btn_caption_above": "Подпись сверху",
         "btn_caption_below": "Подпись снизу",
         "btn_confirm": "Подтвердить",

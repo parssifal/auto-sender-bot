@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
@@ -20,7 +20,7 @@ from aiogram.types import (
 )
 
 from core.state import Destination, StateStore
-from core.time_picker import TimePicker, resolve_quick_option
+from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime
 from telegram.i18n import (
@@ -54,6 +54,7 @@ class DestinationsStates(StatesGroup):
 class ScheduleStates(StatesGroup):
     choosing_destination = State()
     entering_datetime = State()
+    selecting_time = State()
     collecting_post = State()
     confirming = State()
 
@@ -65,6 +66,7 @@ _MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
 _MENU_LANGUAGE_TEXTS = key_values("menu_language")
 _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 _TIME_PICKER = TimePicker()
+_SCHEDULE_TIME_MINUTES = (0, 30)
 
 
 def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -152,17 +154,121 @@ def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _schedule_datetime_kb(lang: str) -> InlineKeyboardMarkup:
-    labels = {
+def _schedule_quick_labels(lang: str) -> dict[str, str]:
+    return {
         "1h": tr(lang, "schedule_quick_1h"),
         "today_20": tr(lang, "schedule_quick_today_20"),
         "tomorrow_9": tr(lang, "schedule_quick_tomorrow_9"),
         "next_monday": tr(lang, "schedule_quick_next_monday"),
     }
-    quick_markup = _TIME_PICKER.quick_buttons(labels)
-    rows = [list(row) for row in quick_markup.inline_keyboard]
+
+
+def _schedule_weekday_labels(lang: str) -> tuple[str, ...]:
+    return (
+        tr(lang, "schedule_weekday_mon"),
+        tr(lang, "schedule_weekday_tue"),
+        tr(lang, "schedule_weekday_wed"),
+        tr(lang, "schedule_weekday_thu"),
+        tr(lang, "schedule_weekday_fri"),
+        tr(lang, "schedule_weekday_sat"),
+        tr(lang, "schedule_weekday_sun"),
+    )
+
+
+def _schedule_calendar_kb(lang: str, *, year: int, month: int, selected: date | None = None) -> InlineKeyboardMarkup:
+    picker = TimePicker(weekday_labels=_schedule_weekday_labels(lang))
+    calendar_markup = picker.calendar_month(
+        year,
+        month,
+        selected=selected,
+        month_label=f"{month:02d}.{year:04d}",
+    )
+    quick_markup = _TIME_PICKER.quick_buttons(_schedule_quick_labels(lang))
+    rows = [list(row) for row in calendar_markup.inline_keyboard]
+    rows.extend([list(row) for row in quick_markup.inline_keyboard])
     rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _schedule_time_kb(lang: str) -> InlineKeyboardMarkup:
+    time_markup = _TIME_PICKER.time_selection(minute_values=_SCHEDULE_TIME_MINUTES, per_row=4)
+    rows = [list(row) for row in time_markup.inline_keyboard]
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_back"), callback_data="tp:back:calendar")])
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _selected_date_from_state(data: dict[str, object]) -> date | None:
+    raw = data.get("selected_date")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _calendar_month_from_state(data: dict[str, object], tz_name: str, *, now_utc: datetime | None = None) -> tuple[int, int]:
+    year = data.get("calendar_year")
+    month = data.get("calendar_month")
+    if isinstance(year, int) and isinstance(month, int) and 1 <= month <= 12:
+        return year, month
+
+    current_utc = datetime.now(timezone.utc) if now_utc is None else now_utc.astimezone(timezone.utc)
+    local_now = current_utc.astimezone(ZoneInfo(tz_name))
+    return local_now.year, local_now.month
+
+
+def _schedule_datetime_markup(
+    lang: str,
+    *,
+    tz_name: str,
+    data: dict[str, object],
+    state_name: str | None,
+) -> InlineKeyboardMarkup:
+    if state_name == ScheduleStates.selecting_time.state and _selected_date_from_state(data) is not None:
+        return _schedule_time_kb(lang)
+
+    selected = _selected_date_from_state(data)
+    year, month = _calendar_month_from_state(data, tz_name)
+    return _schedule_calendar_kb(lang, year=year, month=month, selected=selected)
+
+
+def _format_selected_date(value: date) -> str:
+    return value.strftime("%d.%m.%Y")
+
+
+def _parse_calendar_date_token(token: str) -> date:
+    return datetime.strptime(token, "%Y%m%d").date()
+
+
+def _parse_calendar_month_token(token: str) -> tuple[int, int]:
+    if len(token) != 6:
+        raise ValueError("month token must be YYYYMM")
+    year = int(token[:4])
+    month = int(token[4:6])
+    if not 1 <= month <= 12:
+        raise ValueError("month must be in range 1..12")
+    return year, month
+
+
+def _parse_time_token(token: str) -> tuple[int, int]:
+    if len(token) != 4:
+        raise ValueError("time token must be HHMM")
+    hour = int(token[:2])
+    minute = int(token[2:4])
+    if not 0 <= hour <= 23:
+        raise ValueError("hour must be in range 0..23")
+    if not 0 <= minute <= 59:
+        raise ValueError("minute must be in range 0..59")
+    return hour, minute
+
+
+async def _clear_inline_markup(message: Message) -> None:
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        return
 
 
 def _short_id(post_id: str) -> str:
@@ -226,12 +332,24 @@ def _resolve_caption_above(
     return False
 
 
-async def _prompt_for_datetime(message: Message, *, lang: str, text: str) -> None:
+async def _prompt_for_datetime(message: Message, *, lang: str, tz_name: str, text: str, data: dict[str, object], state_name: str | None) -> None:
     await message.answer(
         text,
         parse_mode="Markdown",
-        reply_markup=_schedule_datetime_kb(lang),
+        reply_markup=_schedule_datetime_markup(lang, tz_name=tz_name, data=data, state_name=state_name),
     )
+
+
+async def _edit_datetime_prompt(message: Message, *, lang: str, tz_name: str, text: str, data: dict[str, object], state_name: str | None) -> None:
+    await message.edit_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_schedule_datetime_markup(lang, tz_name=tz_name, data=data, state_name=state_name),
+    )
+
+
+def _schedule_time_prompt(lang: str, *, selected_date: date) -> str:
+    return tr(lang, "schedule_time_prompt", date_label=_format_selected_date(selected_date))
 
 
 async def _move_to_post_collection(message: Message, state: FSMContext, *, parsed: ParsedScheduleTime, lang: str) -> None:
@@ -344,11 +462,103 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("sdsel:"))
     async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
         lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
         chat_id = int(query.data.split(":")[1])
-        await state.update_data(chat_id=chat_id)
+        await state.update_data(
+            chat_id=chat_id,
+            selected_date=None,
+            calendar_year=None,
+            calendar_month=None,
+        )
         await state.set_state(ScheduleStates.entering_datetime)
         await query.answer()
-        await _prompt_for_datetime(query.message, lang=lang, text=tr(lang, "enter_datetime"))
+        await _prompt_for_datetime(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "enter_datetime"),
+            data=await state.get_data(),
+            state_name=ScheduleStates.entering_datetime.state,
+        )
+
+    @router.callback_query(F.data == TimePicker.NOOP_CALLBACK)
+    async def cb_time_picker_noop(query: CallbackQuery) -> None:
+        await query.answer()
+
+    @router.callback_query(F.data.startswith("tp:nav:"))
+    async def cb_schedule_calendar_nav(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != ScheduleStates.entering_datetime.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        token = query.data.split(":", 2)[2]
+        try:
+            year, month = _parse_calendar_month_token(token)
+        except ValueError:
+            await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
+            return
+
+        await state.update_data(calendar_year=year, calendar_month=month)
+        await query.answer()
+        await _edit_datetime_prompt(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "enter_datetime"),
+            data=await state.get_data(),
+            state_name=ScheduleStates.entering_datetime.state,
+        )
+
+    @router.callback_query(F.data.startswith("tp:date:"))
+    async def cb_schedule_calendar_date(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != ScheduleStates.entering_datetime.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        token = query.data.split(":", 2)[2]
+        try:
+            selected_date = _parse_calendar_date_token(token)
+        except ValueError:
+            await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
+            return
+
+        await state.update_data(
+            selected_date=selected_date.isoformat(),
+            calendar_year=selected_date.year,
+            calendar_month=selected_date.month,
+        )
+        await state.set_state(ScheduleStates.selecting_time)
+        await query.answer()
+        await _edit_datetime_prompt(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=_schedule_time_prompt(lang, selected_date=selected_date),
+            data=await state.get_data(),
+            state_name=ScheduleStates.selecting_time.state,
+        )
 
     @router.callback_query(F.data.startswith("tp:quick:"))
     async def cb_schedule_quick(query: CallbackQuery, state: FSMContext) -> None:
@@ -372,8 +582,84 @@ def build_router(store: StateStore) -> Router:
             return
 
         await query.answer()
+        await _clear_inline_markup(query.message)
         await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
 
+    @router.callback_query(F.data == "tp:back:calendar")
+    async def cb_schedule_back_to_calendar(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != ScheduleStates.selecting_time.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        data = await state.get_data()
+        selected_date = _selected_date_from_state(data)
+        if selected_date is not None:
+            await state.update_data(calendar_year=selected_date.year, calendar_month=selected_date.month)
+        await state.set_state(ScheduleStates.entering_datetime)
+        await query.answer()
+        await _edit_datetime_prompt(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "enter_datetime"),
+            data=await state.get_data(),
+            state_name=ScheduleStates.entering_datetime.state,
+        )
+
+    @router.callback_query(F.data.startswith("tp:time:"))
+    async def cb_schedule_time(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != ScheduleStates.selecting_time.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        data = await state.get_data()
+        selected_date = _selected_date_from_state(data)
+        if selected_date is None:
+            await state.set_state(ScheduleStates.entering_datetime)
+            await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
+            await _edit_datetime_prompt(
+                query.message,
+                lang=lang,
+                tz_name=tz_name,
+                text=tr(lang, "enter_datetime"),
+                data=await state.get_data(),
+                state_name=ScheduleStates.entering_datetime.state,
+            )
+            return
+
+        token = query.data.split(":", 2)[2]
+        try:
+            hour, minute = _parse_time_token(token)
+            parsed = resolve_selected_time(selected_date, hour=hour, minute=minute, tz_name=tz_name)
+        except ValueError:
+            await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
+            return
+
+        if parsed.utc_epoch <= int(time.time()) + 30:
+            await query.answer(tr(lang, "datetime_future_required"), show_alert=True)
+            return
+
+        await query.answer()
+        await _clear_inline_markup(query.message)
+        await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
+
+    @router.message(ScheduleStates.selecting_time)
     @router.message(ScheduleStates.entering_datetime)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -384,15 +670,31 @@ def build_router(store: StateStore) -> Router:
             await state.clear()
             return
 
+        current_state = await state.get_state()
+        data = await state.get_data()
         try:
             parsed: ParsedScheduleTime = parse_local_datetime(message.text, tz_name=tz_name)
         except Exception:
-            await _prompt_for_datetime(message, lang=lang, text=tr(lang, "invalid_datetime_format"))
+            await _prompt_for_datetime(
+                message,
+                lang=lang,
+                tz_name=tz_name,
+                text=tr(lang, "invalid_datetime_format"),
+                data=data,
+                state_name=current_state,
+            )
             return
 
         now_utc = int(time.time())
         if parsed.utc_epoch <= now_utc + 30:
-            await message.answer(tr(lang, "datetime_future_required"), reply_markup=_schedule_datetime_kb(lang))
+            await _prompt_for_datetime(
+                message,
+                lang=lang,
+                tz_name=tz_name,
+                text=tr(lang, "datetime_future_required"),
+                data=data,
+                state_name=current_state,
+            )
             return
 
         await _move_to_post_collection(message, state, parsed=parsed, lang=lang)
@@ -584,16 +886,20 @@ def build_router(store: StateStore) -> Router:
 
         await state.clear()
         await state.set_state(ScheduleStates.entering_datetime)
-        await state.update_data(chat_id=chat_id)
+        await state.update_data(chat_id=chat_id, selected_date=None, calendar_year=None, calendar_month=None)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(scheduled_at_utc, tz_name)
         title = await store.get_destination_title(chat_id) or str(chat_id)
         await query.message.answer(
             tr(lang, "scheduled_ok", local_time=local_time, tz_name=tz_name, post_id=_short_id(post_id)),
         )
-        await query.message.answer(
-            tr(lang, "schedule_next_prompt", where=title),
-            reply_markup=_schedule_datetime_kb(lang),
+        await _prompt_for_datetime(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "schedule_next_prompt", where=title),
+            data=await state.get_data(),
+            state_name=ScheduleStates.entering_datetime.state,
         )
 
     @router.callback_query(F.data == "scancel")
