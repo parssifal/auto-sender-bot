@@ -342,3 +342,90 @@ async def test_state_store_create_recurring_series_persists_media_pattern_post_a
         assert instance.scheduled_for_utc == 1_700_000_000
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_cancel_recurring_pattern_deactivates_and_cancels_pending_post() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Recurring destination",
+            "recurring_destination",
+            "administrator",
+            True,
+        )
+
+        pattern_id, post_id = await store.create_recurring_series(
+            user_id=123,
+            chat_id=-1001,
+            interval_type="daily",
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+            kind="text",
+            text="Recurring payload",
+            entities_json=None,
+        )
+
+        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is False
+
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+        assert post.status == "cancelled"
+
+        assert await store.list_pending_posts(123, limit=10) == []
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_cancel_recurring_pattern_is_idempotent_and_owner_scoped() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.ensure_user(999)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Recurring destination",
+            "recurring_destination",
+            "administrator",
+            True,
+        )
+
+        pattern_id, _ = await store.create_recurring_series(
+            user_id=123,
+            chat_id=-1001,
+            interval_type="weekly",
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+            kind="text",
+            text="Recurring payload",
+            entities_json=None,
+        )
+
+        assert await store.cancel_recurring_pattern(user_id=999, pattern_id=pattern_id) is False
+        foreign_pattern = await store.get_recurring_pattern(pattern_id)
+        assert foreign_pattern is not None
+        assert foreign_pattern.is_active is True
+
+        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+
+        stopped_pattern = await store.get_recurring_pattern(pattern_id)
+        assert stopped_pattern is not None
+        assert stopped_pattern.is_active is False
+    finally:
+        await conn.close()

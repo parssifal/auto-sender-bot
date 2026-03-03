@@ -18,7 +18,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from core.state import Destination, StateStore
+from core.state import Destination, RecurringPattern, StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -326,6 +326,21 @@ def _short_id(post_id: str) -> str:
     return post_id[:8]
 
 
+def _resolve_recurring_pattern_id(patterns: list[RecurringPattern], pattern_ref: str) -> str | None:
+    ref = pattern_ref.strip().lower()
+    if not ref:
+        return None
+
+    for pattern in patterns:
+        if pattern.id == ref:
+            return pattern.id
+
+    matches = [pattern.id for pattern in patterns if pattern.id.startswith(ref)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def _format_local(epoch_utc: int, tz_name: str) -> str:
     dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
     return dt.strftime("%d.%m.%Y %H:%M")
@@ -563,6 +578,32 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await state.set_state(RepeatStates.choosing_interval)
         await message.answer(tr(lang, "repeat_choose_interval"), reply_markup=_repeat_interval_kb(lang))
+
+    @router.message(Command("repeat_cancel"))
+    async def cmd_repeat_cancel(message: Message) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await message.answer(tr(lang, "repeat_cancel_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        pattern_ref = parts[1].strip().lower()
+        patterns = await store.list_user_recurring(message.from_user.id, include_inactive=True)
+        pattern_id = _resolve_recurring_pattern_id(patterns, pattern_ref)
+        if pattern_id is None:
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        ok = await store.cancel_recurring_pattern(user_id=message.from_user.id, pattern_id=pattern_id)
+        if not ok:
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await message.answer(
+            tr(lang, "repeat_cancel_ok", pattern_id=_short_id(pattern_id)),
+            reply_markup=await _main_menu_for(message.from_user.id),
+        )
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:

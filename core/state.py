@@ -589,6 +589,47 @@ class StateStore:
         await self._conn.commit()
         return cur.rowcount == 1
 
+    async def cancel_recurring_pattern(self, user_id: int, pattern_id: str) -> bool:
+        now = int(time.time())
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = await self._execute_fetchone(
+                "SELECT id FROM recurring_patterns WHERE id=? AND user_id=?",
+                (pattern_id, user_id),
+            )
+            if row is None:
+                await self._conn.rollback()
+                return False
+
+            await self._conn.execute(
+                """
+                UPDATE recurring_patterns
+                SET is_active=0, updated_at=?
+                WHERE id=? AND user_id=?
+                """,
+                (now, pattern_id, user_id),
+            )
+            await self._conn.execute(
+                """
+                UPDATE scheduled_posts
+                SET status='cancelled'
+                WHERE user_id=?
+                  AND status='pending'
+                  AND id IN (
+                      SELECT post_id
+                      FROM recurring_instances
+                      WHERE pattern_id=?
+                  )
+                """,
+                (user_id, pattern_id),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return True
+
     async def create_recurring_instance(
         self,
         pattern_id: str,

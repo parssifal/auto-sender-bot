@@ -315,3 +315,40 @@ async def test_process_due_post_does_not_materialize_next_post_on_send_error() -
         assert [item.post_id for item in due_instances] == [post_id]
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_skips_cancelled_recurring_post_loaded_before_stop() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Stop me", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+        assert await store.cancel_recurring_pattern(user_id=USER_ID, pattern_id=pattern_id) is True
+
+        bot = FakeBot()
+        await _process_due_post(bot=bot, store=store, post=post, now_utc=due_at)
+
+        cancelled_post = await store.get_scheduled_post(post_id)
+        assert cancelled_post is not None
+        assert cancelled_post.status == "cancelled"
+        assert bot.calls == []
+        assert await store.list_pending_posts(USER_ID, limit=10) == []
+
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is False
+    finally:
+        await conn.close()

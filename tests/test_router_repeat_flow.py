@@ -61,7 +61,7 @@ class RepeatFlowHarness:
             },
         }
         if text.startswith("/"):
-            payload["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text)}]
+            payload["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
         await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
 
     async def feed_callback(self, data: str, *, update_id: int, message_id: int) -> None:
@@ -236,3 +236,34 @@ async def test_repeat_flow_custom_interval_shows_alert_and_stays_in_interval_sta
     assert isinstance(call, AnswerCallbackQuery)
     assert call.text == tr("ru", "repeat_custom_unavailable")
     assert call.show_alert is True
+
+
+@pytest.mark.asyncio
+async def test_repeat_cancel_command_stops_series_by_short_id(repeat_flow: RepeatFlowHarness) -> None:
+    pattern_id, post_id = await repeat_flow.store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_900_000_000,
+        kind="text",
+        text="Recurring text",
+        entities_json=None,
+    )
+
+    await repeat_flow.feed_message(f"/repeat_cancel {pattern_id[:8]}", update_id=10, message_id=20)
+
+    call = repeat_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "repeat_cancel_ok", pattern_id=pattern_id[:8])
+
+    pattern = await repeat_flow.store.get_recurring_pattern(pattern_id)
+    assert pattern is not None
+    assert pattern.is_active is False
+
+    post = await repeat_flow.store.get_scheduled_post(post_id)
+    assert post is not None
+    assert post.status == "cancelled"
+
+    assert await repeat_flow.store.list_pending_posts(USER_ID, limit=10) == []
