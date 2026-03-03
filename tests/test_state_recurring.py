@@ -1,10 +1,12 @@
+import sqlite3
+
 import pytest
 
 from core.db import open_db
 from core.state import StateStore
 
 
-EXPECTED_COLUMNS = {
+EXPECTED_PATTERN_COLUMNS = {
     "id",
     "user_id",
     "chat_id",
@@ -21,6 +23,64 @@ EXPECTED_COLUMNS = {
     "updated_at",
 }
 
+EXPECTED_INSTANCE_COLUMNS = {
+    "pattern_id",
+    "post_id",
+    "ordinal",
+    "scheduled_for_utc",
+    "created_at",
+}
+
+
+async def _seed_recurring_pattern(store: StateStore, conn, *, pattern_id: str = "pattern-1") -> str:
+    await store.ensure_user(123)
+    await store.upsert_destination(
+        -1001,
+        "channel",
+        "Recurring destination",
+        "recurring_destination",
+        "administrator",
+        True,
+    )
+    await conn.execute(
+        """
+        INSERT INTO recurring_patterns(
+            id,
+            user_id,
+            chat_id,
+            interval_type,
+            weekdays_mask,
+            time_of_day_minutes,
+            timezone,
+            start_at_utc,
+            end_at_utc,
+            max_occurrences,
+            current_count,
+            is_active,
+            created_at,
+            updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pattern_id,
+            123,
+            -1001,
+            "weekdays",
+            31,
+            9 * 60 + 30,
+            "Europe/Moscow",
+            1_700_000_000,
+            None,
+            10,
+            1,
+            1,
+            1_700_000_000,
+            1_700_000_000,
+        ),
+    )
+    await conn.commit()
+    return pattern_id
+
 
 @pytest.mark.asyncio
 async def test_state_store_migrate_creates_recurring_patterns_schema() -> None:
@@ -30,7 +90,7 @@ async def test_state_store_migrate_creates_recurring_patterns_schema() -> None:
         await store.migrate()
 
         columns = await conn.execute_fetchall("PRAGMA table_info(recurring_patterns)")
-        assert {str(column["name"]) for column in columns} == EXPECTED_COLUMNS
+        assert {str(column["name"]) for column in columns} == EXPECTED_PATTERN_COLUMNS
 
         foreign_keys = await conn.execute_fetchall("PRAGMA foreign_key_list(recurring_patterns)")
         assert {str(foreign_key["table"]) for foreign_key in foreign_keys} == {"users", "destinations"}
@@ -48,80 +108,121 @@ async def test_state_store_migrate_creates_recurring_patterns_schema() -> None:
 
 
 @pytest.mark.asyncio
-async def test_state_store_migrate_is_idempotent_for_recurring_patterns() -> None:
+async def test_state_store_migrate_creates_recurring_instances_schema() -> None:
     conn = await open_db(":memory:")
     try:
         store = StateStore(conn)
         await store.migrate()
-        await store.ensure_user(123)
-        await store.upsert_destination(
-            -1001,
-            "channel",
-            "Recurring destination",
-            "recurring_destination",
-            "administrator",
-            True,
-        )
 
+        columns = await conn.execute_fetchall("PRAGMA table_info(recurring_instances)")
+        assert {str(column["name"]) for column in columns} == EXPECTED_INSTANCE_COLUMNS
+
+        foreign_keys = await conn.execute_fetchall("PRAGMA foreign_key_list(recurring_instances)")
+        assert {str(foreign_key["table"]) for foreign_key in foreign_keys} == {"recurring_patterns", "scheduled_posts"}
+
+        indexes = await conn.execute_fetchall("PRAGMA index_list(recurring_instances)")
+        assert {str(index["name"]) for index in indexes} >= {"idx_recurring_instances_pattern_scheduled"}
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_migrate_is_idempotent_for_recurring_patterns_and_instances() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        pattern_id = await _seed_recurring_pattern(store, conn)
+        post_id = await store.create_scheduled_text_post(
+            user_id=123,
+            chat_id=-1001,
+            scheduled_at_utc=1_700_000_000,
+            text="Recurring payload",
+            entities_json=None,
+        )
         await conn.execute(
             """
-            INSERT INTO recurring_patterns(
-                id,
-                user_id,
-                chat_id,
-                interval_type,
-                weekdays_mask,
-                time_of_day_minutes,
-                timezone,
-                start_at_utc,
-                end_at_utc,
-                max_occurrences,
-                current_count,
-                is_active,
-                created_at,
-                updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+            VALUES(?, ?, ?, ?, ?)
             """,
-            (
-                "pattern-1",
-                123,
-                -1001,
-                "weekdays",
-                31,
-                9 * 60 + 30,
-                "Europe/Moscow",
-                1_700_000_000,
-                None,
-                10,
-                1,
-                1,
-                1_700_000_000,
-                1_700_000_000,
-            ),
+            (pattern_id, post_id, 1, 1_700_000_000, 1_700_000_000),
         )
         await conn.commit()
 
         await store.migrate()
 
-        cur = await conn.execute(
+        pattern_cur = await conn.execute(
             """
             SELECT interval_type, weekdays_mask, time_of_day_minutes, timezone, max_occurrences, current_count, is_active
             FROM recurring_patterns
             WHERE id=?
             """,
-            ("pattern-1",),
+            (pattern_id,),
         )
         try:
-            row = await cur.fetchone()
+            pattern_row = await pattern_cur.fetchone()
         finally:
-            await cur.close()
-        assert row is not None
-        assert row["interval_type"] == "weekdays"
-        assert row["weekdays_mask"] == 31
-        assert row["time_of_day_minutes"] == 9 * 60 + 30
-        assert row["timezone"] == "Europe/Moscow"
-        assert row["max_occurrences"] == 10
-        assert row["current_count"] == 1
-        assert row["is_active"] == 1
+            await pattern_cur.close()
+        assert pattern_row is not None
+        assert pattern_row["interval_type"] == "weekdays"
+        assert pattern_row["weekdays_mask"] == 31
+        assert pattern_row["time_of_day_minutes"] == 9 * 60 + 30
+        assert pattern_row["timezone"] == "Europe/Moscow"
+        assert pattern_row["max_occurrences"] == 10
+        assert pattern_row["current_count"] == 1
+        assert pattern_row["is_active"] == 1
+
+        instance_cur = await conn.execute(
+            """
+            SELECT pattern_id, post_id, ordinal, scheduled_for_utc
+            FROM recurring_instances
+            WHERE post_id=?
+            """,
+            (post_id,),
+        )
+        try:
+            instance_row = await instance_cur.fetchone()
+        finally:
+            await instance_cur.close()
+        assert instance_row is not None
+        assert instance_row["pattern_id"] == pattern_id
+        assert instance_row["post_id"] == post_id
+        assert instance_row["ordinal"] == 1
+        assert instance_row["scheduled_for_utc"] == 1_700_000_000
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_recurring_instances_enforce_unique_post_mapping() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        pattern_id = await _seed_recurring_pattern(store, conn)
+        post_id = await store.create_scheduled_text_post(
+            user_id=123,
+            chat_id=-1001,
+            scheduled_at_utc=1_700_000_000,
+            text="Recurring payload",
+            entities_json=None,
+        )
+        await conn.execute(
+            """
+            INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (pattern_id, post_id, 1, 1_700_000_000, 1_700_000_000),
+        )
+        await conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await conn.execute(
+                """
+                INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (pattern_id, post_id, 2, 1_700_000_000, 1_700_000_000),
+            )
     finally:
         await conn.close()

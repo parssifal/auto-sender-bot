@@ -143,6 +143,21 @@ class StateStore:
 
             CREATE INDEX IF NOT EXISTS idx_recurring_patterns_chat_active
                 ON recurring_patterns(chat_id, is_active);
+
+            CREATE TABLE IF NOT EXISTS recurring_instances (
+                pattern_id TEXT NOT NULL,
+                post_id TEXT NOT NULL UNIQUE,
+                ordinal INTEGER NOT NULL,
+                scheduled_for_utc INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (pattern_id, ordinal),
+                CHECK (ordinal > 0),
+                FOREIGN KEY (pattern_id) REFERENCES recurring_patterns(id) ON DELETE CASCADE,
+                FOREIGN KEY (post_id) REFERENCES scheduled_posts(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_recurring_instances_pattern_scheduled
+                ON recurring_instances(pattern_id, scheduled_for_utc);
             """
         )
 
