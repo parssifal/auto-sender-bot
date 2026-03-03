@@ -9,6 +9,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from core.config import load_config
 from core.db import open_db
 from core.fsm_storage import build_fsm_event_isolation, build_fsm_storage
+from core.healthcheck import start_healthcheck_server
 from core.logging_setup import configure_logging
 from core.scheduler import scheduler_loop
 from core.state import StateStore
@@ -37,14 +38,25 @@ async def amain() -> None:
     scheduler_task = asyncio.create_task(
         scheduler_loop(bot=bot, store=store, stop_event=stop_event, poll_interval_seconds=cfg.scheduler_poll_seconds)
     )
+    healthcheck_server = None
 
     try:
+        healthcheck_server = await start_healthcheck_server(
+            host=cfg.healthcheck_host,
+            port=cfg.healthcheck_port,
+            conn=conn,
+            scheduler_task=scheduler_task,
+        )
         await dp.start_polling(bot, polling_timeout=cfg.telegram_polling_timeout_seconds)
     finally:
         stop_event.set()
+        if healthcheck_server is not None:
+            await healthcheck_server.close()
         scheduler_task.cancel()
         try:
             await scheduler_task
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
         await conn.close()

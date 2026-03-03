@@ -10,6 +10,8 @@ class Config:
     bot_token: str
     db_path: str
     redis_url: str | None = None
+    healthcheck_host: str = "127.0.0.1"
+    healthcheck_port: int = 8080
     log_level: str = "INFO"
     scheduler_poll_seconds: float = 2.0
     telegram_polling_timeout_seconds: int = 30
@@ -56,7 +58,18 @@ def load_config() -> Config:
     redis_url = os.getenv("REDIS_URL")
     if redis_url is not None:
         redis_url = redis_url.strip() or None
+    healthcheck_host = os.getenv("HEALTHCHECK_HOST", "127.0.0.1").strip() or "127.0.0.1"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    healthcheck_port_raw = os.getenv("HEALTHCHECK_PORT")
+    healthcheck_port = 8080
+    if healthcheck_port_raw:
+        try:
+            healthcheck_port = int(healthcheck_port_raw)
+        except ValueError as exc:
+            raise RuntimeError("HEALTHCHECK_PORT must be an integer") from exc
+    if healthcheck_port <= 0:
+        raise RuntimeError("HEALTHCHECK_PORT must be > 0")
 
     poll_seconds_raw = os.getenv("SCHEDULER_POLL_SECONDS")
     scheduler_poll_seconds = 2.0
@@ -90,6 +103,8 @@ def load_config() -> Config:
         bot_token=bot_token,
         db_path=db_path,
         redis_url=redis_url,
+        healthcheck_host=healthcheck_host,
+        healthcheck_port=healthcheck_port,
         log_level=log_level,
         scheduler_poll_seconds=scheduler_poll_seconds,
         telegram_polling_timeout_seconds=telegram_polling_timeout_seconds,

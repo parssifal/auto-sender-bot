@@ -18,6 +18,10 @@ COPY telegram /app/telegram
 
 RUN mkdir -p /app/data && chown -R app:app /app
 
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD python -c "import os, sys, urllib.request; port=os.getenv('HEALTHCHECK_PORT', '8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=2).read(); sys.exit(0)" || exit 1
+
 USER app
 
 CMD ["python", "main.py"]
