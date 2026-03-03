@@ -142,3 +142,45 @@ async def test_update_editable_post_content_rejects_recurring_post(store: StateS
     assert updated is False
     assert post is not None
     assert post.text == "Recurring post"
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_pending_post_removes_post_and_media(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_media_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        caption="Caption",
+        caption_entities_json=None,
+        caption_above=False,
+        media_items=[{"type": "photo", "file_id": "photo-1"}],
+    )
+
+    deleted = await store.hard_delete_pending_post(USER_ID, post_id)
+
+    assert deleted is True
+    assert await store.get_scheduled_post(post_id) is None
+    assert await store.get_post_media(post_id) == []
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_pending_post_rejects_recurring_post(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    _, post_id = await store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc,
+        kind="text",
+        text="Recurring post",
+        entities_json=None,
+    )
+
+    deleted = await store.hard_delete_pending_post(USER_ID, post_id)
+
+    post = await store.get_scheduled_post(post_id)
+    assert deleted is False
+    assert post is not None

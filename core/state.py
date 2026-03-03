@@ -1384,6 +1384,24 @@ class StateStore:
         await self._conn.commit()
         return cur.rowcount == 1
 
+    async def hard_delete_pending_post(self, user_id: int, post_id: str) -> bool:
+        cur = await self._conn.execute(
+            """
+            DELETE FROM scheduled_posts
+            WHERE id=?
+              AND user_id=?
+              AND status='pending'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recurring_instances
+                  WHERE post_id=?
+              )
+            """,
+            (post_id, user_id, post_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
     async def list_due_posts(self, now_utc: int, limit: int = 10) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(
             """

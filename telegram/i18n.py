@@ -267,6 +267,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "edit_text_updated_ok": "Text updated. id={post_id}",
         "edit_media_updated_ok": "Media updated. id={post_id}\n- Type: {kind}",
         "edit_time_updated_ok": "Time updated. id={post_id}\n- When: {local_time} ({tz_name})",
+        "delete_empty": "No deletable pending posts.",
+        "delete_list_header": "Choose a post to delete:\n\n{lines}",
+        "delete_list_item": (
+            "id={post_id}\n"
+            "- Where: {where}\n"
+            "- When: {local_time}\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}"
+        ),
+        "delete_confirm": (
+            "Delete post id={post_id}?\n"
+            "- Where: {where}\n"
+            "- When: {local_time} ({tz_name})\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}"
+        ),
+        "delete_post_missing": "Post not found or unavailable.",
+        "delete_post_ambiguous": "This short id matches multiple pending posts. Use a longer id.",
+        "delete_post_recurring_blocked": "This post belongs to a recurring series and cannot be deleted here yet.",
+        "delete_post_ok": "Post deleted. id={post_id}",
         "done": "Done.",
         "timezone_private_only": (
             "Auto-detect by location works only in private chat with the bot.\n"
@@ -334,6 +354,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_edit_text": "Text",
         "btn_edit_time": "Time",
         "btn_edit_media": "Media",
+        "btn_delete_post": "Delete {label}",
         "btn_repeat_stop": "Stop {label}",
         "btn_draft_open": "Open {label}",
         "btn_draft_edit": "Edit",
@@ -603,6 +624,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "edit_text_updated_ok": "Текст обновлён. id={post_id}",
         "edit_media_updated_ok": "Медиа обновлено. id={post_id}\n- Тип: {kind}",
         "edit_time_updated_ok": "Время обновлено. id={post_id}\n- Когда: {local_time} ({tz_name})",
+        "delete_empty": "Нет доступных для удаления pending-постов.",
+        "delete_list_header": "Выберите пост для удаления:\n\n{lines}",
+        "delete_list_item": (
+            "id={post_id}\n"
+            "- Куда: {where}\n"
+            "- Когда: {local_time}\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}"
+        ),
+        "delete_confirm": (
+            "Удалить post id={post_id}?\n"
+            "- Куда: {where}\n"
+            "- Когда: {local_time} ({tz_name})\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}"
+        ),
+        "delete_post_missing": "Пост не найден или уже недоступен.",
+        "delete_post_ambiguous": "Этот short_id совпал с несколькими pending-постами. Укажите более длинный id.",
+        "delete_post_recurring_blocked": "Этот пост относится к recurring-серии и пока не удаляется через /delete.",
+        "delete_post_ok": "Пост удалён. id={post_id}",
         "done": "Готово.",
         "timezone_private_only": (
             "Автоопределение по геопозиции работает только в личном чате с ботом.\n"
@@ -670,6 +711,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_edit_text": "Текст",
         "btn_edit_time": "Время",
         "btn_edit_media": "Медиа",
+        "btn_delete_post": "Удалить {label}",
         "btn_repeat_stop": "Остановить {label}",
         "btn_draft_open": "Открыть {label}",
         "btn_draft_edit": "Изменить",

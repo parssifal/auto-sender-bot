@@ -327,3 +327,128 @@ async def test_edit_command_rejects_recurring_post(edit_flow: EditFlowHarness) -
     await edit_flow.feed_message(f"/edit {_short_id(post_id)}", update_id=1, message_id=10)
 
     assert edit_flow.last_call().text == tr("ru", "edit_post_recurring_blocked")
+
+
+@pytest.mark.asyncio
+async def test_delete_command_lists_only_deletable_pending_posts(edit_flow: EditFlowHarness) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    deletable_post_id = await edit_flow.store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Delete me",
+        entities_json=None,
+    )
+    _, recurring_post_id = await edit_flow.store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc + 3600,
+        kind="text",
+        text="Recurring post",
+        entities_json=None,
+    )
+
+    await edit_flow.feed_message("/delete", update_id=1, message_id=10)
+
+    call = edit_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr(
+        "ru",
+        "delete_list_header",
+        lines=tr(
+            "ru",
+            "delete_list_item",
+            post_id=_short_id(deletable_post_id),
+            where="Test channel",
+            local_time="31.12.2099 09:30",
+            kind=tr("ru", "kind_text"),
+            preview="Delete me",
+        ),
+    )
+    callbacks = [button.callback_data for row in call.reply_markup.inline_keyboard for button in row]
+    assert f"qdelask:{deletable_post_id}" in callbacks
+    assert recurring_post_id not in call.text
+
+
+@pytest.mark.asyncio
+async def test_delete_confirm_flow_removes_pending_post_and_media(edit_flow: EditFlowHarness) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await edit_flow.store.create_scheduled_media_post(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        caption="Caption",
+        caption_entities_json=None,
+        caption_above=False,
+        media_items=[{"type": "photo", "file_id": "photo-1"}],
+    )
+
+    await edit_flow.feed_message(f"/delete {_short_id(post_id)}", update_id=1, message_id=10)
+    assert edit_flow.last_call().text == tr(
+        "ru",
+        "delete_confirm",
+        post_id=_short_id(post_id),
+        where="Test channel",
+        local_time="31.12.2099 09:30",
+        tz_name="Europe/Moscow",
+        kind=tr("ru", "kind_media", count=1),
+        preview="Caption",
+    )
+
+    await edit_flow.feed_callback(f"qdelyes:{post_id}", update_id=2, message_id=50)
+
+    assert await edit_flow.store.get_scheduled_post(post_id) is None
+    assert await edit_flow.store.get_post_media(post_id) == []
+    assert edit_flow.last_call().text == tr("ru", "delete_post_ok", post_id=_short_id(post_id))
+
+
+@pytest.mark.asyncio
+async def test_delete_command_rejects_ambiguous_short_id(edit_flow: EditFlowHarness) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    shared_prefix = "abcdef12"
+    await edit_flow.store._insert_scheduled_text_post(
+        post_id=f"{shared_prefix}000000000000000000000001",
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="First post",
+        entities_json=None,
+        created_at=scheduled_at_utc - 100,
+    )
+    await edit_flow.store._insert_scheduled_text_post(
+        post_id=f"{shared_prefix}000000000000000000000002",
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc + 60,
+        text="Second post",
+        entities_json=None,
+        created_at=scheduled_at_utc - 50,
+    )
+    await edit_flow.store._conn.commit()
+
+    await edit_flow.feed_message(f"/delete {shared_prefix}", update_id=1, message_id=10)
+
+    assert edit_flow.last_call().text == tr("ru", "delete_post_ambiguous")
+
+
+@pytest.mark.asyncio
+async def test_delete_command_rejects_recurring_post(edit_flow: EditFlowHarness) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    _, post_id = await edit_flow.store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc,
+        kind="text",
+        text="Recurring post",
+        entities_json=None,
+    )
+
+    await edit_flow.feed_message(f"/delete {_short_id(post_id)}", update_id=1, message_id=10)
+
+    assert edit_flow.last_call().text == tr("ru", "delete_post_recurring_blocked")

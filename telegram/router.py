@@ -321,6 +321,21 @@ def _queue_edit_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMark
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _queue_delete_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in posts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_delete_post", label=item["label"]),
+                    callback_data=f"qdelask:{item['id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _edit_field_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -329,6 +344,15 @@ def _edit_field_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=tr(lang, "btn_edit_time"), callback_data=f"eact:time:{post_id}"),
             ],
             [InlineKeyboardButton(text=tr(lang, "btn_edit_media"), callback_data=f"eact:media:{post_id}")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
+        ]
+    )
+
+
+def _delete_confirm_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"qdelyes:{post_id}")],
             [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
         ]
     )
@@ -1115,6 +1139,36 @@ def build_router(store: StateStore) -> Router:
             reply_markup=_queue_edit_kb(edit_buttons, lang),
         )
 
+    async def _render_delete_posts(message: Message, *, user_id: int) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        posts = await store.list_editable_pending_posts(user_id=user_id, limit=10)
+        if not posts:
+            await message.answer(tr(lang, "delete_empty"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        lines: list[str] = []
+        delete_buttons: list[dict[str, str]] = []
+        for post in posts:
+            summary = await _build_scheduled_post_summary(post, lang=lang)
+            lines.append(
+                tr(
+                    lang,
+                    "delete_list_item",
+                    post_id=_short_id(post.id),
+                    where=summary["where"],
+                    local_time=_format_local(post.scheduled_at_utc, tz_name),
+                    kind=summary["kind"],
+                    preview=summary["preview"],
+                )
+            )
+            delete_buttons.append({"id": post.id, "label": _short_id(post.id)})
+
+        await message.answer(
+            tr(lang, "delete_list_header", lines="\n\n".join(lines)),
+            reply_markup=_queue_delete_kb(delete_buttons, lang),
+        )
+
     async def _start_scheduled_post_edit(message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
         lang = await _user_lang(user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
@@ -1250,6 +1304,43 @@ def build_router(store: StateStore) -> Router:
         lang = await _user_lang(user_id)
         key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
         await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+
+    async def _send_delete_unavailable(message: Message, *, user_id: int, reason: str) -> None:
+        lang = await _user_lang(user_id)
+        key = "delete_post_recurring_blocked" if reason == "recurring" else "delete_post_missing"
+        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+
+    async def _render_delete_confirm(message: Message, *, user_id: int, post: ScheduledPostRow) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        summary = await _build_scheduled_post_summary(post, lang=lang)
+        await message.answer(
+            tr(
+                lang,
+                "delete_confirm",
+                post_id=_short_id(post.id),
+                where=summary["where"],
+                local_time=_format_local(post.scheduled_at_utc, tz_name),
+                tz_name=tz_name,
+                kind=summary["kind"],
+                preview=summary["preview"],
+            ),
+            reply_markup=_delete_confirm_kb(post_id=post.id, lang=lang),
+        )
+
+    async def _confirm_delete_post(message: Message, *, user_id: int, post_id: str) -> bool:
+        deleted = await store.hard_delete_pending_post(user_id=user_id, post_id=post_id)
+        if not deleted:
+            _, reason = await _load_pending_post_for_edit(user_id, post_id)
+            await _send_delete_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
+            return False
+
+        lang = await _user_lang(user_id)
+        await message.answer(
+            tr(lang, "delete_post_ok", post_id=_short_id(post_id)),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
 
     async def _save_scheduled_post_time(
         message: Message,
@@ -2117,6 +2208,30 @@ def build_router(store: StateStore) -> Router:
 
         await _start_scheduled_post_edit(message, state, user_id=message.from_user.id, post=post)
 
+    @router.message(Command("delete"))
+    async def cmd_delete(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await _render_delete_posts(message, user_id=message.from_user.id)
+            return
+
+        posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
+        post_id, ambiguous = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
+        lang = await _user_lang(message.from_user.id)
+        if post_id is None:
+            key = "delete_post_ambiguous" if ambiguous else "delete_post_missing"
+            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        post, reason = await _load_pending_post_for_edit(message.from_user.id, post_id)
+        if post is None:
+            await _send_delete_unavailable(message, user_id=message.from_user.id, reason=str(reason or "missing"))
+            return
+
+        await _render_delete_confirm(message, user_id=message.from_user.id, post=post)
+
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
@@ -2135,6 +2250,26 @@ def build_router(store: StateStore) -> Router:
 
         await query.answer()
         await _start_scheduled_post_edit(query.message, state, user_id=query.from_user.id, post=post)
+
+    @router.callback_query(F.data.startswith("qdelask:"))
+    async def cb_queue_delete_prompt(query: CallbackQuery) -> None:
+        post_id = query.data.split(":", 1)[1]
+        post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
+        lang = await _user_lang(query.from_user.id)
+        if post is None:
+            key = "delete_post_recurring_blocked" if reason == "recurring" else "delete_post_missing"
+            await query.answer(tr(lang, key), show_alert=True)
+            return
+
+        await query.answer()
+        await _render_delete_confirm(query.message, user_id=query.from_user.id, post=post)
+
+    @router.callback_query(F.data.startswith("qdelyes:"))
+    async def cb_queue_delete_confirm(query: CallbackQuery) -> None:
+        post_id = query.data.split(":", 1)[1]
+        await query.answer()
+        await _clear_inline_markup(query.message)
+        await _confirm_delete_post(query.message, user_id=query.from_user.id, post_id=post_id)
 
     @router.callback_query(F.data.startswith("eact:"))
     async def cb_edit_action(query: CallbackQuery, state: FSMContext) -> None:
