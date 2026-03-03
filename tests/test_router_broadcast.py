@@ -62,6 +62,8 @@ class BroadcastFlowHarness:
                 "text": text,
             },
         }
+        if text.startswith("/"):
+            payload["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text)}]
         await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
 
     async def feed_photo(
@@ -188,6 +190,43 @@ def _destination_buttons(call: Any) -> list[tuple[str, str]]:
             if isinstance(callback_data, str) and callback_data.startswith("bc:"):
                 out.append((button.text, callback_data))
     return out
+
+
+@pytest.mark.asyncio
+async def test_broadcast_command_enters_destination_picker_and_clears_stale_state(
+    broadcast_flow: BroadcastFlowHarness,
+) -> None:
+    await broadcast_flow.set_state(
+        BroadcastStates.confirming.state,
+        data={"selected_chat_ids": [-999], "scheduled_at_utc": 123, "kind": "text"},
+    )
+
+    await broadcast_flow.feed_message("/broadcast", update_id=1, message_id=10)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.choosing_destinations.state
+    data = await broadcast_flow.get_data()
+    assert data == {"selected_chat_ids": [], "dest_page": 0}
+    call = broadcast_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "broadcast_choose_destinations", count=0)
+    assert "bcdone" in _callback_data(call)
+    assert "scancel" in _callback_data(call)
+    destination_buttons = _destination_buttons(call)
+    assert len(destination_buttons) == 5
+    assert all(button_data.endswith(":on") for _, button_data in destination_buttons)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_command_requires_timezone(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.conn.execute("UPDATE users SET timezone=NULL WHERE user_id=?", (USER_ID,))
+    await broadcast_flow.conn.commit()
+
+    await broadcast_flow.feed_message("/broadcast", update_id=1, message_id=10)
+
+    assert await broadcast_flow.get_state() is None
+    call = broadcast_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "timezone_required")
 
 
 @pytest.mark.asyncio

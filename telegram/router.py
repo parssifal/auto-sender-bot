@@ -1557,6 +1557,20 @@ def build_router(store: StateStore) -> Router:
         await state.update_data(dest_page=0)
         await _render_destinations(message, page=0, user_id=message.from_user.id)
 
+    @router.message(Command("broadcast"))
+    async def cmd_broadcast(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
+        tz_name = await store.get_user_timezone(message.from_user.id)
+        if not tz_name:
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await state.clear()
+        await state.set_state(BroadcastStates.choosing_destinations)
+        await state.update_data(selected_chat_ids=[], dest_page=0)
+        await _render_broadcast_destinations(message, state, user_id=message.from_user.id, page=0, edit=False)
+
     @router.message(Command("repeat"))
     async def cmd_repeat(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
