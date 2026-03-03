@@ -78,6 +78,14 @@ class DraftStates(StatesGroup):
     confirming = State()
 
 
+class BroadcastStates(StatesGroup):
+    choosing_destinations = State()
+    entering_datetime = State()
+    selecting_time = State()
+    collecting_post = State()
+    confirming = State()
+
+
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
 _MENU_QUEUE_TEXTS = key_values("menu_queue")
 _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
@@ -88,6 +96,24 @@ _TIME_PICKER = TimePicker()
 _SCHEDULE_TIME_MINUTES = (0, 30)
 _REPEAT_WEEKDAYS_MASK = 0b0011111
 _DRAFT_SCOPES = ("all", "mine", "team")
+
+
+def _is_datetime_entry_state(state_name: str | None) -> bool:
+    return state_name in {
+        ScheduleStates.entering_datetime.state,
+        RepeatStates.entering_datetime.state,
+        DraftStates.entering_datetime.state,
+        BroadcastStates.entering_datetime.state,
+    }
+
+
+def _is_time_selection_state(state_name: str | None) -> bool:
+    return state_name in {
+        ScheduleStates.selecting_time.state,
+        RepeatStates.selecting_time.state,
+        DraftStates.selecting_time.state,
+        BroadcastStates.selecting_time.state,
+    }
 
 
 def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -506,14 +532,6 @@ def _parse_time_token(token: str) -> tuple[int, int]:
     if not 0 <= minute <= 59:
         raise ValueError("minute must be in range 0..59")
     return hour, minute
-
-
-def _is_time_selection_state(state_name: str | None) -> bool:
-    return state_name in {
-        ScheduleStates.selecting_time.state,
-        RepeatStates.selecting_time.state,
-        DraftStates.selecting_time.state,
-    }
 
 
 async def _clear_inline_markup(message: Message) -> None:
@@ -1931,11 +1949,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:nav:"))
     async def cb_schedule_calendar_nav(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {
-            ScheduleStates.entering_datetime.state,
-            RepeatStates.entering_datetime.state,
-            DraftStates.entering_datetime.state,
-        }:
+        if not _is_datetime_entry_state(current_state):
             await query.answer()
             return
 
@@ -1976,11 +1990,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:date:"))
     async def cb_schedule_calendar_date(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {
-            ScheduleStates.entering_datetime.state,
-            RepeatStates.entering_datetime.state,
-            DraftStates.entering_datetime.state,
-        }:
+        if not _is_datetime_entry_state(current_state):
             await query.answer()
             return
 
@@ -2008,6 +2018,8 @@ def build_router(store: StateStore) -> Router:
             next_state = RepeatStates.selecting_time
         elif current_state == DraftStates.entering_datetime.state:
             next_state = DraftStates.selecting_time
+        elif current_state == BroadcastStates.entering_datetime.state:
+            next_state = BroadcastStates.selecting_time
         else:
             next_state = ScheduleStates.selecting_time
         await state.set_state(next_state)
@@ -2024,11 +2036,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:quick:"))
     async def cb_schedule_quick(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {
-            ScheduleStates.entering_datetime.state,
-            RepeatStates.entering_datetime.state,
-            DraftStates.entering_datetime.state,
-        }:
+        if not _is_datetime_entry_state(current_state):
             await query.answer()
             return
 
@@ -2072,6 +2080,16 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == BroadcastStates.entering_datetime.state:
+            await _move_to_post_collection(
+                query.message,
+                state,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+                collecting_state=BroadcastStates.collecting_post,
+                lang=lang,
+            )
+            return
         await _move_to_post_collection(
             query.message,
             state,
@@ -2084,11 +2102,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data == "tp:back:calendar")
     async def cb_schedule_back_to_calendar(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {
-            ScheduleStates.selecting_time.state,
-            RepeatStates.selecting_time.state,
-            DraftStates.selecting_time.state,
-        }:
+        if not _is_time_selection_state(current_state):
             await query.answer()
             return
 
@@ -2108,6 +2122,8 @@ def build_router(store: StateStore) -> Router:
             previous_state = RepeatStates.entering_datetime
         elif current_state == DraftStates.selecting_time.state:
             previous_state = DraftStates.entering_datetime
+        elif current_state == BroadcastStates.selecting_time.state:
+            previous_state = BroadcastStates.entering_datetime
         else:
             previous_state = ScheduleStates.entering_datetime
         await state.set_state(previous_state)
@@ -2132,11 +2148,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:time:"))
     async def cb_schedule_time(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {
-            ScheduleStates.selecting_time.state,
-            RepeatStates.selecting_time.state,
-            DraftStates.selecting_time.state,
-        }:
+        if not _is_time_selection_state(current_state):
             await query.answer()
             return
 
@@ -2155,6 +2167,8 @@ def build_router(store: StateStore) -> Router:
                 previous_state = RepeatStates.entering_datetime
             elif current_state == DraftStates.selecting_time.state:
                 previous_state = DraftStates.entering_datetime
+            elif current_state == BroadcastStates.selecting_time.state:
+                previous_state = BroadcastStates.entering_datetime
             else:
                 previous_state = ScheduleStates.entering_datetime
             await state.set_state(previous_state)
@@ -2210,6 +2224,16 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == BroadcastStates.selecting_time.state:
+            await _move_to_post_collection(
+                query.message,
+                state,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+                collecting_state=BroadcastStates.collecting_post,
+                lang=lang,
+            )
+            return
         await _move_to_post_collection(
             query.message,
             state,
@@ -2219,6 +2243,8 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(BroadcastStates.selecting_time)
+    @router.message(BroadcastStates.entering_datetime)
     @router.message(DraftStates.selecting_time)
     @router.message(DraftStates.entering_datetime)
     @router.message(RepeatStates.selecting_time)
@@ -2278,6 +2304,17 @@ def build_router(store: StateStore) -> Router:
                 user_id=message.from_user.id,
                 scheduled_at_utc=parsed.utc_epoch,
                 scheduled_local=str(parsed.local_dt),
+            )
+            return
+
+        if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
+            await _move_to_post_collection(
+                message,
+                state,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+                collecting_state=BroadcastStates.collecting_post,
+                lang=lang,
             )
             return
 
