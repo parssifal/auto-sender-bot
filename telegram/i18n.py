@@ -129,6 +129,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Type: {kind}"
         ),
         "draft_delete_ok": "Draft deleted. draft={draft_id}",
+        "draft_post_enter_datetime": (
+            "Choose date and time for draft={draft_id}.\n"
+            "- Where: {where}\n"
+            "Use the calendar and quick buttons below, or send `DD.MM.YYYY HH:MM`."
+        ),
+        "draft_post_created_ok": (
+            "Draft scheduled. draft={draft_id}\n"
+            "- When: {local_time} ({tz_name})\n"
+            "- Post id: {post_id}"
+        ),
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -362,6 +372,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Тип: {kind}"
         ),
         "draft_delete_ok": "Черновик удалён. draft={draft_id}",
+        "draft_post_enter_datetime": (
+            "Выберите дату и время для draft={draft_id}.\n"
+            "- Куда: {where}\n"
+            "Используйте календарь и быстрые кнопки ниже или отправьте `ДД.ММ.ГГГГ ЧЧ:ММ`."
+        ),
+        "draft_post_created_ok": (
+            "Черновик поставлен в очередь. draft={draft_id}\n"
+            "- Когда: {local_time} ({tz_name})\n"
+            "- Post id: {post_id}"
+        ),
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",

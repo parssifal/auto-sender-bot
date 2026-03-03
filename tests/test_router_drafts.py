@@ -33,6 +33,15 @@ class FakeBot(Bot):
         self.calls.append(method)
         return True
 
+    async def me(self):
+        return type("Me", (), {"id": BOT_ID})()
+
+    async def get_chat_member(self, **kwargs):
+        user_id = kwargs["user_id"]
+        if user_id == BOT_ID:
+            return type("Member", (), {"status": "administrator", "can_post_messages": True})()
+        return type("Member", (), {"status": "administrator"})()
+
 
 @dataclass
 class DraftFlowHarness:
@@ -454,6 +463,128 @@ async def test_draft_delete_command_rejects_viewer_role(draft_flow: DraftFlowHar
     assert isinstance(call, SendMessage)
     assert call.text == tr("ru", "draft_missing")
     assert await draft_flow.store.get_draft(draft_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_draft_publish_via_detail_button_creates_scheduled_post_and_keeps_draft(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Черновик для публикации",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    await draft_flow.feed_callback(f"dopen:all:0:{draft_id}", update_id=2, message_id=50)
+    await draft_flow.feed_callback(f"dact:publish:{draft_id}", update_id=3, message_id=50)
+
+    assert await draft_flow.get_state() == DraftStates.entering_datetime.state
+    prompt_call = draft_flow.last_call()
+    assert isinstance(prompt_call, SendMessage)
+    assert _short_id(draft_id) in prompt_call.text
+
+    await draft_flow.feed_callback("tp:quick:next_monday", update_id=4, message_id=51)
+
+    assert await draft_flow.get_state() == DraftStates.confirming.state
+    confirm_call = draft_flow.last_call()
+    assert isinstance(confirm_call, SendMessage)
+    assert "Test channel" in confirm_call.text
+
+    await draft_flow.feed_callback("sconf:yes", update_id=5, message_id=52)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert _short_id(draft_id) in final_call.text
+
+    pending_posts = await draft_flow.store.list_pending_posts(USER_ID, limit=10)
+    assert len(pending_posts) == 1
+    post = pending_posts[0]
+    assert post.chat_id == DESTINATION_CHAT_ID
+    assert post.kind == "text"
+    assert post.text == "Черновик для публикации"
+    assert await draft_flow.store.get_draft(draft_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_draft_post_command_creates_scheduled_post_from_team_media_draft(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        team_id=draft_flow.owner_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="media",
+        caption="Командный draft publish",
+        media_items=[{"type": "photo", "file_id": "photo-publish-1"}],
+    )
+
+    await draft_flow.feed_message(f"/draft_post {draft_id[:8]}", update_id=1, message_id=10)
+
+    assert await draft_flow.get_state() == DraftStates.entering_datetime.state
+    prompt_call = draft_flow.last_call()
+    assert isinstance(prompt_call, SendMessage)
+    assert _short_id(draft_id) in prompt_call.text
+
+    await draft_flow.feed_callback("tp:quick:next_monday", update_id=2, message_id=50)
+    assert await draft_flow.get_state() == DraftStates.confirming.state
+
+    await draft_flow.feed_callback("sconf:yes", update_id=3, message_id=51)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert _short_id(draft_id) in final_call.text
+
+    pending_posts = await draft_flow.store.list_pending_posts(USER_ID, limit=10)
+    assert len(pending_posts) == 1
+    post = pending_posts[0]
+    assert post.chat_id == DESTINATION_CHAT_ID
+    assert post.kind == "media"
+    assert post.caption == "Командный draft publish"
+    assert await draft_flow.store.get_post_media(post.id) == [{"type": "photo", "file_id": "photo-publish-1"}]
+    assert await draft_flow.store.get_draft(draft_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_draft_publish_rechecks_access_on_confirm(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Исчезающий черновик",
+    )
+
+    await draft_flow.feed_message(f"/draft_post {draft_id[:8]}", update_id=1, message_id=10)
+    await draft_flow.feed_callback("tp:quick:next_monday", update_id=2, message_id=50)
+
+    assert await draft_flow.get_state() == DraftStates.confirming.state
+    assert await draft_flow.store.delete_draft(draft_id, USER_ID) is True
+
+    await draft_flow.feed_callback("sconf:yes", update_id=3, message_id=51)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert final_call.text == tr("ru", "draft_missing")
+    assert await draft_flow.store.list_pending_posts(USER_ID, limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_draft_post_command_rejects_viewer_role(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        team_id=draft_flow.viewer_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Viewer cannot publish this",
+    )
+
+    await draft_flow.feed_message(f"/draft_post {draft_id[:8]}", update_id=1, message_id=10)
+
+    assert await draft_flow.get_state() is None
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "draft_missing")
+    assert await draft_flow.store.list_pending_posts(USER_ID, limit=10) == []
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,9 @@ class DraftStates(StatesGroup):
     collecting_post = State()
     choosing_scope = State()
     editing_post = State()
+    entering_datetime = State()
+    selecting_time = State()
+    confirming = State()
 
 
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
@@ -254,6 +257,10 @@ def _draft_action_labels(lang: str, permissions: DraftPermissions) -> str:
     if not labels:
         return tr(lang, "draft_actions_view_only")
     return ", ".join(labels)
+
+
+def _draft_post_prompt_text(lang: str, *, draft_id: str | None, where: str) -> str:
+    return tr(lang, "draft_post_enter_datetime", draft_id=_short_id(draft_id or ""), where=where)
 
 
 def _drafts_manage_kb(drafts: list[DraftRow], *, scope: str, page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
@@ -483,7 +490,11 @@ def _parse_time_token(token: str) -> tuple[int, int]:
 
 
 def _is_time_selection_state(state_name: str | None) -> bool:
-    return state_name in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}
+    return state_name in {
+        ScheduleStates.selecting_time.state,
+        RepeatStates.selecting_time.state,
+        DraftStates.selecting_time.state,
+    }
 
 
 async def _clear_inline_markup(message: Message) -> None:
@@ -1090,6 +1101,67 @@ def build_router(store: StateStore) -> Router:
         )
         return True
 
+    async def _start_draft_publish(message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id)
+        if not tz_name:
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
+        await state.clear()
+        await state.update_data(
+            draft_publish_id=draft.id,
+            chat_id=draft.chat_id,
+            selected_date=None,
+            calendar_year=None,
+            calendar_month=None,
+        )
+        await state.set_state(DraftStates.entering_datetime)
+        await _prompt_for_datetime(
+            message,
+            lang=lang,
+            tz_name=tz_name,
+            text=_draft_post_prompt_text(lang, draft_id=draft.id, where=where),
+            data=await state.get_data(),
+            state_name=DraftStates.entering_datetime.state,
+        )
+
+    async def _move_draft_publish_to_confirmation(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        scheduled_at_utc: int,
+        scheduled_local: str,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        draft_id = (await state.get_data()).get("draft_publish_id")
+        if not isinstance(draft_id, str):
+            await state.clear()
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        permissions = await store.get_draft_permissions(draft_id, user_id)
+        draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
+        if draft is None or permissions is None or not permissions.can_publish:
+            await state.clear()
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        await state.update_data(
+            scheduled_at_utc=scheduled_at_utc,
+            scheduled_local=scheduled_local,
+            chat_id=draft.chat_id,
+        )
+        await state.set_state(DraftStates.confirming)
+
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        local_time = _format_local(scheduled_at_utc, tz_name)
+        summary = await _build_draft_summary(draft, lang=lang)
+        text = tr(lang, "confirm_template", where=summary["where"], local_time=local_time, tz_name=tz_name, kind=summary["kind"])
+        await message.answer(text, reply_markup=_confirm_kb(lang))
+
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -1209,6 +1281,32 @@ def build_router(store: StateStore) -> Router:
             page=None,
             edit=False,
         )
+
+    @router.message(Command("draft_post"))
+    async def cmd_draft_post(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await _render_drafts(message, user_id=message.from_user.id, scope="all", page=0, edit=False)
+            return
+
+        draft_ref = parts[1].strip().lower()
+        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
+        draft_id = _resolve_draft_id(drafts, draft_ref)
+        if draft_id is None:
+            lang = await _user_lang(message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        draft = await store.get_draft(draft_id)
+        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
+        if draft is None or permissions is None or not permissions.can_publish:
+            lang = await _user_lang(message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await _start_draft_publish(message, state, user_id=message.from_user.id, draft=draft)
 
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
@@ -1424,12 +1522,19 @@ def build_router(store: StateStore) -> Router:
             await _start_draft_edit(query.message, state, user_id=query.from_user.id, draft=draft)
             return
 
+        if action == "publish":
+            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
+            if draft is None or permissions is None or not permissions.can_publish:
+                await query.answer(tr(lang, "draft_missing"), show_alert=True)
+                return
+
+            await query.answer()
+            await _start_draft_publish(query.message, state, user_id=query.from_user.id, draft=draft)
+            return
+
         allowed = False
         if permissions is not None:
-            allowed = (
-                (action == "delete" and permissions.can_delete)
-                or (action == "publish" and permissions.can_publish)
-            )
+            allowed = action == "delete" and permissions.can_delete
         await query.answer(
             tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
             show_alert=True,
@@ -1620,7 +1725,11 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:nav:"))
     async def cb_schedule_calendar_nav(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
+        if current_state not in {
+            ScheduleStates.entering_datetime.state,
+            RepeatStates.entering_datetime.state,
+            DraftStates.entering_datetime.state,
+        }:
             await query.answer()
             return
 
@@ -1640,20 +1749,32 @@ def build_router(store: StateStore) -> Router:
             return
 
         await state.update_data(calendar_year=year, calendar_month=month)
+        data = await state.get_data()
+        if current_state == DraftStates.entering_datetime.state:
+            where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
+            text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
+        elif current_state == RepeatStates.entering_datetime.state:
+            text = tr(lang, "repeat_enter_datetime")
+        else:
+            text = tr(lang, "enter_datetime")
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
             lang=lang,
             tz_name=tz_name,
-            text=tr(lang, "repeat_enter_datetime") if current_state == RepeatStates.entering_datetime.state else tr(lang, "enter_datetime"),
-            data=await state.get_data(),
+            text=text,
+            data=data,
             state_name=current_state,
         )
 
     @router.callback_query(F.data.startswith("tp:date:"))
     async def cb_schedule_calendar_date(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
+        if current_state not in {
+            ScheduleStates.entering_datetime.state,
+            RepeatStates.entering_datetime.state,
+            DraftStates.entering_datetime.state,
+        }:
             await query.answer()
             return
 
@@ -1677,7 +1798,12 @@ def build_router(store: StateStore) -> Router:
             calendar_year=selected_date.year,
             calendar_month=selected_date.month,
         )
-        next_state = RepeatStates.selecting_time if current_state == RepeatStates.entering_datetime.state else ScheduleStates.selecting_time
+        if current_state == RepeatStates.entering_datetime.state:
+            next_state = RepeatStates.selecting_time
+        elif current_state == DraftStates.entering_datetime.state:
+            next_state = DraftStates.selecting_time
+        else:
+            next_state = ScheduleStates.selecting_time
         await state.set_state(next_state)
         await query.answer()
         await _edit_datetime_prompt(
@@ -1692,7 +1818,11 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("tp:quick:"))
     async def cb_schedule_quick(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
+        if current_state not in {
+            ScheduleStates.entering_datetime.state,
+            RepeatStates.entering_datetime.state,
+            DraftStates.entering_datetime.state,
+        }:
             await query.answer()
             return
 
@@ -1727,6 +1857,15 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == DraftStates.entering_datetime.state:
+            await _move_draft_publish_to_confirmation(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
         await _move_to_post_collection(
             query.message,
             state,
@@ -1739,7 +1878,11 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data == "tp:back:calendar")
     async def cb_schedule_back_to_calendar(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}:
+        if current_state not in {
+            ScheduleStates.selecting_time.state,
+            RepeatStates.selecting_time.state,
+            DraftStates.selecting_time.state,
+        }:
             await query.answer()
             return
 
@@ -1755,22 +1898,39 @@ def build_router(store: StateStore) -> Router:
         selected_date = _selected_date_from_state(data)
         if selected_date is not None:
             await state.update_data(calendar_year=selected_date.year, calendar_month=selected_date.month)
-        previous_state = RepeatStates.entering_datetime if current_state == RepeatStates.selecting_time.state else ScheduleStates.entering_datetime
+        if current_state == RepeatStates.selecting_time.state:
+            previous_state = RepeatStates.entering_datetime
+        elif current_state == DraftStates.selecting_time.state:
+            previous_state = DraftStates.entering_datetime
+        else:
+            previous_state = ScheduleStates.entering_datetime
         await state.set_state(previous_state)
+        data = await state.get_data()
+        if previous_state == DraftStates.entering_datetime:
+            where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
+            text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
+        elif previous_state == RepeatStates.entering_datetime:
+            text = tr(lang, "repeat_enter_datetime")
+        else:
+            text = tr(lang, "enter_datetime")
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
             lang=lang,
             tz_name=tz_name,
-            text=tr(lang, "repeat_enter_datetime") if previous_state == RepeatStates.entering_datetime else tr(lang, "enter_datetime"),
-            data=await state.get_data(),
+            text=text,
+            data=data,
             state_name=previous_state.state,
         )
 
     @router.callback_query(F.data.startswith("tp:time:"))
     async def cb_schedule_time(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}:
+        if current_state not in {
+            ScheduleStates.selecting_time.state,
+            RepeatStates.selecting_time.state,
+            DraftStates.selecting_time.state,
+        }:
             await query.answer()
             return
 
@@ -1785,15 +1945,28 @@ def build_router(store: StateStore) -> Router:
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is None:
-            previous_state = RepeatStates.entering_datetime if current_state == RepeatStates.selecting_time.state else ScheduleStates.entering_datetime
+            if current_state == RepeatStates.selecting_time.state:
+                previous_state = RepeatStates.entering_datetime
+            elif current_state == DraftStates.selecting_time.state:
+                previous_state = DraftStates.entering_datetime
+            else:
+                previous_state = ScheduleStates.entering_datetime
             await state.set_state(previous_state)
+            data = await state.get_data()
+            if previous_state == DraftStates.entering_datetime:
+                where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
+                text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
+            elif previous_state == RepeatStates.entering_datetime:
+                text = tr(lang, "repeat_enter_datetime")
+            else:
+                text = tr(lang, "enter_datetime")
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             await _edit_datetime_prompt(
                 query.message,
                 lang=lang,
                 tz_name=tz_name,
-                text=tr(lang, "repeat_enter_datetime") if previous_state == RepeatStates.entering_datetime else tr(lang, "enter_datetime"),
-                data=await state.get_data(),
+                text=text,
+                data=data,
                 state_name=previous_state.state,
             )
             return
@@ -1822,6 +1995,15 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == DraftStates.selecting_time.state:
+            await _move_draft_publish_to_confirmation(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
         await _move_to_post_collection(
             query.message,
             state,
@@ -1831,6 +2013,8 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(DraftStates.selecting_time)
+    @router.message(DraftStates.entering_datetime)
     @router.message(RepeatStates.selecting_time)
     @router.message(RepeatStates.entering_datetime)
     @router.message(ScheduleStates.selecting_time)
@@ -1873,6 +2057,16 @@ def build_router(store: StateStore) -> Router:
 
         if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
             await _move_repeat_to_destination_selection(
+                message,
+                state,
+                user_id=message.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
+
+        if current_state in {DraftStates.entering_datetime.state, DraftStates.selecting_time.state}:
+            await _move_draft_publish_to_confirmation(
                 message,
                 state,
                 user_id=message.from_user.id,
@@ -2107,7 +2301,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data == "sconf:yes")
     async def cb_confirm_yes(query: CallbackQuery, state: FSMContext) -> None:
         current_state = await state.get_state()
-        if current_state not in {ScheduleStates.confirming.state, RepeatStates.confirming.state}:
+        if current_state not in {ScheduleStates.confirming.state, RepeatStates.confirming.state, DraftStates.confirming.state}:
             await query.answer()
             return
 
@@ -2115,24 +2309,23 @@ def build_router(store: StateStore) -> Router:
         await query.answer()
         data = await state.get_data()
         user_id = query.from_user.id
-        chat_id = int(data["chat_id"])
-
-        ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
-        if not ok:
-            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
-            await state.clear()
-            return
-        ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
-        if not ok:
-            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
-            await state.clear()
-            return
-
         scheduled_at_utc = int(data["scheduled_at_utc"])
         kind = data.get("kind")
         tz_name = await store.get_user_timezone(user_id) or "UTC"
 
         if current_state == RepeatStates.confirming.state:
+            chat_id = int(data["chat_id"])
+            ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
+            if not ok:
+                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await state.clear()
+                return
+            ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
+            if not ok:
+                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await state.clear()
+                return
+
             local_dt = datetime.fromtimestamp(scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
             time_of_day_minutes = local_dt.hour * 60 + local_dt.minute
             interval_type = str(data.get("interval_type") or "")
@@ -2165,6 +2358,78 @@ def build_router(store: StateStore) -> Router:
                 ),
                 reply_markup=await _main_menu_for(query.from_user.id),
             )
+            return
+
+        if current_state == DraftStates.confirming.state:
+            draft_id = data.get("draft_publish_id")
+            if not isinstance(draft_id, str):
+                await state.clear()
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                return
+
+            permissions = await store.get_draft_permissions(draft_id, user_id)
+            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
+            if draft is None or permissions is None or not permissions.can_publish:
+                await state.clear()
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                return
+
+            ok, err = await _check_user_admin(query.bot, chat_id=draft.chat_id, user_id=user_id, lang=lang)
+            if not ok:
+                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await state.clear()
+                return
+            ok, err = await _check_bot_admin_and_post(query.bot, chat_id=draft.chat_id, lang=lang)
+            if not ok:
+                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await state.clear()
+                return
+
+            if draft.kind == "text":
+                post_id = await store.create_scheduled_text_post(
+                    user_id=user_id,
+                    chat_id=draft.chat_id,
+                    scheduled_at_utc=scheduled_at_utc,
+                    text=str(draft.text or ""),
+                    entities_json=draft.entities_json,
+                )
+            else:
+                media_items = await store.get_draft_media(draft.id)
+                post_id = await store.create_scheduled_media_post(
+                    user_id=user_id,
+                    chat_id=draft.chat_id,
+                    scheduled_at_utc=scheduled_at_utc,
+                    caption=draft.caption,
+                    caption_entities_json=draft.caption_entities_json,
+                    caption_above=None if draft.caption_above is None else bool(draft.caption_above),
+                    media_items=media_items,
+                )
+
+            await state.clear()
+            local_time = _format_local(scheduled_at_utc, tz_name)
+            await query.message.answer(
+                tr(
+                    lang,
+                    "draft_post_created_ok",
+                    draft_id=_short_id(draft.id),
+                    local_time=local_time,
+                    tz_name=tz_name,
+                    post_id=_short_id(post_id),
+                ),
+                reply_markup=await _main_menu_for(query.from_user.id),
+            )
+            return
+
+        chat_id = int(data["chat_id"])
+        ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
+        if not ok:
+            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+        ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
+        if not ok:
+            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
             return
 
         if kind == "text":
