@@ -1068,16 +1068,15 @@ class StateStore:
         text: str,
         entities_json: str | None,
     ) -> str:
-        now = int(time.time())
         post_id = uuid.uuid4().hex
-        await self._conn.execute(
-            """
-            INSERT INTO scheduled_posts(
-                id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
-                attempts, next_retry_at_utc, created_at
-            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?)
-            """,
-            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, now),
+        await self._insert_scheduled_text_post(
+            post_id=post_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            scheduled_at_utc=scheduled_at_utc,
+            text=text,
+            entities_json=entities_json,
+            created_at=int(time.time()),
         )
         await self._conn.commit()
         return post_id
@@ -1092,8 +1091,111 @@ class StateStore:
         caption_above: bool | None,
         media_items: list[dict[str, str]],
     ) -> str:
-        now = int(time.time())
         post_id = uuid.uuid4().hex
+        await self._insert_scheduled_media_post(
+            post_id=post_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            scheduled_at_utc=scheduled_at_utc,
+            caption=caption,
+            caption_entities_json=caption_entities_json,
+            caption_above=caption_above,
+            media_items=media_items,
+            created_at=int(time.time()),
+        )
+        await self._conn.commit()
+        return post_id
+
+    async def create_broadcast_posts(
+        self,
+        *,
+        user_id: int,
+        chat_ids: Iterable[int],
+        scheduled_at_utc: int,
+        kind: str,
+        text: str | None = None,
+        entities_json: str | None = None,
+        caption: str | None = None,
+        caption_entities_json: str | None = None,
+        caption_above: bool | None = None,
+        media_items: list[dict[str, str]] | None = None,
+    ) -> list[str]:
+        unique_chat_ids = list(dict.fromkeys(chat_ids))
+        if not unique_chat_ids:
+            return []
+        if kind not in {"text", "media"}:
+            raise ValueError("kind must be 'text' or 'media'")
+        if kind == "media" and not media_items:
+            raise ValueError("media_items are required for media broadcast")
+
+        created_at = int(time.time())
+        post_ids: list[str] = []
+        try:
+            for chat_id in unique_chat_ids:
+                post_id = uuid.uuid4().hex
+                if kind == "text":
+                    await self._insert_scheduled_text_post(
+                        post_id=post_id,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        scheduled_at_utc=scheduled_at_utc,
+                        text=str(text or ""),
+                        entities_json=entities_json,
+                        created_at=created_at,
+                    )
+                else:
+                    await self._insert_scheduled_media_post(
+                        post_id=post_id,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        scheduled_at_utc=scheduled_at_utc,
+                        caption=caption,
+                        caption_entities_json=caption_entities_json,
+                        caption_above=caption_above,
+                        media_items=list(media_items or []),
+                        created_at=created_at,
+                    )
+                post_ids.append(post_id)
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+        return post_ids
+
+    async def _insert_scheduled_text_post(
+        self,
+        *,
+        post_id: str,
+        user_id: int,
+        chat_id: int,
+        scheduled_at_utc: int,
+        text: str,
+        entities_json: str | None,
+        created_at: int,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO scheduled_posts(
+                id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
+                attempts, next_retry_at_utc, created_at
+            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?)
+            """,
+            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, created_at),
+        )
+
+    async def _insert_scheduled_media_post(
+        self,
+        *,
+        post_id: str,
+        user_id: int,
+        chat_id: int,
+        scheduled_at_utc: int,
+        caption: str | None,
+        caption_entities_json: str | None,
+        caption_above: bool | None,
+        media_items: list[dict[str, str]],
+        created_at: int,
+    ) -> None:
         await self._conn.execute(
             """
             INSERT INTO scheduled_posts(
@@ -1110,16 +1212,14 @@ class StateStore:
                 caption,
                 caption_entities_json,
                 None if caption_above is None else int(caption_above),
-                now,
+                created_at,
             ),
         )
         for idx, item in enumerate(media_items):
             await self._conn.execute(
                 "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
-                (post_id, idx, item["type"], item["file_id"]),
+                (post_id, idx, str(item["type"]), str(item["file_id"])),
             )
-        await self._conn.commit()
-        return post_id
 
     async def list_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(

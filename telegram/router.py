@@ -873,16 +873,20 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
-    async def _resolve_broadcast_destination_lines(user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
+    async def _resolve_broadcast_destinations(user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
         destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(user_id)}
-        valid_chat_ids: list[int] = []
-        labels: list[str] = []
+        resolved: list[tuple[int, str]] = []
         for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
             destination = destination_map.get(chat_id)
             if destination is None:
                 continue
-            valid_chat_ids.append(chat_id)
-            labels.append(f"- {_destination_label(destination.title, destination.username)}")
+            resolved.append((chat_id, _destination_label(destination.title, destination.username)))
+        return resolved
+
+    async def _resolve_broadcast_destination_lines(user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
+        resolved_destinations = await _resolve_broadcast_destinations(user_id, selected_chat_ids)
+        valid_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
+        labels = [f"- {label}" for _, label in resolved_destinations]
         return valid_chat_ids, "\n".join(labels)
 
     async def _move_repeat_to_destination_selection(
@@ -2839,7 +2843,67 @@ def build_router(store: StateStore) -> Router:
         tz_name = await store.get_user_timezone(user_id) or "UTC"
 
         if current_state == BroadcastStates.confirming.state:
-            await query.message.answer(tr(lang, "broadcast_action_unavailable"), reply_markup=_confirm_kb(lang))
+            resolved_destinations = await _resolve_broadcast_destinations(
+                user_id,
+                _normalize_selected_chat_ids(data.get("selected_chat_ids")),
+            )
+            if not resolved_destinations:
+                await state.update_data(selected_chat_ids=[], dest_page=0)
+                await state.set_state(BroadcastStates.choosing_destinations)
+                await _render_broadcast_destinations(query.message, state, user_id=user_id, page=0, edit=False)
+                return
+
+            selected_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
+            await state.update_data(selected_chat_ids=selected_chat_ids)
+            for chat_id, _ in resolved_destinations:
+                ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
+                if not ok:
+                    await query.message.answer(err, reply_markup=_confirm_kb(lang))
+                    return
+                ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
+                if not ok:
+                    await query.message.answer(err, reply_markup=_confirm_kb(lang))
+                    return
+
+            if kind == "text":
+                post_ids = await store.create_broadcast_posts(
+                    user_id=user_id,
+                    chat_ids=selected_chat_ids,
+                    scheduled_at_utc=scheduled_at_utc,
+                    kind="text",
+                    text=str(data.get("text") or ""),
+                    entities_json=data.get("entities_json"),
+                )
+            else:
+                media_items: list[dict[str, str]] = list(data.get("media_items", []))
+                post_ids = await store.create_broadcast_posts(
+                    user_id=user_id,
+                    chat_ids=selected_chat_ids,
+                    scheduled_at_utc=scheduled_at_utc,
+                    kind="media",
+                    caption=data.get("caption"),
+                    caption_entities_json=data.get("caption_entities_json"),
+                    caption_above=bool(data.get("caption_above", False)),
+                    media_items=media_items,
+                )
+
+            await state.clear()
+            local_time = _format_local(scheduled_at_utc, tz_name)
+            lines = "\n".join(
+                f"- {label}: id={_short_id(post_id)}"
+                for (_, label), post_id in zip(resolved_destinations, post_ids)
+            )
+            await query.message.answer(
+                tr(
+                    lang,
+                    "broadcast_created_ok",
+                    count=len(post_ids),
+                    local_time=local_time,
+                    tz_name=tz_name,
+                    lines=lines,
+                ),
+                reply_markup=await _main_menu_for(query.from_user.id),
+            )
             return
 
         if current_state == RepeatStates.confirming.state:

@@ -26,7 +26,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "broadcast_choose_destinations": "Choose one or more channels/chats.\nSelected: {count}",
         "broadcast_choose_one": "Choose at least one channel/chat first.",
         "broadcast_destination_missing": "This channel/chat is no longer available. Refresh the list.",
-        "broadcast_action_unavailable": "Broadcast saving is not available yet.",
         "timezone_required": "Set timezone first: /timezone",
         "enter_datetime": (
             "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).\n"
@@ -59,6 +58,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- When: {local_time} ({tz_name})\n"
             "- Type: {kind}\n"
             "- Preview: {preview}\n"
+        ),
+        "broadcast_created_ok": (
+            "Broadcast scheduled.\n"
+            "- Channels: {count}\n"
+            "- When: {local_time} ({tz_name})\n"
+            "- Posts:\n{lines}"
         ),
         "repeat_created_ok": (
             "Done! Recurring post created: {interval}, first run {local_time} ({tz_name}). "
@@ -323,7 +328,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "broadcast_choose_destinations": "Выберите один или несколько каналов/чатов.\nВыбрано: {count}",
         "broadcast_choose_one": "Сначала выберите хотя бы один канал/чат.",
         "broadcast_destination_missing": "Этот канал/чат больше недоступен. Обновите список.",
-        "broadcast_action_unavailable": "Сохранение бродкаста пока недоступно.",
         "timezone_required": "Сначала задайте часовой пояс: /timezone",
         "enter_datetime": (
             "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).\n"
@@ -356,6 +360,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Когда: {local_time} ({tz_name})\n"
             "- Тип: {kind}\n"
             "- Превью: {preview}\n"
+        ),
+        "broadcast_created_ok": (
+            "Бродкаст поставлен в очередь.\n"
+            "- Каналы: {count}\n"
+            "- Когда: {local_time} ({tz_name})\n"
+            "- Post id:\n{lines}"
         ),
         "repeat_created_ok": (
             "Ок! Повторяющийся пост создан: {interval}, первый запуск {local_time} ({tz_name}). "

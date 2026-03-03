@@ -33,11 +33,21 @@ class FakeBot(Bot):
         self.calls.append(method)
         return True
 
+    async def me(self):
+        return type("Me", (), {"id": BOT_ID})()
+
+    async def get_chat_member(self, **kwargs):
+        user_id = kwargs["user_id"]
+        if user_id == BOT_ID:
+            return type("Member", (), {"status": "administrator", "can_post_messages": True})()
+        return type("Member", (), {"status": "administrator"})()
+
 
 @dataclass
 class BroadcastFlowHarness:
     bot: FakeBot
     dispatcher: Dispatcher
+    store: StateStore
     storage_key: StorageKey
     conn: Any
 
@@ -142,6 +152,7 @@ async def broadcast_flow() -> BroadcastFlowHarness:
     yield BroadcastFlowHarness(
         bot=bot,
         dispatcher=dispatcher,
+        store=store,
         storage_key=StorageKey(bot_id=BOT_ID, chat_id=PRIVATE_CHAT_ID, user_id=USER_ID),
         conn=conn,
     )
@@ -330,7 +341,7 @@ async def test_broadcast_media_preview_uses_caption_or_fallback(broadcast_flow: 
 
 
 @pytest.mark.asyncio
-async def test_broadcast_confirm_is_guarded_until_batch_creation_is_ready(broadcast_flow: BroadcastFlowHarness) -> None:
+async def test_broadcast_confirm_creates_text_posts_for_all_selected_channels(broadcast_flow: BroadcastFlowHarness) -> None:
     await broadcast_flow.set_state(
         BroadcastStates.confirming.state,
         data={
@@ -338,16 +349,24 @@ async def test_broadcast_confirm_is_guarded_until_batch_creation_is_ready(broadc
             "scheduled_at_utc": int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp()),
             "kind": "text",
             "text": "Broadcast",
+            "entities_json": None,
         },
     )
 
     await broadcast_flow.feed_callback("sconf:yes", update_id=1, message_id=50)
 
-    assert await broadcast_flow.get_state() == BroadcastStates.confirming.state
+    assert await broadcast_flow.get_state() is None
+    pending_posts = await broadcast_flow.store.list_pending_posts(USER_ID, limit=10)
+    assert len(pending_posts) == 2
+    assert {post.chat_id for post in pending_posts} == set(DESTINATION_CHAT_IDS)
+    assert {post.text for post in pending_posts} == {"Broadcast"}
     call = broadcast_flow.last_call()
     assert isinstance(call, SendMessage)
-    assert call.text == tr("ru", "broadcast_action_unavailable")
-    assert "sconf:yes" in _callback_data(call)
+    assert "Бродкаст поставлен в очередь." in call.text
+    assert "- Каналы: 2" in call.text
+    assert "- Когда: 31.12.2099 09:30 (Europe/Moscow)" in call.text
+    assert "Channel 2 (@channel_2)" in call.text
+    assert "Channel 1 (@channel_1)" in call.text
 
 
 @pytest.mark.asyncio
