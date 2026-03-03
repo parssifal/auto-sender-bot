@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,7 +35,7 @@ class FakeBot(Bot):
         return True
 
     async def me(self):
-        return type("Me", (), {"id": BOT_ID})()
+        return type("Me", (), {"id": BOT_ID, "username": "test_bot"})()
 
     async def get_chat_member(self, **kwargs):
         user_id = kwargs["user_id"]
@@ -214,6 +215,15 @@ async def test_drafts_command_shows_empty_state_with_filters(draft_flow: DraftFl
 
 
 @pytest.mark.asyncio
+async def test_start_without_invite_keeps_default_onboarding(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/start", update_id=1, message_id=10)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "start_message")
+
+
+@pytest.mark.asyncio
 async def test_draft_create_personal_text_flow_saves_draft(draft_flow: DraftFlowHarness) -> None:
     await draft_flow.feed_message("/draft_create", update_id=1, message_id=10)
 
@@ -290,6 +300,61 @@ async def test_draft_create_team_media_flow_saves_team_draft(draft_flow: DraftFl
     assert draft.kind == "media"
     assert draft.caption == "Командный медиа черновик"
     assert await draft_flow.store.get_draft_media(draft.id) == [{"type": "photo", "file_id": "photo-1"}]
+
+
+@pytest.mark.asyncio
+async def test_team_create_command_persists_team(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/team_create Editorial board", update_id=1, message_id=10)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert "Команда создана." in call.text
+    assert "Editorial board" in call.text
+
+    owned_teams = await draft_flow.store.list_owned_teams(USER_ID)
+    assert [team.name for team in owned_teams[:2]] == ["Editorial board", "Owners"]
+
+
+@pytest.mark.asyncio
+async def test_team_invite_accept_flow_adds_member_and_lists_roles(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message(f"/team_invite {draft_flow.owner_team_id[:8]} editor", update_id=1, message_id=10)
+
+    invite_call = draft_flow.last_call()
+    assert isinstance(invite_call, SendMessage)
+    match = re.search(r"ti_([0-9a-f]{32})", invite_call.text)
+    assert match is not None
+
+    token = match.group(1)
+    await draft_flow.feed_message(f"/start ti_{token}", update_id=2, message_id=11, user_id=ALT_USER_ID)
+
+    accept_call = draft_flow.last_call()
+    assert isinstance(accept_call, SendMessage)
+    assert "Вы вступили в команду." in accept_call.text
+    assert "редактор" in accept_call.text
+    assert await draft_flow.store.get_team_member_role(draft_flow.owner_team_id, ALT_USER_ID) == "editor"
+
+    await draft_flow.feed_message(f"/team_members {draft_flow.owner_team_id[:8]}", update_id=3, message_id=12)
+
+    members_call = draft_flow.last_call()
+    assert isinstance(members_call, SendMessage)
+    assert "владелец: user 1001" in members_call.text
+    assert "редактор: user 2002" in members_call.text
+
+
+@pytest.mark.asyncio
+async def test_team_members_without_id_lists_accessible_teams_and_invite_requires_owner(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/team_members", update_id=1, message_id=10)
+
+    list_call = draft_flow.last_call()
+    assert isinstance(list_call, SendMessage)
+    assert _short_id(draft_flow.owner_team_id) in list_call.text
+    assert _short_id(draft_flow.viewer_team_id) in list_call.text
+
+    await draft_flow.feed_message(f"/team_invite {draft_flow.viewer_team_id[:8]}", update_id=2, message_id=11)
+
+    denied_call = draft_flow.last_call()
+    assert isinstance(denied_call, SendMessage)
+    assert denied_call.text == tr("ru", "team_missing")
 
 
 @pytest.mark.asyncio

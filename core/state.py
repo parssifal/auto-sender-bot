@@ -40,6 +40,25 @@ class TeamMember:
 
 
 @dataclass(frozen=True)
+class TeamInvite:
+    token: str
+    team_id: str
+    role: str
+    created_by_user_id: int
+    created_at: int
+    expires_at: int
+    accepted_by_user_id: int | None
+    accepted_at: int | None
+
+
+@dataclass(frozen=True)
+class TeamInviteAcceptance:
+    status: str
+    team: Team | None
+    role: str | None
+
+
+@dataclass(frozen=True)
 class DraftRow:
     id: str
     team_id: str | None
@@ -184,6 +203,28 @@ class StateStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_single_owner
                 ON team_members(team_id)
                 WHERE role='owner';
+
+            CREATE TABLE IF NOT EXISTS team_invites (
+                token TEXT PRIMARY KEY,
+                team_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_by_user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                accepted_by_user_id INTEGER NULL,
+                accepted_at INTEGER NULL,
+                CHECK (role IN ('editor', 'viewer')),
+                CHECK (expires_at > created_at),
+                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (accepted_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_team_invites_team_created
+                ON team_invites(team_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_team_invites_expires
+                ON team_invites(expires_at, accepted_at);
 
             CREATE TABLE IF NOT EXISTS drafts (
                 id TEXT PRIMARY KEY,
@@ -514,6 +555,27 @@ class StateStore:
         )
         return [self._row_to_team(row) for row in rows]
 
+    async def list_user_teams(self, user_id: int, offset: int = 0, limit: int = 20) -> list[Team]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT t.*
+            FROM team_members tm
+            JOIN teams t ON t.id = tm.team_id
+            WHERE tm.user_id=?
+            ORDER BY
+                CASE tm.role
+                    WHEN 'owner' THEN 0
+                    WHEN 'editor' THEN 1
+                    ELSE 2
+                END,
+                t.created_at DESC,
+                t.id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        )
+        return [self._row_to_team(row) for row in rows]
+
     async def upsert_team_member(self, team_id: str, user_id: int, role: str) -> TeamMember:
         team_row = await self._execute_fetchone(
             "SELECT owner_user_id FROM teams WHERE id=?",
@@ -572,6 +634,110 @@ class StateStore:
             (team_id,),
         )
         return [self._row_to_team_member(row) for row in rows]
+
+    async def create_team_invite(
+        self,
+        team_id: str,
+        created_by_user_id: int,
+        role: str,
+        *,
+        ttl_seconds: int = 7 * 24 * 60 * 60,
+    ) -> TeamInvite:
+        if role not in {"editor", "viewer"}:
+            raise ValueError(f"Unsupported team invite role: {role}")
+        if ttl_seconds <= 0:
+            raise ValueError("Team invite ttl_seconds must be positive")
+
+        team_row = await self._execute_fetchone(
+            "SELECT owner_user_id FROM teams WHERE id=?",
+            (team_id,),
+        )
+        if team_row is None or int(team_row["owner_user_id"]) != created_by_user_id:
+            raise ValueError("Only team owner can create invites")
+
+        now = int(time.time())
+        token = uuid.uuid4().hex
+        expires_at = now + ttl_seconds
+        await self._conn.execute(
+            """
+            INSERT INTO team_invites(token, team_id, role, created_by_user_id, created_at, expires_at, accepted_by_user_id, accepted_at)
+            VALUES(?, ?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (token, team_id, role, created_by_user_id, now, expires_at),
+        )
+        await self._conn.commit()
+
+        row = await self._execute_fetchone(
+            "SELECT * FROM team_invites WHERE token=?",
+            (token,),
+        )
+        if row is None:
+            raise ValueError(f"Team invite {token} was not persisted")
+        return self._row_to_team_invite(row)
+
+    async def get_team_invite(self, token: str) -> TeamInvite | None:
+        row = await self._execute_fetchone(
+            "SELECT * FROM team_invites WHERE token=?",
+            (token,),
+        )
+        return None if row is None else self._row_to_team_invite(row)
+
+    async def accept_team_invite(self, token: str, user_id: int) -> TeamInviteAcceptance:
+        now = int(time.time())
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            invite_row = await self._execute_fetchone(
+                "SELECT * FROM team_invites WHERE token=?",
+                (token,),
+            )
+            if invite_row is None:
+                await self._conn.rollback()
+                return TeamInviteAcceptance(status="missing", team=None, role=None)
+
+            invite = self._row_to_team_invite(invite_row)
+            team_row = await self._execute_fetchone(
+                "SELECT * FROM teams WHERE id=?",
+                (invite.team_id,),
+            )
+            team = None if team_row is None else self._row_to_team(team_row)
+            if team is None:
+                await self._conn.rollback()
+                return TeamInviteAcceptance(status="missing", team=None, role=None)
+            if invite.accepted_at is not None:
+                await self._conn.rollback()
+                return TeamInviteAcceptance(status="used", team=team, role=invite.role)
+            if invite.expires_at <= now:
+                await self._conn.rollback()
+                return TeamInviteAcceptance(status="expired", team=team, role=invite.role)
+
+            existing_member = await self._execute_fetchone(
+                "SELECT role FROM team_members WHERE team_id=? AND user_id=?",
+                (invite.team_id, user_id),
+            )
+            if existing_member is not None:
+                await self._conn.rollback()
+                return TeamInviteAcceptance(status="already_member", team=team, role=str(existing_member["role"]))
+
+            await self._conn.execute(
+                """
+                INSERT INTO team_members(team_id, user_id, role, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (invite.team_id, user_id, invite.role, now, now),
+            )
+            await self._conn.execute(
+                """
+                UPDATE team_invites
+                SET accepted_by_user_id=?, accepted_at=?
+                WHERE token=?
+                """,
+                (user_id, now, token),
+            )
+            await self._conn.commit()
+            return TeamInviteAcceptance(status="accepted", team=team, role=invite.role)
+        except Exception:
+            await self._conn.rollback()
+            raise
 
     @staticmethod
     def _normalize_draft_payload(
@@ -1563,6 +1729,19 @@ class StateStore:
             role=str(row["role"]),
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_team_invite(row: aiosqlite.Row) -> TeamInvite:
+        return TeamInvite(
+            token=str(row["token"]),
+            team_id=str(row["team_id"]),
+            role=str(row["role"]),
+            created_by_user_id=int(row["created_by_user_id"]),
+            created_at=int(row["created_at"]),
+            expires_at=int(row["expires_at"]),
+            accepted_by_user_id=None if row["accepted_by_user_id"] is None else int(row["accepted_by_user_id"]),
+            accepted_at=None if row["accepted_at"] is None else int(row["accepted_at"]),
         )
 
     @staticmethod

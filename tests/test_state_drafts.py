@@ -20,6 +20,17 @@ EXPECTED_TEAM_MEMBER_COLUMNS = {
     "updated_at",
 }
 
+EXPECTED_TEAM_INVITE_COLUMNS = {
+    "token",
+    "team_id",
+    "role",
+    "created_by_user_id",
+    "created_at",
+    "expires_at",
+    "accepted_by_user_id",
+    "accepted_at",
+}
+
 EXPECTED_DRAFT_COLUMNS = {
     "id",
     "team_id",
@@ -83,6 +94,29 @@ async def test_state_store_migrate_creates_team_members_schema() -> None:
             "sqlite_autoindex_team_members_1",
             "idx_team_members_user_team",
             "idx_team_members_single_owner",
+        }
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_migrate_creates_team_invites_schema() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+
+        columns = await conn.execute_fetchall("PRAGMA table_info(team_invites)")
+        assert {str(column["name"]) for column in columns} == EXPECTED_TEAM_INVITE_COLUMNS
+
+        foreign_keys = await conn.execute_fetchall("PRAGMA foreign_key_list(team_invites)")
+        assert {str(foreign_key["table"]) for foreign_key in foreign_keys} == {"teams", "users"}
+
+        indexes = await conn.execute_fetchall("PRAGMA index_list(team_invites)")
+        assert {str(index["name"]) for index in indexes} >= {
+            "sqlite_autoindex_team_invites_1",
+            "idx_team_invites_team_created",
+            "idx_team_invites_expires",
         }
     finally:
         await conn.close()
@@ -249,6 +283,8 @@ async def test_state_store_team_crud_uses_public_methods(monkeypatch: pytest.Mon
         writable_teams = await store.list_writable_teams(123)
         assert [item.id for item in writable_teams] == [second_team_id, first_team_id, third_team_id]
         assert [item.name for item in writable_teams] == ["Beta", "Alpha", "Gamma"]
+        assert [item.name for item in await store.list_user_teams(123)] == ["Beta", "Alpha", "Gamma"]
+        assert [item.name for item in await store.list_user_teams(456)] == ["Gamma", "Alpha"]
 
         assert await store.get_team("missing-team") is None
         assert await store.get_team_member_role(first_team_id, 999) is None
@@ -712,5 +748,99 @@ async def test_state_store_team_members_enforce_single_owner() -> None:
 
         with pytest.raises(ValueError, match="owner role cannot be changed"):
             await store.upsert_team_member(team_id, 123, "editor")
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_team_invite_accepts_once_and_adds_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.ensure_user(456)
+        await store.ensure_user(789)
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+        team_id = await store.create_team(123, "Editorial")
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+        invite = await store.create_team_invite(team_id, 123, "editor", ttl_seconds=3600)
+        assert invite.team_id == team_id
+        assert invite.role == "editor"
+        assert invite.created_by_user_id == 123
+        assert invite.created_at == 1_700_000_010
+        assert invite.expires_at == 1_700_003_610
+        assert invite.accepted_by_user_id is None
+        assert invite.accepted_at is None
+
+        persisted_invite = await store.get_team_invite(invite.token)
+        assert persisted_invite == invite
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+        accepted = await store.accept_team_invite(invite.token, 456)
+        assert accepted.status == "accepted"
+        assert accepted.team is not None
+        assert accepted.team.id == team_id
+        assert accepted.role == "editor"
+        assert await store.get_team_member_role(team_id, 456) == "editor"
+        assert [item.id for item in await store.list_user_teams(456)] == [team_id]
+
+        consumed_invite = await store.get_team_invite(invite.token)
+        assert consumed_invite is not None
+        assert consumed_invite.accepted_by_user_id == 456
+        assert consumed_invite.accepted_at == 1_700_000_020
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+        used = await store.accept_team_invite(invite.token, 789)
+        assert used.status == "used"
+        assert used.team is not None
+        assert used.team.id == team_id
+        assert await store.get_team_member_role(team_id, 789) is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_team_invite_rejects_non_owner_expired_and_existing_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.ensure_user(456)
+        await store.ensure_user(789)
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+        team_id = await store.create_team(123, "Editorial")
+        await store.upsert_team_member(team_id, 456, "editor")
+
+        with pytest.raises(ValueError, match="Only team owner"):
+            await store.create_team_invite(team_id, 456, "viewer")
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+        expired_invite = await store.create_team_invite(team_id, 123, "viewer", ttl_seconds=60)
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_071)
+        expired = await store.accept_team_invite(expired_invite.token, 789)
+        assert expired.status == "expired"
+        assert expired.team is not None
+        assert expired.team.id == team_id
+        assert expired.role == "viewer"
+        assert await store.get_team_member_role(team_id, 789) is None
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_080)
+        existing_member_invite = await store.create_team_invite(team_id, 123, "viewer", ttl_seconds=60)
+        already_member = await store.accept_team_invite(existing_member_invite.token, 456)
+        assert already_member.status == "already_member"
+        assert already_member.team is not None
+        assert already_member.team.id == team_id
+        assert already_member.role == "editor"
+
+        still_open_invite = await store.get_team_invite(existing_member_invite.token)
+        assert still_open_invite is not None
+        assert still_open_invite.accepted_by_user_id is None
+        assert still_open_invite.accepted_at is None
     finally:
         await conn.close()

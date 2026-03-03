@@ -72,6 +72,49 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Count: {count}"
         ),
         "repeat_list_next_missing": "unavailable",
+        "team_role_owner": "owner",
+        "team_role_editor": "editor",
+        "team_role_viewer": "viewer",
+        "team_create_usage": "Usage: /team_create <name>",
+        "team_create_ok": (
+            "Team created. team={team_id}\n"
+            "- Name: {team_name}\n"
+            "- Your role: {role}"
+        ),
+        "team_missing": "Team not found or unavailable.",
+        "team_invite_usage": "Usage: /team_invite <team_id> [viewer|editor]",
+        "team_invite_role_invalid": "Invite role must be viewer or editor.",
+        "team_invite_created": (
+            "Invite created. team={team_id}\n"
+            "- Name: {team_name}\n"
+            "- Role: {role}\n"
+            "- Expires: {expires_at} ({tz_name})\n"
+            "- Link: {link}"
+        ),
+        "team_invite_missing": "Invite link is invalid or unavailable.",
+        "team_invite_accept_ok": (
+            "You joined the team. team={team_id}\n"
+            "- Name: {team_name}\n"
+            "- Role: {role}"
+        ),
+        "team_invite_expired": "This invite link has expired.",
+        "team_invite_used": "This invite link is already used.",
+        "team_invite_already_member": (
+            "You are already in this team. team={team_id}\n"
+            "- Name: {team_name}\n"
+            "- Role: {role}"
+        ),
+        "team_members_usage": "Usage: /team_members <team_id>",
+        "team_members_none": "You do not have teams yet.",
+        "team_members_choose": "Your teams:\n\n{lines}\n\nRun /team_members <team_id>.",
+        "team_members_choose_item": "team={team_id} - {team_name} - {role}",
+        "team_members_header": (
+            "team={team_id}\n"
+            "- Name: {team_name}\n"
+            "- Your role: {role}\n"
+            "- Members:\n{lines}"
+        ),
+        "team_members_item": "- {role}: user {user_id}",
         "draft_filter_all": "All",
         "draft_filter_mine": "Mine",
         "draft_filter_team": "Teams",
@@ -315,6 +358,49 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Счётчик: {count}"
         ),
         "repeat_list_next_missing": "недоступен",
+        "team_role_owner": "владелец",
+        "team_role_editor": "редактор",
+        "team_role_viewer": "наблюдатель",
+        "team_create_usage": "Использование: /team_create <name>",
+        "team_create_ok": (
+            "Команда создана. team={team_id}\n"
+            "- Название: {team_name}\n"
+            "- Ваша роль: {role}"
+        ),
+        "team_missing": "Команда не найдена или недоступна.",
+        "team_invite_usage": "Использование: /team_invite <team_id> [viewer|editor]",
+        "team_invite_role_invalid": "Роль приглашения должна быть viewer или editor.",
+        "team_invite_created": (
+            "Приглашение создано. team={team_id}\n"
+            "- Название: {team_name}\n"
+            "- Роль: {role}\n"
+            "- Действует до: {expires_at} ({tz_name})\n"
+            "- Ссылка: {link}"
+        ),
+        "team_invite_missing": "Ссылка-приглашение недействительна или недоступна.",
+        "team_invite_accept_ok": (
+            "Вы вступили в команду. team={team_id}\n"
+            "- Название: {team_name}\n"
+            "- Роль: {role}"
+        ),
+        "team_invite_expired": "Срок действия ссылки-приглашения истёк.",
+        "team_invite_used": "Эта ссылка-приглашение уже использована.",
+        "team_invite_already_member": (
+            "Вы уже состоите в этой команде. team={team_id}\n"
+            "- Название: {team_name}\n"
+            "- Роль: {role}"
+        ),
+        "team_members_usage": "Использование: /team_members <team_id>",
+        "team_members_none": "У вас пока нет команд.",
+        "team_members_choose": "Ваши команды:\n\n{lines}\n\nЗапустите /team_members <team_id>.",
+        "team_members_choose_item": "team={team_id} - {team_name} - {role}",
+        "team_members_header": (
+            "team={team_id}\n"
+            "- Название: {team_name}\n"
+            "- Ваша роль: {role}\n"
+            "- Участники:\n{lines}"
+        ),
+        "team_members_item": "- {role}: user {user_id}",
         "draft_filter_all": "Все",
         "draft_filter_mine": "Мои",
         "draft_filter_team": "Команды",
