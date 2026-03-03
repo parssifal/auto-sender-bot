@@ -18,7 +18,8 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from core.state import Destination, RecurringPattern, RecurringPatternSummary, StateStore
+from core.rbac import DraftPermissions
+from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -76,6 +77,7 @@ _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 _TIME_PICKER = TimePicker()
 _SCHEDULE_TIME_MINUTES = (0, 30)
 _REPEAT_WEEKDAYS_MASK = 0b0011111
+_DRAFT_SCOPES = ("all", "mine", "team")
 
 
 def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -206,6 +208,95 @@ def _repeats_manage_kb(items: list[RecurringPatternSummary], page: int, has_more
     if nav:
         rows.append(nav)
 
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _normalize_draft_scope(scope: str) -> str:
+    if scope in _DRAFT_SCOPES:
+        return scope
+    return "all"
+
+
+def _draft_scope_label(lang: str, scope: str) -> str:
+    return tr(lang, f"draft_filter_{_normalize_draft_scope(scope)}")
+
+
+def _draft_location_label(lang: str, team_name: str | None) -> str:
+    if team_name is None:
+        return tr(lang, "draft_location_personal")
+    return tr(lang, "draft_location_team", team_name=team_name)
+
+
+def _draft_preview_text(raw: str | None, *, fallback: str, limit: int) -> str:
+    collapsed = " ".join(str(raw or "").split())
+    if not collapsed:
+        return fallback
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 3]}..."
+
+
+def _draft_action_labels(lang: str, permissions: DraftPermissions) -> str:
+    labels: list[str] = []
+    if permissions.can_edit:
+        labels.append(tr(lang, "btn_draft_edit"))
+    if permissions.can_delete:
+        labels.append(tr(lang, "btn_draft_delete"))
+    if permissions.can_publish:
+        labels.append(tr(lang, "btn_draft_publish"))
+    if not labels:
+        return tr(lang, "draft_actions_view_only")
+    return ", ".join(labels)
+
+
+def _drafts_manage_kb(drafts: list[DraftRow], *, scope: str, page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    current_scope = _normalize_draft_scope(scope)
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"[{_draft_scope_label(lang, item_scope)}]" if item_scope == current_scope else _draft_scope_label(lang, item_scope),
+                callback_data=TimePicker.NOOP_CALLBACK if item_scope == current_scope else f"dscope:{item_scope}",
+            )
+            for item_scope in _DRAFT_SCOPES
+        ]
+    ]
+    for draft in drafts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_draft_open", label=_short_id(draft.id)),
+                    callback_data=f"dopen:{current_scope}:{page}:{draft.id}",
+                )
+            ]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"dpage:{current_scope}:{page-1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"dpage:{current_scope}:{page+1}"))
+    if nav:
+        rows.append(nav)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _draft_detail_kb(*, draft_id: str, permissions: DraftPermissions, scope: str, page: int, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    primary_actions: list[InlineKeyboardButton] = []
+    if permissions.can_edit:
+        primary_actions.append(
+            InlineKeyboardButton(text=tr(lang, "btn_draft_edit"), callback_data=f"dact:edit:{draft_id}")
+        )
+    if permissions.can_delete:
+        primary_actions.append(
+            InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"dact:delete:{draft_id}")
+        )
+    if primary_actions:
+        rows.append(primary_actions)
+    if permissions.can_publish:
+        rows.append([InlineKeyboardButton(text=tr(lang, "btn_draft_publish"), callback_data=f"dact:publish:{draft_id}")])
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_back"), callback_data=f"dback:{_normalize_draft_scope(scope)}:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -616,6 +707,116 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
+    async def _build_draft_summary(draft: DraftRow, *, lang: str) -> dict[str, str]:
+        where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
+        team_name: str | None = None
+        if draft.team_id is not None:
+            team = await store.get_team(draft.team_id)
+            team_name = team.name if team is not None else _short_id(draft.team_id)
+
+        if draft.kind == "text":
+            kind = tr(lang, "kind_text")
+            preview = _draft_preview_text(
+                draft.text,
+                fallback=tr(lang, "draft_preview_empty"),
+                limit=80,
+            )
+        else:
+            media_count = len(await store.get_draft_media(draft.id))
+            kind = tr(lang, "kind_media", count=media_count)
+            preview = _draft_preview_text(
+                draft.caption,
+                fallback=tr(lang, "draft_preview_media_no_caption"),
+                limit=80,
+            )
+
+        return {
+            "where": where,
+            "location": _draft_location_label(lang, team_name),
+            "kind": kind,
+            "preview": preview,
+        }
+
+    async def _render_drafts(message: Message, *, user_id: int, scope: str, page: int, edit: bool) -> None:
+        lang = await _user_lang(user_id)
+        current_scope = _normalize_draft_scope(scope)
+        page_size = 5
+        while True:
+            offset = page * page_size
+            items = await store.list_drafts(user_id=user_id, scope=current_scope, offset=offset, limit=page_size + 1)
+            if items or page == 0:
+                break
+            page -= 1
+
+        has_more = len(items) > page_size
+        items = items[:page_size]
+        reply_markup = _drafts_manage_kb(items, scope=current_scope, page=page, has_more=has_more, lang=lang)
+
+        if not items:
+            text = tr(lang, "draft_list_empty", scope=_draft_scope_label(lang, current_scope))
+            if edit:
+                await message.edit_text(text, reply_markup=reply_markup)
+            else:
+                await message.answer(text, reply_markup=reply_markup)
+            return
+
+        lines: list[str] = []
+        for draft in items:
+            summary = await _build_draft_summary(draft, lang=lang)
+            lines.append(
+                tr(
+                    lang,
+                    "draft_list_item",
+                    draft_id=_short_id(draft.id),
+                    location=summary["location"],
+                    where=summary["where"],
+                    kind=summary["kind"],
+                    preview=summary["preview"],
+                )
+            )
+
+        text = tr(lang, "draft_list_header", scope=_draft_scope_label(lang, current_scope), lines="\n\n".join(lines))
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
+    async def _render_draft_detail(
+        message: Message,
+        *,
+        user_id: int,
+        scope: str,
+        page: int,
+        draft: DraftRow,
+        permissions: DraftPermissions,
+        edit: bool,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        summary = await _build_draft_summary(draft, lang=lang)
+        text = tr(
+            lang,
+            "draft_detail_header",
+            draft_id=_short_id(draft.id),
+            location=summary["location"],
+            where=summary["where"],
+            kind=summary["kind"],
+            updated_at=_format_local(draft.updated_at, tz_name),
+            preview=summary["preview"],
+            actions=_draft_action_labels(lang, permissions),
+        )
+        reply_markup = _draft_detail_kb(
+            draft_id=draft.id,
+            permissions=permissions,
+            scope=scope,
+            page=page,
+            lang=lang,
+        )
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -665,6 +866,11 @@ def build_router(store: StateStore) -> Router:
         await store.ensure_user(message.from_user.id)
         await _render_repeats(message, user_id=message.from_user.id, page=0, edit=False)
 
+    @router.message(Command("drafts"))
+    async def cmd_drafts(message: Message) -> None:
+        await store.ensure_user(message.from_user.id)
+        await _render_drafts(message, user_id=message.from_user.id, scope="all", page=0, edit=False)
+
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
@@ -712,6 +918,105 @@ def build_router(store: StateStore) -> Router:
             tr(lang, "repeat_cancel_ok", pattern_id=_short_id(pattern_id)) if ok else tr(lang, "repeat_cancel_missing")
         )
         await _render_repeats(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("dscope:"))
+    async def cb_drafts_scope(query: CallbackQuery) -> None:
+        scope = _normalize_draft_scope(query.data.split(":", 1)[1])
+        await query.answer()
+        await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=0, edit=True)
+
+    @router.callback_query(F.data.startswith("dpage:"))
+    async def cb_drafts_page(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        scope = _normalize_draft_scope(parts[1])
+        try:
+            page = int(parts[2])
+        except ValueError:
+            await query.answer()
+            return
+
+        await query.answer()
+        await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("dback:"))
+    async def cb_draft_back(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        scope = _normalize_draft_scope(parts[1])
+        try:
+            page = int(parts[2])
+        except ValueError:
+            await query.answer()
+            return
+
+        await query.answer()
+        await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("dopen:"))
+    async def cb_draft_open(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 3)
+        if len(parts) != 4:
+            await query.answer()
+            return
+
+        scope = _normalize_draft_scope(parts[1])
+        try:
+            page = int(parts[2])
+        except ValueError:
+            await query.answer()
+            return
+
+        draft_id = parts[3]
+        lang = await _user_lang(query.from_user.id)
+        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
+        draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_view else None
+        if draft is None or permissions is None or not permissions.can_view:
+            await query.answer(tr(lang, "draft_missing"), show_alert=True)
+            if (query.message.text or "").startswith("draft="):
+                await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
+            return
+
+        await query.answer()
+        await _render_draft_detail(
+            query.message,
+            user_id=query.from_user.id,
+            scope=scope,
+            page=page,
+            draft=draft,
+            permissions=permissions,
+            edit=True,
+        )
+
+    @router.callback_query(F.data.startswith("dact:"))
+    async def cb_draft_action_placeholder(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        action = parts[1]
+        draft_id = parts[2]
+        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
+        allowed = False
+        if permissions is not None:
+            allowed = (
+                (action == "edit" and permissions.can_edit)
+                or (action == "delete" and permissions.can_delete)
+                or (action == "publish" and permissions.can_publish)
+            )
+
+        lang = await _user_lang(query.from_user.id)
+        await query.answer(
+            tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
+            show_alert=True,
+        )
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:

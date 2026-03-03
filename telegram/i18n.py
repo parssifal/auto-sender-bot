@@ -72,6 +72,34 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Count: {count}"
         ),
         "repeat_list_next_missing": "unavailable",
+        "draft_filter_all": "All",
+        "draft_filter_mine": "Mine",
+        "draft_filter_team": "Teams",
+        "draft_list_empty": "No drafts in {scope}.",
+        "draft_list_header": "Drafts: {scope}\n\n{lines}",
+        "draft_list_item": (
+            "draft={draft_id}\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}"
+        ),
+        "draft_detail_header": (
+            "draft={draft_id}\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Type: {kind}\n"
+            "- Updated: {updated_at}\n"
+            "- Preview: {preview}\n"
+            "- Actions: {actions}"
+        ),
+        "draft_location_personal": "Personal",
+        "draft_location_team": "Team: {team_name}",
+        "draft_preview_empty": "empty",
+        "draft_preview_media_no_caption": "media without caption",
+        "draft_actions_view_only": "view only",
+        "draft_missing": "Draft not found or unavailable.",
+        "draft_action_unavailable": "This action is not available yet.",
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -175,6 +203,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_confirm": "Confirm",
         "btn_queue_cancel": "Cancel {label}",
         "btn_repeat_stop": "Stop {label}",
+        "btn_draft_open": "Open {label}",
+        "btn_draft_edit": "Edit",
+        "btn_draft_delete": "Delete",
+        "btn_draft_publish": "Publish",
     },
     "ru": {
         "menu_schedule": "Запланировать",
@@ -244,6 +276,34 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Счётчик: {count}"
         ),
         "repeat_list_next_missing": "недоступен",
+        "draft_filter_all": "Все",
+        "draft_filter_mine": "Мои",
+        "draft_filter_team": "Команды",
+        "draft_list_empty": "В разделе {scope} черновиков нет.",
+        "draft_list_header": "Черновики: {scope}\n\n{lines}",
+        "draft_list_item": (
+            "draft={draft_id}\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}"
+        ),
+        "draft_detail_header": (
+            "draft={draft_id}\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Тип: {kind}\n"
+            "- Обновлён: {updated_at}\n"
+            "- Превью: {preview}\n"
+            "- Действия: {actions}"
+        ),
+        "draft_location_personal": "Личный",
+        "draft_location_team": "Команда: {team_name}",
+        "draft_preview_empty": "пусто",
+        "draft_preview_media_no_caption": "медиа без подписи",
+        "draft_actions_view_only": "только просмотр",
+        "draft_missing": "Черновик не найден или недоступен.",
+        "draft_action_unavailable": "Это действие пока недоступно.",
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",
@@ -347,6 +407,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
         "btn_repeat_stop": "Остановить {label}",
+        "btn_draft_open": "Открыть {label}",
+        "btn_draft_edit": "Изменить",
+        "btn_draft_delete": "Удалить",
+        "btn_draft_publish": "Запланировать",
     },
     "de": {
         "menu_schedule": "Planen",

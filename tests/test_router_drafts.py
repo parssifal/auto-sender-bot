@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+import pytest_asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
+from aiogram.types import Update
+
+from core.db import open_db
+from core.state import StateStore
+from telegram.i18n import tr
+from telegram.router import build_router
+
+USER_ID = 1001
+PRIVATE_CHAT_ID = USER_ID
+ALT_USER_ID = 2002
+OUTSIDER_USER_ID = 3003
+DESTINATION_CHAT_ID = -2001
+BOT_ID = 42
+
+
+class FakeBot(Bot):
+    def __init__(self) -> None:
+        super().__init__(f"{BOT_ID}:TEST")
+        self.calls: list[Any] = []
+
+    async def __call__(self, method: Any, request_timeout: int | None = None) -> Any:
+        self.calls.append(method)
+        return True
+
+
+@dataclass
+class DraftFlowHarness:
+    bot: FakeBot
+    dispatcher: Dispatcher
+    store: StateStore
+    storage_key: StorageKey
+    conn: Any
+    owner_team_id: str
+    viewer_team_id: str
+
+    async def feed_message(
+        self,
+        text: str,
+        *,
+        update_id: int,
+        message_id: int,
+        user_id: int = USER_ID,
+        chat_id: int | None = None,
+    ) -> None:
+        effective_chat_id = user_id if chat_id is None else chat_id
+        payload: dict[str, Any] = {
+            "update_id": update_id,
+            "message": {
+                "message_id": message_id,
+                "date": 1_700_000_000,
+                "chat": {"id": effective_chat_id, "type": "private"},
+                "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
+                "text": text,
+            },
+        }
+        if text.startswith("/"):
+            payload["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
+        await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
+
+    async def feed_callback(
+        self,
+        data: str,
+        *,
+        update_id: int,
+        message_id: int,
+        user_id: int = USER_ID,
+        chat_id: int | None = None,
+    ) -> None:
+        effective_chat_id = user_id if chat_id is None else chat_id
+        payload = {
+            "update_id": update_id,
+            "callback_query": {
+                "id": f"q{update_id}",
+                "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
+                "chat_instance": "ci",
+                "data": data,
+                "message": {
+                    "message_id": message_id,
+                    "date": 1_700_000_000,
+                    "chat": {"id": effective_chat_id, "type": "private"},
+                    "from": {"id": BOT_ID, "is_bot": True, "first_name": "Bot"},
+                    "text": "stub",
+                },
+            },
+        }
+        await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
+
+    def last_call(self) -> Any:
+        return self.bot.calls[-1]
+
+
+def _callback_data(call: SendMessage | EditMessageText) -> list[str]:
+    return [button.callback_data for row in call.reply_markup.inline_keyboard for button in row]
+
+
+def _short_id(value: str) -> str:
+    return value[:8]
+
+
+@pytest_asyncio.fixture
+async def draft_flow() -> DraftFlowHarness:
+    conn = await open_db(":memory:")
+    store = StateStore(conn)
+    await store.migrate()
+    await store.ensure_user(USER_ID)
+    await store.set_user_language(USER_ID, "ru")
+    await store.set_user_timezone(USER_ID, "Europe/Moscow")
+    await store.ensure_user(ALT_USER_ID)
+    await store.set_user_language(ALT_USER_ID, "ru")
+    await store.set_user_timezone(ALT_USER_ID, "Europe/Moscow")
+    await store.ensure_user(OUTSIDER_USER_ID)
+    await store.set_user_language(OUTSIDER_USER_ID, "ru")
+    await store.set_user_timezone(OUTSIDER_USER_ID, "Europe/Moscow")
+    await store.upsert_destination(
+        DESTINATION_CHAT_ID,
+        "channel",
+        "Test channel",
+        "test_channel",
+        "administrator",
+        True,
+    )
+    await store.link_user_destination(USER_ID, DESTINATION_CHAT_ID, "link")
+
+    owner_team_id = await store.create_team(USER_ID, "Owners")
+    viewer_team_id = await store.create_team(ALT_USER_ID, "Shared")
+    await store.upsert_team_member(viewer_team_id, USER_ID, "viewer")
+
+    bot = FakeBot()
+    dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(build_router(store))
+
+    yield DraftFlowHarness(
+        bot=bot,
+        dispatcher=dispatcher,
+        store=store,
+        storage_key=StorageKey(bot_id=BOT_ID, chat_id=PRIVATE_CHAT_ID, user_id=USER_ID),
+        conn=conn,
+        owner_team_id=owner_team_id,
+        viewer_team_id=viewer_team_id,
+    )
+
+    await conn.close()
+    await bot.session.close()
+
+
+@pytest.mark.asyncio
+async def test_drafts_command_shows_empty_state_with_filters(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "draft_list_empty", scope=tr("ru", "draft_filter_all"))
+    assert call.reply_markup.inline_keyboard[0][0].text == f"[{tr('ru', 'draft_filter_all')}]"
+    assert call.reply_markup.inline_keyboard[0][1].callback_data == "dscope:mine"
+    assert call.reply_markup.inline_keyboard[0][2].callback_data == "dscope:team"
+
+
+@pytest.mark.asyncio
+async def test_drafts_filter_switches_to_team_scope_without_leaking_personal_drafts(draft_flow: DraftFlowHarness) -> None:
+    personal_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Личный черновик",
+    )
+    team_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        team_id=draft_flow.viewer_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Командный черновик",
+    )
+    hidden_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Чужой личный черновик",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    first_call = draft_flow.last_call()
+    assert isinstance(first_call, SendMessage)
+    assert _short_id(personal_id) in first_call.text
+    assert _short_id(team_id) in first_call.text
+    assert _short_id(hidden_id) not in first_call.text
+
+    await draft_flow.feed_callback("dscope:team", update_id=2, message_id=50)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    assert call.text.startswith(f"Черновики: {tr('ru', 'draft_filter_team')}")
+    assert _short_id(team_id) in call.text
+    assert _short_id(personal_id) not in call.text
+    assert _short_id(hidden_id) not in call.text
+
+
+@pytest.mark.asyncio
+async def test_drafts_pagination_uses_page_callbacks(draft_flow: DraftFlowHarness) -> None:
+    for index in range(6):
+        await draft_flow.store.create_draft(
+            author_user_id=USER_ID,
+            chat_id=DESTINATION_CHAT_ID,
+            kind="text",
+            text=f"draft {index}",
+        )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+
+    first_page = draft_flow.last_call()
+    assert isinstance(first_page, SendMessage)
+    first_callbacks = _callback_data(first_page)
+    assert len([item for item in first_callbacks if item.startswith("dopen:all:0:")]) == 5
+    assert "dpage:all:1" in first_callbacks
+
+    await draft_flow.feed_callback("dpage:all:1", update_id=2, message_id=50)
+
+    second_page = draft_flow.last_call()
+    assert isinstance(second_page, EditMessageText)
+    second_callbacks = _callback_data(second_page)
+    assert len([item for item in second_callbacks if item.startswith("dopen:all:1:")]) == 1
+    assert "dpage:all:0" in second_callbacks
+    assert "dpage:all:2" not in second_callbacks
+
+
+@pytest.mark.asyncio
+async def test_draft_detail_shows_manager_actions_for_personal_draft(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Личный черновик для действий",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    await draft_flow.feed_callback(f"dopen:all:0:{draft_id}", update_id=2, message_id=50)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    callbacks = _callback_data(call)
+    assert f"dact:edit:{draft_id}" in callbacks
+    assert f"dact:delete:{draft_id}" in callbacks
+    assert f"dact:publish:{draft_id}" in callbacks
+    assert f"dback:all:0" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_draft_detail_hides_manager_actions_for_viewer_role(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        team_id=draft_flow.viewer_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Командный просмотр",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    await draft_flow.feed_callback("dscope:team", update_id=2, message_id=50)
+    await draft_flow.feed_callback(f"dopen:team:0:{draft_id}", update_id=3, message_id=50)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    callbacks = _callback_data(call)
+    assert callbacks == ["dback:team:0"]
+    assert tr("ru", "draft_actions_view_only") in call.text
+
+
+@pytest.mark.asyncio
+async def test_draft_open_does_not_leak_unavailable_draft(draft_flow: DraftFlowHarness) -> None:
+    visible_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Видимый черновик",
+    )
+    hidden_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Скрытый черновик",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    initial_list = draft_flow.last_call()
+    assert isinstance(initial_list, SendMessage)
+    before_calls = len(draft_flow.bot.calls)
+    await draft_flow.feed_callback(f"dopen:all:0:{hidden_id}", update_id=2, message_id=50)
+
+    recent_calls = draft_flow.bot.calls[before_calls:]
+    assert len(recent_calls) == 1
+    assert isinstance(recent_calls[0], AnswerCallbackQuery)
+    assert recent_calls[0].text == tr("ru", "draft_missing")
+    assert _short_id(visible_id) in initial_list.text
+    assert _short_id(hidden_id) not in initial_list.text
