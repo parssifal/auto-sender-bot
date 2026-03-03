@@ -1242,6 +1242,19 @@ class StateStore:
             media_items=media_items,
         )
 
+    @staticmethod
+    def _editable_post_update_keys() -> set[str]:
+        return {
+            "scheduled_at_utc",
+            "kind",
+            "text",
+            "entities_json",
+            "caption",
+            "caption_entities_json",
+            "caption_above",
+            "media_items",
+        }
+
     async def list_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(
             """
@@ -1278,24 +1291,159 @@ class StateStore:
         )
         return None if row is None else self._row_to_post(row)
 
+    async def update_scheduled_post(self, post_id: str, user_id: int, updates: dict[str, object]) -> bool:
+        if not updates:
+            raise ValueError("updates must not be empty")
+        unsupported_keys = set(updates) - self._editable_post_update_keys()
+        if unsupported_keys:
+            raise ValueError(f"Unsupported scheduled post updates: {sorted(unsupported_keys)}")
+
+        content_keys = {
+            "kind",
+            "text",
+            "entities_json",
+            "caption",
+            "caption_entities_json",
+            "caption_above",
+            "media_items",
+        }
+        content_update_requested = any(key in updates for key in content_keys)
+
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = await self._execute_fetchone(
+                """
+                SELECT sp.*
+                FROM scheduled_posts sp
+                LEFT JOIN recurring_instances ri ON ri.post_id = sp.id
+                WHERE sp.id=?
+                  AND user_id=?
+                  AND status='pending'
+                  AND ri.post_id IS NULL
+                """,
+                (post_id, user_id),
+            )
+            if row is None:
+                await self._conn.rollback()
+                return False
+            current_post = self._row_to_post(row)
+
+            next_scheduled_at_utc = int(updates.get("scheduled_at_utc", current_post.scheduled_at_utc))
+
+            if content_update_requested:
+                next_kind = str(updates.get("kind", current_post.kind))
+                current_media_items = await self.get_post_media(post_id) if current_post.kind == "media" else []
+
+                if next_kind == "text":
+                    if any(key in updates for key in {"caption", "caption_entities_json", "caption_above", "media_items"}):
+                        raise ValueError("Text scheduled post cannot include media fields")
+                    normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
+                        self._normalize_scheduled_payload(
+                            kind="text",
+                            text=(
+                                str(updates["text"])
+                                if "text" in updates and updates["text"] is not None
+                                else current_post.text
+                            ),
+                            entities_json=(
+                                None if "entities_json" in updates and updates["entities_json"] is None else updates.get("entities_json", current_post.entities_json)
+                            ),
+                            caption=None,
+                            caption_entities_json=None,
+                            caption_above=None,
+                            media_items=None,
+                        )
+                    )
+                elif next_kind == "media":
+                    if any(key in updates for key in {"text", "entities_json"}):
+                        raise ValueError("Media scheduled post must use caption fields instead of text fields")
+                    normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
+                        self._normalize_scheduled_payload(
+                            kind="media",
+                            text=None,
+                            entities_json=None,
+                            caption=(
+                                None if "caption" in updates and updates["caption"] is None else updates.get("caption", current_post.caption)
+                            ),
+                            caption_entities_json=(
+                                None
+                                if "caption_entities_json" in updates and updates["caption_entities_json"] is None
+                                else updates.get("caption_entities_json", current_post.caption_entities_json)
+                            ),
+                            caption_above=(
+                                updates["caption_above"]
+                                if "caption_above" in updates
+                                else (None if current_post.caption_above is None else bool(current_post.caption_above))
+                            ),
+                            media_items=(
+                                list(updates["media_items"])
+                                if "media_items" in updates and updates["media_items"] is not None
+                                else current_media_items
+                            ),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Unsupported scheduled post kind: {next_kind}")
+
+                cur = await self._conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET scheduled_at_utc=?,
+                        kind=?,
+                        text=?,
+                        entities_json=?,
+                        caption=?,
+                        caption_entities_json=?,
+                        caption_above=?
+                    WHERE id=?
+                    """,
+                    (
+                        next_scheduled_at_utc,
+                        next_kind,
+                        normalized_text,
+                        normalized_entities,
+                        normalized_caption,
+                        normalized_caption_entities,
+                        normalized_caption_above,
+                        post_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    await self._conn.rollback()
+                    return False
+
+                await self._conn.execute("DELETE FROM scheduled_post_media WHERE post_id=?", (post_id,))
+                for idx, item in enumerate(items):
+                    await self._conn.execute(
+                        "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
+                        (post_id, idx, str(item["type"]), str(item["file_id"])),
+                    )
+            else:
+                cur = await self._conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET scheduled_at_utc=?
+                    WHERE id=?
+                    """,
+                    (next_scheduled_at_utc, post_id),
+                )
+                if cur.rowcount != 1:
+                    await self._conn.rollback()
+                    return False
+
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return True
+
     async def update_editable_post_time(self, post_id: str, user_id: int, *, scheduled_at_utc: int) -> bool:
-        cur = await self._conn.execute(
-            """
-            UPDATE scheduled_posts
-            SET scheduled_at_utc=?
-            WHERE id=?
-              AND user_id=?
-              AND status='pending'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM recurring_instances
-                  WHERE post_id=?
-              )
-            """,
-            (scheduled_at_utc, post_id, user_id, post_id),
+        return await self.update_scheduled_post(
+            post_id,
+            user_id,
+            {"scheduled_at_utc": scheduled_at_utc},
         )
-        await self._conn.commit()
-        return cur.rowcount == 1
 
     async def update_editable_post_content(
         self,
@@ -1310,67 +1458,28 @@ class StateStore:
         caption_above: bool | None = None,
         media_items: list[dict[str, str]] | None = None,
     ) -> bool:
-        normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
-            self._normalize_scheduled_payload(
-                kind=kind,
-                text=text,
-                entities_json=entities_json,
-                caption=caption,
-                caption_entities_json=caption_entities_json,
-                caption_above=caption_above,
-                media_items=media_items,
-            )
+        if kind == "text":
+            updates: dict[str, object] = {
+                "kind": kind,
+                "text": text,
+                "entities_json": entities_json,
+            }
+        elif kind == "media":
+            updates = {
+                "kind": kind,
+                "caption": caption,
+                "caption_entities_json": caption_entities_json,
+                "caption_above": caption_above,
+            }
+            if media_items is not None:
+                updates["media_items"] = media_items
+        else:
+            raise ValueError(f"Unsupported scheduled post kind: {kind}")
+        return await self.update_scheduled_post(
+            post_id,
+            user_id,
+            updates,
         )
-
-        await self._conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = await self._conn.execute(
-                """
-                UPDATE scheduled_posts
-                SET kind=?,
-                    text=?,
-                    entities_json=?,
-                    caption=?,
-                    caption_entities_json=?,
-                    caption_above=?
-                WHERE id=?
-                  AND user_id=?
-                  AND status='pending'
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM recurring_instances
-                      WHERE post_id=?
-                  )
-                """,
-                (
-                    kind,
-                    normalized_text,
-                    normalized_entities,
-                    normalized_caption,
-                    normalized_caption_entities,
-                    normalized_caption_above,
-                    post_id,
-                    user_id,
-                    post_id,
-                ),
-            )
-            if cur.rowcount != 1:
-                await self._conn.rollback()
-                return False
-
-            await self._conn.execute("DELETE FROM scheduled_post_media WHERE post_id=?", (post_id,))
-            for idx, item in enumerate(items):
-                await self._conn.execute(
-                    "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
-                    (post_id, idx, str(item["type"]), str(item["file_id"])),
-                )
-
-            await self._conn.commit()
-        except Exception:
-            await self._conn.rollback()
-            raise
-
-        return True
 
     async def cancel_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
@@ -1384,7 +1493,7 @@ class StateStore:
         await self._conn.commit()
         return cur.rowcount == 1
 
-    async def hard_delete_pending_post(self, user_id: int, post_id: str) -> bool:
+    async def hard_delete_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
             """
             DELETE FROM scheduled_posts
@@ -1401,6 +1510,9 @@ class StateStore:
         )
         await self._conn.commit()
         return cur.rowcount == 1
+
+    async def hard_delete_pending_post(self, user_id: int, post_id: str) -> bool:
+        return await self.hard_delete_post(user_id, post_id)
 
     async def list_due_posts(self, now_utc: int, limit: int = 10) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(

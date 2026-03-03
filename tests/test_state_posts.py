@@ -59,7 +59,7 @@ async def test_list_editable_pending_posts_excludes_recurring(store: StateStore)
 
 
 @pytest.mark.asyncio
-async def test_update_editable_post_time_updates_pending_non_recurring_post(store: StateStore) -> None:
+async def test_update_scheduled_post_updates_pending_non_recurring_post(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     updated_at_utc = int(datetime(2099, 12, 31, 7, 45, tzinfo=timezone.utc).timestamp())
     post_id = await store.create_scheduled_text_post(
@@ -70,7 +70,11 @@ async def test_update_editable_post_time_updates_pending_non_recurring_post(stor
         entities_json=None,
     )
 
-    updated = await store.update_editable_post_time(post_id, USER_ID, scheduled_at_utc=updated_at_utc)
+    updated = await store.update_scheduled_post(
+        post_id,
+        USER_ID,
+        {"scheduled_at_utc": updated_at_utc},
+    )
 
     post = await store.get_scheduled_post(post_id)
     assert updated is True
@@ -79,7 +83,7 @@ async def test_update_editable_post_time_updates_pending_non_recurring_post(stor
 
 
 @pytest.mark.asyncio
-async def test_update_editable_post_content_rolls_back_media_replacement_on_error(store: StateStore) -> None:
+async def test_update_scheduled_post_rolls_back_media_replacement_on_error(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     original_media = [
         {"type": "photo", "file_id": "photo-1"},
@@ -96,17 +100,19 @@ async def test_update_editable_post_content_rolls_back_media_replacement_on_erro
     )
 
     with pytest.raises(KeyError):
-        await store.update_editable_post_content(
+        await store.update_scheduled_post(
             post_id,
             USER_ID,
-            kind="media",
-            caption="Broken replacement",
-            caption_entities_json=None,
-            caption_above=True,
-            media_items=[
-                {"type": "photo", "file_id": "photo-2"},
-                {"type": "photo"},
-            ],
+            {
+                "kind": "media",
+                "caption": "Broken replacement",
+                "caption_entities_json": None,
+                "caption_above": True,
+                "media_items": [
+                    {"type": "photo", "file_id": "photo-2"},
+                    {"type": "photo"},
+                ],
+            },
         )
 
     post = await store.get_scheduled_post(post_id)
@@ -116,7 +122,7 @@ async def test_update_editable_post_content_rolls_back_media_replacement_on_erro
 
 
 @pytest.mark.asyncio
-async def test_update_editable_post_content_rejects_recurring_post(store: StateStore) -> None:
+async def test_update_scheduled_post_rejects_recurring_post(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     _, post_id = await store.create_recurring_series(
         user_id=USER_ID,
@@ -130,12 +136,14 @@ async def test_update_editable_post_content_rejects_recurring_post(store: StateS
         entities_json=None,
     )
 
-    updated = await store.update_editable_post_content(
+    updated = await store.update_scheduled_post(
         post_id,
         USER_ID,
-        kind="text",
-        text="Updated text",
-        entities_json=None,
+        {
+            "kind": "text",
+            "text": "Updated text",
+            "entities_json": None,
+        },
     )
 
     post = await store.get_scheduled_post(post_id)
@@ -145,7 +153,22 @@ async def test_update_editable_post_content_rejects_recurring_post(store: StateS
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_pending_post_removes_post_and_media(store: StateStore) -> None:
+async def test_update_scheduled_post_rejects_unsupported_field(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Editable post",
+        entities_json=None,
+    )
+
+    with pytest.raises(ValueError):
+        await store.update_scheduled_post(post_id, USER_ID, {"status": "sent"})
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_post_removes_post_and_media(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     post_id = await store.create_scheduled_media_post(
         user_id=USER_ID,
@@ -157,7 +180,7 @@ async def test_hard_delete_pending_post_removes_post_and_media(store: StateStore
         media_items=[{"type": "photo", "file_id": "photo-1"}],
     )
 
-    deleted = await store.hard_delete_pending_post(USER_ID, post_id)
+    deleted = await store.hard_delete_post(USER_ID, post_id)
 
     assert deleted is True
     assert await store.get_scheduled_post(post_id) is None
@@ -165,7 +188,7 @@ async def test_hard_delete_pending_post_removes_post_and_media(store: StateStore
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_pending_post_rejects_recurring_post(store: StateStore) -> None:
+async def test_hard_delete_post_rejects_recurring_post(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     _, post_id = await store.create_recurring_series(
         user_id=USER_ID,
@@ -179,7 +202,7 @@ async def test_hard_delete_pending_post_rejects_recurring_post(store: StateStore
         entities_json=None,
     )
 
-    deleted = await store.hard_delete_pending_post(USER_ID, post_id)
+    deleted = await store.hard_delete_post(USER_ID, post_id)
 
     post = await store.get_scheduled_post(post_id)
     assert deleted is False

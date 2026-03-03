@@ -1329,7 +1329,7 @@ def build_router(store: StateStore) -> Router:
         )
 
     async def _confirm_delete_post(message: Message, *, user_id: int, post_id: str) -> bool:
-        deleted = await store.hard_delete_pending_post(user_id=user_id, post_id=post_id)
+        deleted = await store.hard_delete_post(user_id=user_id, post_id=post_id)
         if not deleted:
             _, reason = await _load_pending_post_for_edit(user_id, post_id)
             await _send_delete_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
@@ -1354,7 +1354,11 @@ def build_router(store: StateStore) -> Router:
         if not isinstance(post_id, str):
             return False
 
-        updated = await store.update_editable_post_time(post_id, user_id, scheduled_at_utc=scheduled_at_utc)
+        updated = await store.update_scheduled_post(
+            post_id,
+            user_id,
+            {"scheduled_at_utc": scheduled_at_utc},
+        )
         if not updated:
             await state.clear()
             _, reason = await _load_pending_post_for_edit(user_id, post_id)
@@ -1402,23 +1406,20 @@ def build_router(store: StateStore) -> Router:
 
         if post.kind == "media":
             media_items = await store.get_post_media(post_id)
-            updated = await store.update_editable_post_content(
-                post_id,
-                user_id,
-                kind="media",
-                caption=text,
-                caption_entities_json=entities_json,
-                caption_above=None if post.caption_above is None else bool(post.caption_above),
-                media_items=media_items,
-            )
+            updates: dict[str, object] = {
+                "kind": "media",
+                "caption": text,
+                "caption_entities_json": entities_json,
+                "caption_above": None if post.caption_above is None else bool(post.caption_above),
+                "media_items": media_items,
+            }
         else:
-            updated = await store.update_editable_post_content(
-                post_id,
-                user_id,
-                kind="text",
-                text=text,
-                entities_json=entities_json,
-            )
+            updates = {
+                "kind": "text",
+                "text": text,
+                "entities_json": entities_json,
+            }
+        updated = await store.update_scheduled_post(post_id, user_id, updates)
 
         if not updated:
             await state.clear()
@@ -1444,14 +1445,16 @@ def build_router(store: StateStore) -> Router:
 
         draft_text = data.get("draft_text")
         draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
-        updated = await store.update_editable_post_content(
+        updated = await store.update_scheduled_post(
             post_id,
             user_id,
-            kind="media",
-            caption=draft_text if draft_text_valid else None,
-            caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
-            caption_above=bool(data.get("caption_above", False)) if draft_text_valid else None,
-            media_items=media_items,
+            {
+                "kind": "media",
+                "caption": draft_text if draft_text_valid else None,
+                "caption_entities_json": data.get("draft_entities_json") if draft_text_valid else None,
+                "caption_above": bool(data.get("caption_above", False)) if draft_text_valid else None,
+                "media_items": media_items,
+            },
         )
         if not updated:
             await state.clear()
