@@ -39,6 +39,33 @@ class ScheduledPostRow:
     last_error: str | None
 
 
+@dataclass(frozen=True)
+class RecurringPattern:
+    id: str
+    user_id: int
+    chat_id: int
+    interval_type: str
+    weekdays_mask: int | None
+    time_of_day_minutes: int
+    timezone: str
+    start_at_utc: int
+    end_at_utc: int | None
+    max_occurrences: int | None
+    current_count: int
+    is_active: bool
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
+class RecurringInstance:
+    pattern_id: str
+    post_id: str
+    ordinal: int
+    scheduled_for_utc: int
+    created_at: int
+
+
 class StateStore:
     def __init__(self, conn: aiosqlite.Connection):
         self._conn = conn
@@ -452,6 +479,159 @@ class StateStore:
         )
         return None if row is None else str(row["title"])
 
+    async def create_recurring_pattern(
+        self,
+        user_id: int,
+        chat_id: int,
+        interval_type: str,
+        time_of_day_minutes: int,
+        timezone: str,
+        start_at_utc: int,
+        *,
+        weekdays_mask: int | None = None,
+        end_at_utc: int | None = None,
+        max_occurrences: int | None = None,
+        current_count: int = 0,
+        is_active: bool = True,
+    ) -> str:
+        now = int(time.time())
+        pattern_id = uuid.uuid4().hex
+        await self._conn.execute(
+            """
+            INSERT INTO recurring_patterns(
+                id,
+                user_id,
+                chat_id,
+                interval_type,
+                weekdays_mask,
+                time_of_day_minutes,
+                timezone,
+                start_at_utc,
+                end_at_utc,
+                max_occurrences,
+                current_count,
+                is_active,
+                created_at,
+                updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pattern_id,
+                user_id,
+                chat_id,
+                interval_type,
+                weekdays_mask,
+                time_of_day_minutes,
+                timezone,
+                start_at_utc,
+                end_at_utc,
+                max_occurrences,
+                current_count,
+                int(is_active),
+                now,
+                now,
+            ),
+        )
+        await self._conn.commit()
+        return pattern_id
+
+    async def get_recurring_pattern(self, pattern_id: str) -> RecurringPattern | None:
+        row = await self._execute_fetchone(
+            "SELECT * FROM recurring_patterns WHERE id=?",
+            (pattern_id,),
+        )
+        return None if row is None else self._row_to_recurring_pattern(row)
+
+    async def list_user_recurring(self, user_id: int, include_inactive: bool = False) -> list[RecurringPattern]:
+        query = """
+            SELECT *
+            FROM recurring_patterns
+            WHERE user_id=?
+        """
+        params: list[object] = [user_id]
+        if not include_inactive:
+            query += " AND is_active=1"
+        query += " ORDER BY created_at DESC, id ASC"
+
+        rows = await self._conn.execute_fetchall(query, tuple(params))
+        return [self._row_to_recurring_pattern(row) for row in rows]
+
+    async def update_recurring_count(self, pattern_id: str, new_count: int) -> bool:
+        now = int(time.time())
+        cur = await self._conn.execute(
+            """
+            UPDATE recurring_patterns
+            SET current_count=?, updated_at=?
+            WHERE id=?
+            """,
+            (new_count, now, pattern_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
+    async def delete_recurring_pattern(self, pattern_id: str) -> bool:
+        now = int(time.time())
+        cur = await self._conn.execute(
+            """
+            UPDATE recurring_patterns
+            SET is_active=0, updated_at=?
+            WHERE id=? AND is_active=1
+            """,
+            (now, pattern_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
+    async def create_recurring_instance(
+        self,
+        pattern_id: str,
+        post_id: str,
+        ordinal: int,
+        scheduled_for_utc: int,
+    ) -> RecurringInstance:
+        created_at = int(time.time())
+        await self._conn.execute(
+            """
+            INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (pattern_id, post_id, ordinal, scheduled_for_utc, created_at),
+        )
+        await self._conn.commit()
+        return RecurringInstance(
+            pattern_id=pattern_id,
+            post_id=post_id,
+            ordinal=ordinal,
+            scheduled_for_utc=scheduled_for_utc,
+            created_at=created_at,
+        )
+
+    async def get_recurring_instance_by_post_id(self, post_id: str) -> RecurringInstance | None:
+        row = await self._execute_fetchone(
+            "SELECT * FROM recurring_instances WHERE post_id=?",
+            (post_id,),
+        )
+        return None if row is None else self._row_to_recurring_instance(row)
+
+    async def get_due_recurring_instances(self, now_utc: int, limit: int = 10) -> list[RecurringInstance]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT ri.*
+            FROM recurring_instances ri
+            JOIN recurring_patterns rp ON rp.id = ri.pattern_id
+            JOIN scheduled_posts sp ON sp.id = ri.post_id
+            WHERE rp.is_active=1
+              AND ri.scheduled_for_utc <= ?
+              AND sp.status='pending'
+              AND sp.scheduled_at_utc <= ?
+              AND (sp.next_retry_at_utc IS NULL OR sp.next_retry_at_utc <= ?)
+            ORDER BY ri.scheduled_for_utc ASC, ri.ordinal ASC
+            LIMIT ?
+            """,
+            (now_utc, now_utc, now_utc, limit),
+        )
+        return [self._row_to_recurring_instance(row) for row in rows]
+
     @staticmethod
     def dump_entities(entities: Iterable[Any] | None) -> str | None:
         if not entities:
@@ -477,4 +657,33 @@ class StateStore:
             created_at=int(row["created_at"]),
             sent_at=row["sent_at"],
             last_error=row["last_error"],
+        )
+
+    @staticmethod
+    def _row_to_recurring_pattern(row: aiosqlite.Row) -> RecurringPattern:
+        return RecurringPattern(
+            id=str(row["id"]),
+            user_id=int(row["user_id"]),
+            chat_id=int(row["chat_id"]),
+            interval_type=str(row["interval_type"]),
+            weekdays_mask=None if row["weekdays_mask"] is None else int(row["weekdays_mask"]),
+            time_of_day_minutes=int(row["time_of_day_minutes"]),
+            timezone=str(row["timezone"]),
+            start_at_utc=int(row["start_at_utc"]),
+            end_at_utc=None if row["end_at_utc"] is None else int(row["end_at_utc"]),
+            max_occurrences=None if row["max_occurrences"] is None else int(row["max_occurrences"]),
+            current_count=int(row["current_count"]),
+            is_active=bool(int(row["is_active"])),
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_recurring_instance(row: aiosqlite.Row) -> RecurringInstance:
+        return RecurringInstance(
+            pattern_id=str(row["pattern_id"]),
+            post_id=str(row["post_id"]),
+            ordinal=int(row["ordinal"]),
+            scheduled_for_utc=int(row["scheduled_for_utc"]),
+            created_at=int(row["created_at"]),
         )
