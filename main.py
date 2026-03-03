@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -11,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from core.config import load_config
 from core.db import open_db
+from core.logging_setup import configure_logging
 from core.scheduler import scheduler_loop
 from core.state import StateStore
 from telegram.router import build_router
@@ -18,7 +17,7 @@ from telegram.router import build_router
 
 async def amain() -> None:
     cfg = load_config()
-    logging.basicConfig(level=getattr(logging, cfg.log_level, logging.INFO))
+    configure_logging(cfg.log_level)
 
     db_path = Path(cfg.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
