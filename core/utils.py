@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+MIN_SCHEDULE_LEAD_SECONDS = 5 * 60
 
 
 def split_text(text: str, max_len: int) -> list[str]:
@@ -38,6 +41,12 @@ class ParsedScheduleTime:
     utc_epoch: int
 
 
+@dataclass(frozen=True)
+class ScheduleTimeValidation:
+    is_valid: bool
+    error_key: str | None = None
+
+
 def parse_local_datetime(text: str, tz_name: str) -> ParsedScheduleTime:
     # Expected format: "DD.MM.YYYY HH:MM"
     raw = (text or "").strip()
@@ -46,3 +55,20 @@ def parse_local_datetime(text: str, tz_name: str) -> ParsedScheduleTime:
     local_dt = dt_naive.replace(tzinfo=tz)
     utc_dt = local_dt.astimezone(timezone.utc)
     return ParsedScheduleTime(local_dt=local_dt, utc_epoch=int(utc_dt.timestamp()))
+
+
+def validate_schedule_time(
+    utc_timestamp: int,
+    *,
+    now_utc: int | None = None,
+    min_lead_seconds: int = MIN_SCHEDULE_LEAD_SECONDS,
+) -> ScheduleTimeValidation:
+    if min_lead_seconds < 0:
+        raise ValueError("min_lead_seconds must be >= 0")
+
+    current_utc = int(time.time()) if now_utc is None else int(now_utc)
+    if utc_timestamp <= current_utc:
+        return ScheduleTimeValidation(is_valid=False, error_key="datetime_future_required")
+    if utc_timestamp < current_utc + min_lead_seconds:
+        return ScheduleTimeValidation(is_valid=False, error_key="datetime_min_lead_required")
+    return ScheduleTimeValidation(is_valid=True)

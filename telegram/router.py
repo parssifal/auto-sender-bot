@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -22,7 +21,7 @@ from aiogram.types import (
 from core.state import Destination, StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
-from core.utils import ParsedScheduleTime, parse_local_datetime
+from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
 from telegram.i18n import (
     DEFAULT_LANGUAGE,
     key_values,
@@ -352,6 +351,13 @@ def _schedule_time_prompt(lang: str, *, selected_date: date) -> str:
     return tr(lang, "schedule_time_prompt", date_label=_format_selected_date(selected_date))
 
 
+def _schedule_validation_text(lang: str, utc_timestamp: int, *, now_utc: int | None = None) -> str | None:
+    validation = validate_schedule_time(utc_timestamp, now_utc=now_utc)
+    if validation.is_valid or validation.error_key is None:
+        return None
+    return tr(lang, validation.error_key)
+
+
 async def _move_to_post_collection(message: Message, state: FSMContext, *, parsed: ParsedScheduleTime, lang: str) -> None:
     await state.update_data(
         scheduled_at_utc=parsed.utc_epoch,
@@ -581,6 +587,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(lang, "invalid_datetime_format"), show_alert=True)
             return
 
+        validation_text = _schedule_validation_text(lang, parsed.utc_epoch)
+        if validation_text is not None:
+            await query.answer(validation_text, show_alert=True)
+            return
+
         await query.answer()
         await _clear_inline_markup(query.message)
         await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
@@ -651,8 +662,9 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             return
 
-        if parsed.utc_epoch <= int(time.time()) + 30:
-            await query.answer(tr(lang, "datetime_future_required"), show_alert=True)
+        validation_text = _schedule_validation_text(lang, parsed.utc_epoch)
+        if validation_text is not None:
+            await query.answer(validation_text, show_alert=True)
             return
 
         await query.answer()
@@ -685,13 +697,13 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
-        now_utc = int(time.time())
-        if parsed.utc_epoch <= now_utc + 30:
+        validation_text = _schedule_validation_text(lang, parsed.utc_epoch)
+        if validation_text is not None:
             await _prompt_for_datetime(
                 message,
                 lang=lang,
                 tz_name=tz_name,
-                text=tr(lang, "datetime_future_required"),
+                text=validation_text,
                 data=data,
                 state_name=current_state,
             )

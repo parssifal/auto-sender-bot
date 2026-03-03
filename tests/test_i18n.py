@@ -56,3 +56,4 @@ def test_schedule_picker_keys_have_localization_and_fallback() -> None:
     assert tr("ru", "schedule_weekday_mon") == "Пн"
     assert tr("de", "schedule_weekday_mon") == "Mo"
     assert tr("ru", "btn_back") == "Назад"
+    assert tr("en", "datetime_min_lead_required") == "Time must be at least 5 minutes in the future."

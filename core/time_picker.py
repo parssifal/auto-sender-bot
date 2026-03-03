@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from core.utils import ParsedScheduleTime
+from core.utils import MIN_SCHEDULE_LEAD_SECONDS, ParsedScheduleTime
 
 _DEFAULT_WEEKDAY_LABELS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 _DEFAULT_QUICK_OPTION_KEYS = ("1h", "today_20", "tomorrow_9", "next_monday")
@@ -67,7 +67,7 @@ def resolve_quick_option(
     *,
     tz_name: str,
     now_utc: datetime | None = None,
-    min_lead_seconds: int = 30,
+    min_lead_seconds: int = MIN_SCHEDULE_LEAD_SECONDS,
 ) -> ParsedScheduleTime:
     if min_lead_seconds < 0:
         raise ValueError("min_lead_seconds must be >= 0")

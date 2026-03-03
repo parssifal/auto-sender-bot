@@ -92,6 +92,16 @@ def test_resolve_quick_option_rolls_today_to_tomorrow_when_past() -> None:
     assert parsed.local_dt.isoformat() == "2026-03-04T20:00:00+03:00"
 
 
+def test_resolve_quick_option_rolls_today_to_tomorrow_when_too_soon() -> None:
+    parsed = resolve_quick_option(
+        "today_20",
+        tz_name="Europe/Moscow",
+        now_utc=datetime(2026, 3, 3, 16, 57, tzinfo=timezone.utc),
+    )
+
+    assert parsed.local_dt.isoformat() == "2026-03-04T20:00:00+03:00"
+
+
 def test_resolve_quick_option_uses_next_monday_morning() -> None:
     parsed = resolve_quick_option(
         "next_monday",

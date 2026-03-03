@@ -8,6 +8,7 @@ from telegram.router import (
     _resolve_caption_above,
     _schedule_calendar_kb,
     _schedule_time_kb,
+    _schedule_validation_text,
 )
 
 
@@ -96,3 +97,9 @@ def test_calendar_month_from_state_defaults_to_local_month() -> None:
     )
 
     assert (year, month) == (2026, 4)
+
+
+def test_schedule_validation_text_returns_expected_messages() -> None:
+    assert _schedule_validation_text("ru", 100, now_utc=100) == "Время должно быть в будущем."
+    assert _schedule_validation_text("ru", 399, now_utc=100) == "Время должно быть минимум через 5 минут."
+    assert _schedule_validation_text("ru", 400, now_utc=100) is None

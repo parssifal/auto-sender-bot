@@ -29,7 +29,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Or use the calendar and quick buttons below."
         ),
         "invalid_datetime_format": "Invalid format. Example: `12.03.2026 12:15`",
-        "datetime_future_required": "Time must be in the future (minimum +30 seconds).",
+        "datetime_future_required": "Time must be in the future.",
+        "datetime_min_lead_required": "Time must be at least 5 minutes in the future.",
         "schedule_time_prompt": "Choose time for {date_label}, or send full date and time manually.",
         "schedule_picker_invalid": "This date/time selection is no longer valid. Choose again.",
         "schedule_quick_1h": "In 1 hour",
@@ -164,7 +165,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Или используйте календарь и быстрые кнопки ниже."
         ),
         "invalid_datetime_format": "Неверный формат. Пример: `12.03.2026 12:15`",
-        "datetime_future_required": "Время должно быть в будущем (минимум +30 секунд).",
+        "datetime_future_required": "Время должно быть в будущем.",
+        "datetime_min_lead_required": "Время должно быть минимум через 5 минут.",
         "schedule_time_prompt": "Выберите время для {date_label} или отправьте полную дату и время вручную.",
         "schedule_picker_invalid": "Этот выбор даты/времени уже неактуален. Выберите заново.",
         "schedule_quick_1h": "Через 1 час",
