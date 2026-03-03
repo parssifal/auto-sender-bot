@@ -286,3 +286,59 @@ async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
         assert [item.post_id for item in due_instances] == [due_post_id]
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_create_recurring_series_persists_media_pattern_post_and_instance() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Recurring destination",
+            "recurring_destination",
+            "administrator",
+            True,
+        )
+
+        pattern_id, post_id = await store.create_recurring_series(
+            user_id=123,
+            chat_id=-1001,
+            interval_type="weekly",
+            time_of_day_minutes=9 * 60 + 30,
+            timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+            kind="media",
+            caption="Recurring media",
+            caption_entities_json=None,
+            caption_above=True,
+            media_items=[{"type": "photo", "file_id": "photo-1"}, {"type": "video", "file_id": "video-2"}],
+        )
+
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.interval_type == "weekly"
+        assert pattern.current_count == 1
+        assert pattern.is_active is True
+
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+        assert post.kind == "media"
+        assert post.caption == "Recurring media"
+        assert post.caption_above == 1
+        assert post.scheduled_at_utc == 1_700_000_000
+        assert await store.get_post_media(post_id) == [
+            {"type": "photo", "file_id": "photo-1"},
+            {"type": "video", "file_id": "video-2"},
+        ]
+
+        instance = await store.get_recurring_instance_by_post_id(post_id)
+        assert instance is not None
+        assert instance.pattern_id == pattern_id
+        assert instance.ordinal == 1
+        assert instance.scheduled_for_utc == 1_700_000_000
+    finally:
+        await conn.close()

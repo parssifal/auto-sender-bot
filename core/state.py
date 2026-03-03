@@ -697,6 +697,116 @@ class StateStore:
             created_at=now,
         )
 
+    async def create_recurring_series(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        interval_type: str,
+        time_of_day_minutes: int,
+        timezone: str,
+        start_at_utc: int,
+        kind: str,
+        weekdays_mask: int | None = None,
+        end_at_utc: int | None = None,
+        max_occurrences: int | None = None,
+        text: str | None = None,
+        entities_json: str | None = None,
+        caption: str | None = None,
+        caption_entities_json: str | None = None,
+        caption_above: bool | None = None,
+        media_items: list[dict[str, str]] | None = None,
+    ) -> tuple[str, str]:
+        if kind not in {"text", "media"}:
+            raise ValueError(f"Unsupported recurring post kind: {kind}")
+
+        items = list(media_items or [])
+        if kind == "media" and not items:
+            raise ValueError("Recurring media post must contain at least one media item")
+
+        now = int(time.time())
+        pattern_id = uuid.uuid4().hex
+        post_id = uuid.uuid4().hex
+
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute(
+                """
+                INSERT INTO recurring_patterns(
+                    id,
+                    user_id,
+                    chat_id,
+                    interval_type,
+                    weekdays_mask,
+                    time_of_day_minutes,
+                    timezone,
+                    start_at_utc,
+                    end_at_utc,
+                    max_occurrences,
+                    current_count,
+                    is_active,
+                    created_at,
+                    updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+                """,
+                (
+                    pattern_id,
+                    user_id,
+                    chat_id,
+                    interval_type,
+                    weekdays_mask,
+                    time_of_day_minutes,
+                    timezone,
+                    start_at_utc,
+                    end_at_utc,
+                    max_occurrences,
+                    now,
+                    now,
+                ),
+            )
+
+            await self._conn.execute(
+                """
+                INSERT INTO scheduled_posts(
+                    id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
+                    caption, caption_entities_json, caption_above,
+                    attempts, next_retry_at_utc, created_at
+                ) VALUES(?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, NULL, ?)
+                """,
+                (
+                    post_id,
+                    user_id,
+                    chat_id,
+                    start_at_utc,
+                    kind,
+                    text,
+                    entities_json,
+                    caption,
+                    caption_entities_json,
+                    None if caption_above is None else int(caption_above),
+                    now,
+                ),
+            )
+            for idx, item in enumerate(items):
+                await self._conn.execute(
+                    "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
+                    (post_id, idx, item["type"], item["file_id"]),
+                )
+
+            await self._conn.execute(
+                """
+                INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+                VALUES(?, ?, 1, ?, ?)
+                """,
+                (pattern_id, post_id, start_at_utc, now),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return pattern_id, post_id
+
     async def get_recurring_instance_by_post_id(self, post_id: str) -> RecurringInstance | None:
         row = await self._execute_fetchone(
             "SELECT * FROM recurring_instances WHERE post_id=?",

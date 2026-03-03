@@ -58,6 +58,15 @@ class ScheduleStates(StatesGroup):
     confirming = State()
 
 
+class RepeatStates(StatesGroup):
+    choosing_interval = State()
+    entering_datetime = State()
+    selecting_time = State()
+    choosing_destination = State()
+    collecting_post = State()
+    confirming = State()
+
+
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
 _MENU_QUEUE_TEXTS = key_values("menu_queue")
 _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
@@ -66,6 +75,7 @@ _MENU_LANGUAGE_TEXTS = key_values("menu_language")
 _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 _TIME_PICKER = TimePicker()
 _SCHEDULE_TIME_MINUTES = (0, 30)
+_REPEAT_WEEKDAYS_MASK = 0b0011111
 
 
 def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -99,23 +109,46 @@ def _language_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
-def _destinations_kb(destinations: list[Destination], page: int, has_more: bool) -> InlineKeyboardMarkup:
+def _destinations_kb(
+    destinations: list[Destination],
+    page: int,
+    has_more: bool,
+    *,
+    select_prefix: str = "sdsel",
+    page_prefix: str = "sdpage",
+) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     for d in destinations:
         title = d.title
         if d.username:
             title = f"{title} (@{d.username})"
-        buttons.append([InlineKeyboardButton(text=title[:60], callback_data=f"sdsel:{d.chat_id}")])
+        buttons.append([InlineKeyboardButton(text=title[:60], callback_data=f"{select_prefix}:{d.chat_id}")])
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"sdpage:{page-1}"))
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{page_prefix}:{page-1}"))
     if has_more:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"sdpage:{page+1}"))
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{page_prefix}:{page+1}"))
     if nav:
         buttons.append(nav)
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _repeat_interval_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=tr(lang, "repeat_interval_daily"), callback_data="rint:daily"),
+                InlineKeyboardButton(text=tr(lang, "repeat_interval_weekly"), callback_data="rint:weekly"),
+            ],
+            [
+                InlineKeyboardButton(text=tr(lang, "repeat_interval_weekdays"), callback_data="rint:weekdays"),
+                InlineKeyboardButton(text=tr(lang, "repeat_interval_custom"), callback_data="rint:custom"),
+            ],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
+        ]
+    )
 
 
 def _media_collect_kb(lang: str) -> InlineKeyboardMarkup:
@@ -197,6 +230,21 @@ def _schedule_time_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _repeat_interval_label(lang: str, interval_type: str) -> str:
+    labels = {
+        "daily": tr(lang, "repeat_interval_daily"),
+        "weekly": tr(lang, "repeat_interval_weekly"),
+        "weekdays": tr(lang, "repeat_interval_weekdays"),
+    }
+    return labels.get(interval_type, tr(lang, "repeat_interval_invalid"))
+
+
+def _repeat_weekdays_mask(interval_type: str) -> int | None:
+    if interval_type == "weekdays":
+        return _REPEAT_WEEKDAYS_MASK
+    return None
+
+
 def _selected_date_from_state(data: dict[str, object]) -> date | None:
     raw = data.get("selected_date")
     if not isinstance(raw, str) or not raw:
@@ -225,7 +273,7 @@ def _schedule_datetime_markup(
     data: dict[str, object],
     state_name: str | None,
 ) -> InlineKeyboardMarkup:
-    if state_name == ScheduleStates.selecting_time.state and _selected_date_from_state(data) is not None:
+    if _is_time_selection_state(state_name) and _selected_date_from_state(data) is not None:
         return _schedule_time_kb(lang)
 
     selected = _selected_date_from_state(data)
@@ -261,6 +309,10 @@ def _parse_time_token(token: str) -> tuple[int, int]:
     if not 0 <= minute <= 59:
         raise ValueError("minute must be in range 0..59")
     return hour, minute
+
+
+def _is_time_selection_state(state_name: str | None) -> bool:
+    return state_name in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}
 
 
 async def _clear_inline_markup(message: Message) -> None:
@@ -358,10 +410,18 @@ def _schedule_validation_text(lang: str, utc_timestamp: int, *, now_utc: int | N
     return tr(lang, validation.error_key)
 
 
-async def _move_to_post_collection(message: Message, state: FSMContext, *, parsed: ParsedScheduleTime, lang: str) -> None:
+async def _move_to_post_collection(
+    message: Message,
+    state: FSMContext,
+    *,
+    scheduled_at_utc: int,
+    scheduled_local: str,
+    collecting_state: State,
+    lang: str,
+) -> None:
     await state.update_data(
-        scheduled_at_utc=parsed.utc_epoch,
-        scheduled_local=str(parsed.local_dt),
+        scheduled_at_utc=scheduled_at_utc,
+        scheduled_local=scheduled_local,
         kind=None,
         text=None,
         entities_json=None,
@@ -373,7 +433,7 @@ async def _move_to_post_collection(message: Message, state: FSMContext, *, parse
         draft_entities_json=None,
         text_before_media=False,
     )
-    await state.set_state(ScheduleStates.collecting_post)
+    await state.set_state(collecting_state)
     await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
 
 
@@ -412,20 +472,53 @@ def build_router(store: StateStore) -> Router:
     async def _main_menu_for(user_id: int) -> ReplyKeyboardMarkup:
         return _main_menu_kb(await _user_lang(user_id))
 
-    async def _render_destinations(message: Message, page: int) -> None:
-        lang = await _user_lang(message.from_user.id)
+    async def _render_destinations(
+        message: Message,
+        page: int,
+        *,
+        user_id: int,
+        select_prefix: str = "sdsel",
+        page_prefix: str = "sdpage",
+    ) -> None:
+        lang = await _user_lang(user_id)
         page_size = 5
         offset = page * page_size
-        items = await store.list_user_destinations(user_id=message.from_user.id, offset=offset, limit=page_size + 1)
+        items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
         has_more = len(items) > page_size
         items = items[:page_size]
         if not items:
             await message.answer(
                 tr(lang, "no_destinations"),
-                reply_markup=await _main_menu_for(message.from_user.id),
+                reply_markup=await _main_menu_for(user_id),
             )
             return
-        await message.answer(tr(lang, "choose_destination"), reply_markup=_destinations_kb(items, page=page, has_more=has_more))
+        await message.answer(
+            tr(lang, "choose_destination"),
+            reply_markup=_destinations_kb(
+                items,
+                page=page,
+                has_more=has_more,
+                select_prefix=select_prefix,
+                page_prefix=page_prefix,
+            ),
+        )
+
+    async def _move_repeat_to_destination_selection(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        scheduled_at_utc: int,
+        scheduled_local: str,
+    ) -> None:
+        await state.update_data(
+            scheduled_at_utc=scheduled_at_utc,
+            scheduled_local=scheduled_local,
+            chat_id=None,
+            dest_page=0,
+        )
+        await state.set_state(RepeatStates.choosing_destination)
+        await _render_destinations(message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -456,14 +549,83 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await state.set_state(ScheduleStates.choosing_destination)
         await state.update_data(dest_page=0)
-        await _render_destinations(message, page=0)
+        await _render_destinations(message, page=0, user_id=message.from_user.id)
+
+    @router.message(Command("repeat"))
+    async def cmd_repeat(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
+        tz_name = await store.get_user_timezone(message.from_user.id)
+        if not tz_name:
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await state.clear()
+        await state.set_state(RepeatStates.choosing_interval)
+        await message.answer(tr(lang, "repeat_choose_interval"), reply_markup=_repeat_interval_kb(lang))
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
         page = int(query.data.split(":")[1])
         await state.update_data(dest_page=page)
         await query.answer()
-        await _render_destinations(query.message, page=page)
+        await _render_destinations(query.message, page=page, user_id=query.from_user.id)
+
+    @router.callback_query(F.data.startswith("rdpage:"))
+    async def cb_repeat_dest_page(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != RepeatStates.choosing_destination.state:
+            await query.answer()
+            return
+
+        page = int(query.data.split(":")[1])
+        await state.update_data(dest_page=page)
+        await query.answer()
+        await _render_destinations(
+            query.message,
+            page=page,
+            user_id=query.from_user.id,
+            select_prefix="rdsel",
+            page_prefix="rdpage",
+        )
+
+    @router.callback_query(F.data.startswith("rint:"))
+    async def cb_repeat_interval(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != RepeatStates.choosing_interval.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        interval_type = query.data.split(":")[1]
+        if interval_type == "custom":
+            await query.answer(tr(lang, "repeat_custom_unavailable"), show_alert=True)
+            return
+        if interval_type not in {"daily", "weekly", "weekdays"}:
+            await query.answer(tr(lang, "repeat_interval_invalid"), show_alert=True)
+            return
+
+        await state.update_data(
+            interval_type=interval_type,
+            selected_date=None,
+            calendar_year=None,
+            calendar_month=None,
+        )
+        await state.set_state(RepeatStates.entering_datetime)
+        await query.answer()
+        await _prompt_for_datetime(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "repeat_enter_datetime"),
+            data=await state.get_data(),
+            state_name=RepeatStates.entering_datetime.state,
+        )
 
     @router.callback_query(F.data.startswith("sdsel:"))
     async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
@@ -493,13 +655,41 @@ def build_router(store: StateStore) -> Router:
             state_name=ScheduleStates.entering_datetime.state,
         )
 
+    @router.callback_query(F.data.startswith("rdsel:"))
+    async def cb_repeat_dest_select(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != RepeatStates.choosing_destination.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        data = await state.get_data()
+        scheduled_at_utc = data.get("scheduled_at_utc")
+        scheduled_local = data.get("scheduled_local")
+        if not isinstance(scheduled_at_utc, int) or not isinstance(scheduled_local, str):
+            await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
+            await state.clear()
+            return
+
+        chat_id = int(query.data.split(":")[1])
+        await state.update_data(chat_id=chat_id)
+        await query.answer()
+        await _move_to_post_collection(
+            query.message,
+            state,
+            scheduled_at_utc=scheduled_at_utc,
+            scheduled_local=scheduled_local,
+            collecting_state=RepeatStates.collecting_post,
+            lang=lang,
+        )
+
     @router.callback_query(F.data == TimePicker.NOOP_CALLBACK)
     async def cb_time_picker_noop(query: CallbackQuery) -> None:
         await query.answer()
 
     @router.callback_query(F.data.startswith("tp:nav:"))
     async def cb_schedule_calendar_nav(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != ScheduleStates.entering_datetime.state:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
             await query.answer()
             return
 
@@ -524,14 +714,15 @@ def build_router(store: StateStore) -> Router:
             query.message,
             lang=lang,
             tz_name=tz_name,
-            text=tr(lang, "enter_datetime"),
+            text=tr(lang, "repeat_enter_datetime") if current_state == RepeatStates.entering_datetime.state else tr(lang, "enter_datetime"),
             data=await state.get_data(),
-            state_name=ScheduleStates.entering_datetime.state,
+            state_name=current_state,
         )
 
     @router.callback_query(F.data.startswith("tp:date:"))
     async def cb_schedule_calendar_date(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != ScheduleStates.entering_datetime.state:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
             await query.answer()
             return
 
@@ -555,7 +746,8 @@ def build_router(store: StateStore) -> Router:
             calendar_year=selected_date.year,
             calendar_month=selected_date.month,
         )
-        await state.set_state(ScheduleStates.selecting_time)
+        next_state = RepeatStates.selecting_time if current_state == RepeatStates.entering_datetime.state else ScheduleStates.selecting_time
+        await state.set_state(next_state)
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
@@ -563,12 +755,13 @@ def build_router(store: StateStore) -> Router:
             tz_name=tz_name,
             text=_schedule_time_prompt(lang, selected_date=selected_date),
             data=await state.get_data(),
-            state_name=ScheduleStates.selecting_time.state,
+            state_name=next_state.state,
         )
 
     @router.callback_query(F.data.startswith("tp:quick:"))
     async def cb_schedule_quick(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != ScheduleStates.entering_datetime.state:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.entering_datetime.state, RepeatStates.entering_datetime.state}:
             await query.answer()
             return
 
@@ -594,11 +787,28 @@ def build_router(store: StateStore) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
+        if current_state == RepeatStates.entering_datetime.state:
+            await _move_repeat_to_destination_selection(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
+        await _move_to_post_collection(
+            query.message,
+            state,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            collecting_state=ScheduleStates.collecting_post,
+            lang=lang,
+        )
 
     @router.callback_query(F.data == "tp:back:calendar")
     async def cb_schedule_back_to_calendar(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != ScheduleStates.selecting_time.state:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}:
             await query.answer()
             return
 
@@ -614,20 +824,22 @@ def build_router(store: StateStore) -> Router:
         selected_date = _selected_date_from_state(data)
         if selected_date is not None:
             await state.update_data(calendar_year=selected_date.year, calendar_month=selected_date.month)
-        await state.set_state(ScheduleStates.entering_datetime)
+        previous_state = RepeatStates.entering_datetime if current_state == RepeatStates.selecting_time.state else ScheduleStates.entering_datetime
+        await state.set_state(previous_state)
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
             lang=lang,
             tz_name=tz_name,
-            text=tr(lang, "enter_datetime"),
+            text=tr(lang, "repeat_enter_datetime") if previous_state == RepeatStates.entering_datetime else tr(lang, "enter_datetime"),
             data=await state.get_data(),
-            state_name=ScheduleStates.entering_datetime.state,
+            state_name=previous_state.state,
         )
 
     @router.callback_query(F.data.startswith("tp:time:"))
     async def cb_schedule_time(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != ScheduleStates.selecting_time.state:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.selecting_time.state, RepeatStates.selecting_time.state}:
             await query.answer()
             return
 
@@ -642,15 +854,16 @@ def build_router(store: StateStore) -> Router:
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is None:
-            await state.set_state(ScheduleStates.entering_datetime)
+            previous_state = RepeatStates.entering_datetime if current_state == RepeatStates.selecting_time.state else ScheduleStates.entering_datetime
+            await state.set_state(previous_state)
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             await _edit_datetime_prompt(
                 query.message,
                 lang=lang,
                 tz_name=tz_name,
-                text=tr(lang, "enter_datetime"),
+                text=tr(lang, "repeat_enter_datetime") if previous_state == RepeatStates.entering_datetime else tr(lang, "enter_datetime"),
                 data=await state.get_data(),
-                state_name=ScheduleStates.entering_datetime.state,
+                state_name=previous_state.state,
             )
             return
 
@@ -669,8 +882,26 @@ def build_router(store: StateStore) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
+        if current_state == RepeatStates.selecting_time.state:
+            await _move_repeat_to_destination_selection(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
+        await _move_to_post_collection(
+            query.message,
+            state,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            collecting_state=ScheduleStates.collecting_post,
+            lang=lang,
+        )
 
+    @router.message(RepeatStates.selecting_time)
+    @router.message(RepeatStates.entering_datetime)
     @router.message(ScheduleStates.selecting_time)
     @router.message(ScheduleStates.entering_datetime)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
@@ -709,8 +940,26 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
-        await _move_to_post_collection(message, state, parsed=parsed, lang=lang)
+        if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
+            await _move_repeat_to_destination_selection(
+                message,
+                state,
+                user_id=message.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+                scheduled_local=str(parsed.local_dt),
+            )
+            return
 
+        await _move_to_post_collection(
+            message,
+            state,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            collecting_state=ScheduleStates.collecting_post,
+            lang=lang,
+        )
+
+    @router.message(RepeatStates.collecting_post)
     @router.message(ScheduleStates.collecting_post)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
         lang = await _user_lang(message.from_user.id)
@@ -787,6 +1036,8 @@ def build_router(store: StateStore) -> Router:
     async def cb_media_clear(query: CallbackQuery, state: FSMContext) -> None:
         lang = await _user_lang(query.from_user.id)
         await query.answer()
+        current_state = await state.get_state()
+        collecting_state = RepeatStates.collecting_post if current_state == RepeatStates.collecting_post.state else ScheduleStates.collecting_post
         await state.update_data(
             media_items=[],
             text=None,
@@ -799,7 +1050,7 @@ def build_router(store: StateStore) -> Router:
             draft_entities_json=None,
             text_before_media=False,
         )
-        await state.set_state(ScheduleStates.collecting_post)
+        await state.set_state(collecting_state)
         await query.message.answer(tr(lang, "media_cleared"), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:done")
@@ -819,7 +1070,7 @@ def build_router(store: StateStore) -> Router:
                 text=None,
                 entities_json=None,
             )
-            await _send_confirmation(query.message, state, store)
+            await _send_confirmation(query.message, state, store, user_id=query.from_user.id)
             return
 
         if draft_text_valid:
@@ -831,16 +1082,18 @@ def build_router(store: StateStore) -> Router:
                 caption_entities_json=None,
                 caption_above=False,
             )
-            await _send_confirmation(query.message, state, store)
+            await _send_confirmation(query.message, state, store, user_id=query.from_user.id)
             return
 
         await query.message.answer(tr(lang, "post_need_content"), reply_markup=_media_collect_kb(lang))
 
-    async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore) -> None:
-        lang = await _user_lang(message.from_user.id)
+    async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore, *, user_id: int) -> None:
+        lang = await _user_lang(user_id)
         data = await state.get_data()
-        await state.set_state(ScheduleStates.confirming)
-        tz_name = await store_.get_user_timezone(message.from_user.id) or "UTC"
+        current_state = await state.get_state()
+        is_repeat = current_state == RepeatStates.collecting_post.state
+        await state.set_state(RepeatStates.confirming if is_repeat else ScheduleStates.confirming)
+        tz_name = await store_.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(int(data["scheduled_at_utc"]), tz_name)
         chat_id = int(data["chat_id"])
         kind = data.get("kind")
@@ -850,13 +1103,28 @@ def build_router(store: StateStore) -> Router:
             media = list(data.get("media_items", []))
             summary = tr(lang, "kind_media", count=len(media))
         title = await store_.get_destination_title(chat_id) or str(chat_id)
-        await message.answer(
-            tr(lang, "confirm_template", where=title, local_time=local_time, tz_name=tz_name, kind=summary),
-            reply_markup=_confirm_kb(lang),
-        )
+        if is_repeat:
+            interval_label = _repeat_interval_label(lang, str(data.get("interval_type") or ""))
+            text = tr(
+                lang,
+                "repeat_confirm_template",
+                where=title,
+                local_time=local_time,
+                tz_name=tz_name,
+                interval=interval_label,
+                kind=summary,
+            )
+        else:
+            text = tr(lang, "confirm_template", where=title, local_time=local_time, tz_name=tz_name, kind=summary)
+        await message.answer(text, reply_markup=_confirm_kb(lang))
 
     @router.callback_query(F.data == "sconf:yes")
     async def cb_confirm_yes(query: CallbackQuery, state: FSMContext) -> None:
+        current_state = await state.get_state()
+        if current_state not in {ScheduleStates.confirming.state, RepeatStates.confirming.state}:
+            await query.answer()
+            return
+
         lang = await _user_lang(query.from_user.id)
         await query.answer()
         data = await state.get_data()
@@ -876,6 +1144,43 @@ def build_router(store: StateStore) -> Router:
 
         scheduled_at_utc = int(data["scheduled_at_utc"])
         kind = data.get("kind")
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+
+        if current_state == RepeatStates.confirming.state:
+            local_dt = datetime.fromtimestamp(scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
+            time_of_day_minutes = local_dt.hour * 60 + local_dt.minute
+            interval_type = str(data.get("interval_type") or "")
+            pattern_id, post_id = await store.create_recurring_series(
+                user_id=user_id,
+                chat_id=chat_id,
+                interval_type=interval_type,
+                weekdays_mask=_repeat_weekdays_mask(interval_type),
+                time_of_day_minutes=time_of_day_minutes,
+                timezone=tz_name,
+                start_at_utc=scheduled_at_utc,
+                kind=str(kind or ""),
+                text=str(data.get("text") or "") if kind == "text" else None,
+                entities_json=data.get("entities_json") if kind == "text" else None,
+                caption=data.get("caption") if kind == "media" else None,
+                caption_entities_json=data.get("caption_entities_json") if kind == "media" else None,
+                caption_above=bool(data.get("caption_above", False)) if kind == "media" else None,
+                media_items=list(data.get("media_items", [])) if kind == "media" else None,
+            )
+            await state.clear()
+            local_time = _format_local(scheduled_at_utc, tz_name)
+            await query.message.answer(
+                tr(
+                    lang,
+                    "repeat_created_ok",
+                    interval=_repeat_interval_label(lang, interval_type),
+                    local_time=local_time,
+                    tz_name=tz_name,
+                    pattern_id=_short_id(pattern_id),
+                ),
+                reply_markup=await _main_menu_for(query.from_user.id),
+            )
+            return
+
         if kind == "text":
             post_id = await store.create_scheduled_text_post(
                 user_id=user_id,
@@ -899,7 +1204,6 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await state.set_state(ScheduleStates.entering_datetime)
         await state.update_data(chat_id=chat_id, selected_date=None, calendar_year=None, calendar_month=None)
-        tz_name = await store.get_user_timezone(user_id) or "UTC"
         local_time = _format_local(scheduled_at_utc, tz_name)
         title = await store.get_destination_title(chat_id) or str(chat_id)
         await query.message.answer(

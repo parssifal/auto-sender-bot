@@ -37,6 +37,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_quick_today_20": "Today 20:00",
         "schedule_quick_tomorrow_9": "Tomorrow 09:00",
         "schedule_quick_next_monday": "Next Monday 09:00",
+        "repeat_choose_interval": "Choose a repeat interval:",
+        "repeat_enter_datetime": (
+            "Choose the first date and time for the recurring post.\n"
+            "Use the calendar and quick buttons below, or send `DD.MM.YYYY HH:MM`."
+        ),
+        "repeat_confirm_template": (
+            "Confirm recurring post:\n"
+            "- Where: {where}\n"
+            "- First run: {local_time} ({tz_name})\n"
+            "- Interval: {interval}\n"
+            "- Type: {kind}\n"
+        ),
+        "repeat_created_ok": (
+            "Done! Recurring post created: {interval}, first run {local_time} ({tz_name}). "
+            "series={pattern_id}"
+        ),
+        "repeat_interval_daily": "Every day",
+        "repeat_interval_weekly": "Every week",
+        "repeat_interval_weekdays": "Weekdays",
+        "repeat_interval_custom": "Custom",
+        "repeat_custom_unavailable": "Custom repeat is not supported yet.",
+        "repeat_interval_invalid": "Unknown repeat interval.",
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -173,6 +195,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_quick_today_20": "Сегодня 20:00",
         "schedule_quick_tomorrow_9": "Завтра 09:00",
         "schedule_quick_next_monday": "Следующий понедельник 09:00",
+        "repeat_choose_interval": "Выберите интервал повторения:",
+        "repeat_enter_datetime": (
+            "Выберите первую дату и время для повторяющегося поста.\n"
+            "Используйте календарь и быстрые кнопки ниже или отправьте `ДД.ММ.ГГГГ ЧЧ:ММ`."
+        ),
+        "repeat_confirm_template": (
+            "Подтвердите повторяющийся пост:\n"
+            "- Куда: {where}\n"
+            "- Первый запуск: {local_time} ({tz_name})\n"
+            "- Интервал: {interval}\n"
+            "- Тип: {kind}\n"
+        ),
+        "repeat_created_ok": (
+            "Ок! Повторяющийся пост создан: {interval}, первый запуск {local_time} ({tz_name}). "
+            "series={pattern_id}"
+        ),
+        "repeat_interval_daily": "Каждый день",
+        "repeat_interval_weekly": "Каждую неделю",
+        "repeat_interval_weekdays": "По будням",
+        "repeat_interval_custom": "Свое правило",
+        "repeat_custom_unavailable": "Свое правило пока не поддерживается.",
+        "repeat_interval_invalid": "Неизвестный интервал повторения.",
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",
