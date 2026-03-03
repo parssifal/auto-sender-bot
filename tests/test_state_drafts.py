@@ -326,6 +326,236 @@ async def test_state_store_draft_storage_supports_text_and_media_payloads(monkey
 
 
 @pytest.mark.asyncio
+async def test_state_store_draft_crud_filters_accessible_scopes(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+        for user_id in (123, 456, 789, 900):
+            await store.ensure_user(user_id)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Draft destination",
+            "draft_destination",
+            "administrator",
+            True,
+        )
+
+        team_alpha = await store.create_team(123, "Alpha")
+        await store.upsert_team_member(team_alpha, 456, "editor")
+
+        team_beta = await store.create_team(900, "Beta")
+        await store.upsert_team_member(team_beta, 123, "viewer")
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+        personal_draft_id = await store.create_draft(
+            author_user_id=123,
+            chat_id=-1001,
+            kind="text",
+            text="My personal draft",
+            entities_json=None,
+        )
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+        team_alpha_draft_id = await store.create_draft(
+            team_id=team_alpha,
+            author_user_id=123,
+            chat_id=-1001,
+            kind="text",
+            text="Alpha draft",
+            entities_json=None,
+        )
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+        team_beta_draft_id = await store.create_draft(
+            team_id=team_beta,
+            author_user_id=900,
+            chat_id=-1001,
+            kind="text",
+            text="Beta draft",
+            entities_json=None,
+        )
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
+        await store.create_draft(
+            author_user_id=456,
+            chat_id=-1001,
+            kind="text",
+            text="Other personal draft",
+            entities_json=None,
+        )
+
+        all_drafts = await store.list_drafts(123, scope="all")
+        assert [draft.id for draft in all_drafts] == [team_beta_draft_id, team_alpha_draft_id, personal_draft_id]
+
+        own_drafts = await store.list_drafts(123, scope="mine")
+        assert [draft.id for draft in own_drafts] == [team_alpha_draft_id, personal_draft_id]
+
+        team_drafts = await store.list_drafts(123, scope="team")
+        assert [draft.id for draft in team_drafts] == [team_beta_draft_id, team_alpha_draft_id]
+
+        assert [draft.id for draft in await store.list_drafts(123, team_id=team_alpha)] == [team_alpha_draft_id]
+        assert await store.list_drafts(456, team_id=team_beta) == []
+        assert await store.list_drafts(123, team_id=team_beta, scope="mine") == []
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_state_store_create_update_and_delete_draft_enforce_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+        for user_id in (123, 456, 789, 900):
+            await store.ensure_user(user_id)
+        await store.upsert_destination(
+            -1001,
+            "channel",
+            "Draft destination",
+            "draft_destination",
+            "administrator",
+            True,
+        )
+        await store.upsert_destination(
+            -1002,
+            "channel",
+            "Updated destination",
+            "updated_destination",
+            "administrator",
+            True,
+        )
+
+        team_id = await store.create_team(123, "Editorial")
+        await store.upsert_team_member(team_id, 456, "editor")
+        await store.upsert_team_member(team_id, 789, "viewer")
+
+        with pytest.raises(ValueError, match="owner or editor"):
+            await store.create_draft(
+                team_id=team_id,
+                author_user_id=789,
+                chat_id=-1001,
+                kind="text",
+                text="Viewer should not create",
+                entities_json=None,
+            )
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+        team_draft_id = await store.create_draft(
+            team_id=team_id,
+            author_user_id=123,
+            chat_id=-1001,
+            kind="media",
+            caption="Initial media draft",
+            caption_entities_json=None,
+            caption_above=True,
+            media_items=[
+                {"type": "photo", "file_id": "photo-1"},
+                {"type": "video", "file_id": "video-2"},
+            ],
+        )
+
+        assert not await store.update_draft(
+            team_draft_id,
+            789,
+            chat_id=-1002,
+            kind="text",
+            text="Viewer update",
+            entities_json=None,
+        )
+        assert not await store.update_draft(
+            team_draft_id,
+            900,
+            chat_id=-1002,
+            kind="text",
+            text="Outsider update",
+            entities_json=None,
+        )
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+        assert await store.update_draft(
+            team_draft_id,
+            456,
+            chat_id=-1002,
+            kind="text",
+            text="Editor converted to text",
+            entities_json='[{"type":"italic"}]',
+        )
+
+        updated_to_text = await store.get_draft(team_draft_id)
+        assert updated_to_text is not None
+        assert updated_to_text.chat_id == -1002
+        assert updated_to_text.kind == "text"
+        assert updated_to_text.text == "Editor converted to text"
+        assert updated_to_text.entities_json == '[{"type":"italic"}]'
+        assert updated_to_text.caption is None
+        assert updated_to_text.caption_above is None
+        assert updated_to_text.updated_at == 1_700_000_020
+        assert await store.get_draft_media(team_draft_id) == []
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+        assert await store.update_draft(
+            team_draft_id,
+            123,
+            chat_id=-1001,
+            kind="media",
+            caption="Owner converted back to media",
+            caption_entities_json='[{"type":"bold"}]',
+            caption_above=False,
+            media_items=[{"type": "photo", "file_id": "photo-3"}],
+        )
+
+        updated_to_media = await store.get_draft(team_draft_id)
+        assert updated_to_media is not None
+        assert updated_to_media.chat_id == -1001
+        assert updated_to_media.kind == "media"
+        assert updated_to_media.caption == "Owner converted back to media"
+        assert updated_to_media.caption_entities_json == '[{"type":"bold"}]'
+        assert updated_to_media.caption_above == 0
+        assert updated_to_media.text is None
+        assert updated_to_media.updated_at == 1_700_000_030
+        assert await store.get_draft_media(team_draft_id) == [{"type": "photo", "file_id": "photo-3"}]
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
+        personal_draft_id = await store.create_draft(
+            author_user_id=123,
+            chat_id=-1001,
+            kind="text",
+            text="Personal draft",
+            entities_json=None,
+        )
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_050)
+        assert await store.update_draft(
+            personal_draft_id,
+            123,
+            chat_id=-1002,
+            kind="text",
+            text="Updated personal draft",
+            entities_json='[{"type":"underline"}]',
+        )
+        updated_personal_draft = await store.get_draft(personal_draft_id)
+        assert updated_personal_draft is not None
+        assert updated_personal_draft.chat_id == -1002
+        assert updated_personal_draft.text == "Updated personal draft"
+        assert updated_personal_draft.entities_json == '[{"type":"underline"}]'
+        assert updated_personal_draft.updated_at == 1_700_000_050
+
+        assert not await store.delete_draft(team_draft_id, 789)
+        assert await store.delete_draft(team_draft_id, 456)
+        assert await store.get_draft(team_draft_id) is None
+        assert await store.get_draft_media(team_draft_id) == []
+
+        assert not await store.delete_draft(personal_draft_id, 456)
+        assert await store.delete_draft(personal_draft_id, 123)
+        assert await store.get_draft(personal_draft_id) is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_migrate_backfills_owner_for_legacy_teams() -> None:
     conn = await open_db(":memory:")
     try:
