@@ -24,9 +24,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "choose_destination": "Choose a channel/chat:",
         "timezone_required": "Set timezone first: /timezone",
-        "enter_datetime": "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).",
+        "enter_datetime": (
+            "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).\n"
+            "Or use the quick buttons below."
+        ),
         "invalid_datetime_format": "Invalid format. Example: `12.03.2026 12:15`",
         "datetime_future_required": "Time must be in the future (minimum +30 seconds).",
+        "schedule_quick_1h": "In 1 hour",
+        "schedule_quick_today_20": "Today 20:00",
+        "schedule_quick_tomorrow_9": "Tomorrow 09:00",
+        "schedule_quick_next_monday": "Next Monday 09:00",
         "schedule_kind_prompt": "What do you want to schedule?",
         "schedule_text_prompt": "Send message text in one message.",
         "schedule_media_prompt": "Send photo/video (single media or album 2-10). Send caption as text (can be after media).",
@@ -51,7 +58,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "caption_position_prompt": "Where should the caption be?",
         "scheduled_ok": "Done! Scheduled for {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
-            "Send next date and time for the same destination ({where}) in format DD.MM.YYYY HH:MM.\n"
+            "Send next date and time for the same destination ({where}) in format DD.MM.YYYY HH:MM,\n"
+            "or use the quick buttons below.\n"
             "Use /schedule to choose another channel/chat, or /cancel to stop."
         ),
         "queue_empty": "Queue is empty.",
@@ -141,9 +149,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "choose_destination": "Выберите канал/чат:",
         "timezone_required": "Сначала задайте часовой пояс: /timezone",
-        "enter_datetime": "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).",
+        "enter_datetime": (
+            "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).\n"
+            "Или используйте быстрые кнопки ниже."
+        ),
         "invalid_datetime_format": "Неверный формат. Пример: `12.03.2026 12:15`",
         "datetime_future_required": "Время должно быть в будущем (минимум +30 секунд).",
+        "schedule_quick_1h": "Через 1 час",
+        "schedule_quick_today_20": "Сегодня 20:00",
+        "schedule_quick_tomorrow_9": "Завтра 09:00",
+        "schedule_quick_next_monday": "Следующий понедельник 09:00",
         "schedule_kind_prompt": "Что вы хотите запланировать?",
         "schedule_text_prompt": "Отправьте текст сообщения одним сообщением.",
         "schedule_media_prompt": "Отправьте фото/видео (можно несколько или альбом 2–10). Подпись отправьте текстом (можно после медиа).",
@@ -168,7 +183,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "caption_position_prompt": "Где должна быть подпись?",
         "scheduled_ok": "Ок! Запланировано на {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
-            "Введите следующую дату и время для этого же канала/чата ({where}) в формате ДД.ММ.ГГГГ ЧЧ:ММ.\n"
+            "Введите следующую дату и время для этого же канала/чата ({where}) в формате ДД.ММ.ГГГГ ЧЧ:ММ,\n"
+            "или используйте быстрые кнопки ниже.\n"
             "Используйте /schedule, чтобы выбрать другой канал/чат, или /cancel для выхода."
         ),
         "queue_empty": "Очередь пуста.",

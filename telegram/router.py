@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from core.state import Destination, StateStore
+from core.time_picker import TimePicker, resolve_quick_option
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime
 from telegram.i18n import (
@@ -63,6 +64,7 @@ _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
 _MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
 _MENU_LANGUAGE_TEXTS = key_values("menu_language")
 _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
+_TIME_PICKER = TimePicker()
 
 
 def _main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
@@ -150,6 +152,19 @@ def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _schedule_datetime_kb(lang: str) -> InlineKeyboardMarkup:
+    labels = {
+        "1h": tr(lang, "schedule_quick_1h"),
+        "today_20": tr(lang, "schedule_quick_today_20"),
+        "tomorrow_9": tr(lang, "schedule_quick_tomorrow_9"),
+        "next_monday": tr(lang, "schedule_quick_next_monday"),
+    }
+    quick_markup = _TIME_PICKER.quick_buttons(labels)
+    rows = [list(row) for row in quick_markup.inline_keyboard]
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _short_id(post_id: str) -> str:
     return post_id[:8]
 
@@ -209,6 +224,33 @@ def _resolve_caption_above(
     if had_media_before:
         return current
     return False
+
+
+async def _prompt_for_datetime(message: Message, *, lang: str, text: str) -> None:
+    await message.answer(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_schedule_datetime_kb(lang),
+    )
+
+
+async def _move_to_post_collection(message: Message, state: FSMContext, *, parsed: ParsedScheduleTime, lang: str) -> None:
+    await state.update_data(
+        scheduled_at_utc=parsed.utc_epoch,
+        scheduled_local=str(parsed.local_dt),
+        kind=None,
+        text=None,
+        entities_json=None,
+        caption=None,
+        caption_entities_json=None,
+        caption_above=False,
+        media_items=[],
+        draft_text=None,
+        draft_entities_json=None,
+        text_before_media=False,
+    )
+    await state.set_state(ScheduleStates.collecting_post)
+    await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
 
 
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
@@ -306,7 +348,31 @@ def build_router(store: StateStore) -> Router:
         await state.update_data(chat_id=chat_id)
         await state.set_state(ScheduleStates.entering_datetime)
         await query.answer()
-        await query.message.answer(tr(lang, "enter_datetime"), parse_mode="Markdown")
+        await _prompt_for_datetime(query.message, lang=lang, text=tr(lang, "enter_datetime"))
+
+    @router.callback_query(F.data.startswith("tp:quick:"))
+    async def cb_schedule_quick(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != ScheduleStates.entering_datetime.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        option = query.data.split(":", 2)[2]
+        try:
+            parsed = resolve_quick_option(option, tz_name=tz_name)
+        except ValueError:
+            await query.answer(tr(lang, "invalid_datetime_format"), show_alert=True)
+            return
+
+        await query.answer()
+        await _move_to_post_collection(query.message, state, parsed=parsed, lang=lang)
 
     @router.message(ScheduleStates.entering_datetime)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
@@ -321,30 +387,15 @@ def build_router(store: StateStore) -> Router:
         try:
             parsed: ParsedScheduleTime = parse_local_datetime(message.text, tz_name=tz_name)
         except Exception:
-            await message.answer(tr(lang, "invalid_datetime_format"), parse_mode="Markdown")
+            await _prompt_for_datetime(message, lang=lang, text=tr(lang, "invalid_datetime_format"))
             return
 
         now_utc = int(time.time())
         if parsed.utc_epoch <= now_utc + 30:
-            await message.answer(tr(lang, "datetime_future_required"))
+            await message.answer(tr(lang, "datetime_future_required"), reply_markup=_schedule_datetime_kb(lang))
             return
 
-        await state.update_data(
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            kind=None,
-            text=None,
-            entities_json=None,
-            caption=None,
-            caption_entities_json=None,
-            caption_above=False,
-            media_items=[],
-            draft_text=None,
-            draft_entities_json=None,
-            text_before_media=False,
-        )
-        await state.set_state(ScheduleStates.collecting_post)
-        await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
+        await _move_to_post_collection(message, state, parsed=parsed, lang=lang)
 
     @router.message(ScheduleStates.collecting_post)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
@@ -542,6 +593,7 @@ def build_router(store: StateStore) -> Router:
         )
         await query.message.answer(
             tr(lang, "schedule_next_prompt", where=title),
+            reply_markup=_schedule_datetime_kb(lang),
         )
 
     @router.callback_query(F.data == "scancel")

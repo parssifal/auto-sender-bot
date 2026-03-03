@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
-from core.time_picker import TimePicker, generate_calendar, get_quick_options
+from core.time_picker import TimePicker, generate_calendar, get_quick_options, resolve_quick_option
 
 
 def test_generate_calendar_marks_current_month_days() -> None:
@@ -80,3 +80,38 @@ def test_time_selection_validates_ranges() -> None:
 
     with pytest.raises(ValueError):
         picker.time_selection(hours=(10,), minute_values=(60,))
+
+
+def test_resolve_quick_option_rolls_today_to_tomorrow_when_past() -> None:
+    parsed = resolve_quick_option(
+        "today_20",
+        tz_name="Europe/Moscow",
+        now_utc=datetime(2026, 3, 3, 18, 5, tzinfo=timezone.utc),
+    )
+
+    assert parsed.local_dt.isoformat() == "2026-03-04T20:00:00+03:00"
+
+
+def test_resolve_quick_option_uses_next_monday_morning() -> None:
+    parsed = resolve_quick_option(
+        "next_monday",
+        tz_name="Europe/Moscow",
+        now_utc=datetime(2026, 3, 2, 5, 30, tzinfo=timezone.utc),
+    )
+
+    assert parsed.local_dt.isoformat() == "2026-03-09T09:00:00+03:00"
+
+
+def test_resolve_quick_option_rounds_one_hour_to_next_minute() -> None:
+    parsed = resolve_quick_option(
+        "1h",
+        tz_name="UTC",
+        now_utc=datetime(2026, 3, 3, 10, 7, 42, tzinfo=timezone.utc),
+    )
+
+    assert parsed.local_dt.isoformat() == "2026-03-03T11:08:00+00:00"
+
+
+def test_resolve_quick_option_rejects_unknown_option() -> None:
+    with pytest.raises(ValueError):
+        resolve_quick_option("weekend", tz_name="UTC")

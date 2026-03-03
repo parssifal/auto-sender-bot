@@ -1,4 +1,4 @@
-from telegram.router import _resolve_caption_above
+from telegram.router import _resolve_caption_above, _schedule_datetime_kb
 
 
 def test_resolve_caption_above_for_text_before_first_media() -> None:
@@ -46,3 +46,17 @@ def test_resolve_caption_above_keeps_current_for_extra_media() -> None:
         text_after_media=False,
         explicit_above=None,
     )
+
+
+def test_schedule_datetime_keyboard_contains_quick_buttons_and_cancel() -> None:
+    kb = _schedule_datetime_kb("ru")
+
+    callbacks = [button.callback_data for row in kb.inline_keyboard for button in row]
+
+    assert callbacks[:4] == [
+        "tp:quick:1h",
+        "tp:quick:today_20",
+        "tp:quick:tomorrow_9",
+        "tp:quick:next_monday",
+    ]
+    assert callbacks[-1] == "scancel"

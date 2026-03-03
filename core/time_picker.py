@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from core.utils import ParsedScheduleTime
 
 _DEFAULT_WEEKDAY_LABELS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 _DEFAULT_QUICK_OPTION_KEYS = ("1h", "today_20", "tomorrow_9", "next_monday")
@@ -57,6 +60,43 @@ def generate_calendar(year: int, month: int) -> tuple[tuple[CalendarCell, ...], 
 
 def get_quick_options() -> tuple[QuickOption, ...]:
     return tuple(QuickOption(key=key, callback_data=TimePicker.pack_quick(key)) for key in _DEFAULT_QUICK_OPTION_KEYS)
+
+
+def resolve_quick_option(
+    option: str,
+    *,
+    tz_name: str,
+    now_utc: datetime | None = None,
+    min_lead_seconds: int = 30,
+) -> ParsedScheduleTime:
+    if min_lead_seconds < 0:
+        raise ValueError("min_lead_seconds must be >= 0")
+
+    current_utc = _coerce_utc(now_utc)
+    tz = ZoneInfo(tz_name)
+    current_local = current_utc.astimezone(tz)
+
+    if option == "1h":
+        candidate_local = _ceil_to_next_minute(current_local + timedelta(hours=1))
+    elif option == "today_20":
+        candidate_local = _local_datetime(current_local.date(), hour=20, minute=0, tz=tz)
+        if int(candidate_local.astimezone(timezone.utc).timestamp()) <= int(current_utc.timestamp()) + min_lead_seconds:
+            candidate_local = _local_datetime(current_local.date() + timedelta(days=1), hour=20, minute=0, tz=tz)
+    elif option == "tomorrow_9":
+        candidate_local = _local_datetime(current_local.date() + timedelta(days=1), hour=9, minute=0, tz=tz)
+    elif option == "next_monday":
+        days_ahead = (7 - current_local.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        candidate_local = _local_datetime(current_local.date() + timedelta(days=days_ahead), hour=9, minute=0, tz=tz)
+    else:
+        raise ValueError(f"unsupported quick option: {option}")
+
+    candidate_utc = candidate_local.astimezone(timezone.utc)
+    if int(candidate_utc.timestamp()) <= int(current_utc.timestamp()) + min_lead_seconds:
+        raise ValueError(f"quick option {option!r} did not resolve to a future time")
+
+    return ParsedScheduleTime(local_dt=candidate_local, utc_epoch=int(candidate_utc.timestamp()))
 
 
 class TimePicker:
@@ -194,3 +234,22 @@ class TimePicker:
         if selected is not None and cell.value == selected:
             return f"[{cell.value.day}]"
         return cell.text
+
+
+def _coerce_utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _ceil_to_next_minute(value: datetime) -> datetime:
+    rounded = value.replace(second=0, microsecond=0)
+    if rounded < value:
+        rounded += timedelta(minutes=1)
+    return rounded
+
+
+def _local_datetime(day: date, *, hour: int, minute: int, tz: ZoneInfo) -> datetime:
+    return datetime.combine(day, dt_time(hour=hour, minute=minute), tzinfo=tz)
