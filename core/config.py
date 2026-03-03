@@ -9,6 +9,7 @@ from pathlib import Path
 class Config:
     bot_token: str
     db_path: str
+    redis_url: str | None = None
     log_level: str = "INFO"
     scheduler_poll_seconds: float = 2.0
     telegram_polling_timeout_seconds: int = 30
@@ -52,6 +53,9 @@ def load_config() -> Config:
         raise RuntimeError("BOT_TOKEN env var is required (or TG_TOKEN)")
 
     db_path = os.getenv("DB_PATH", "data/bot.db")
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url is not None:
+        redis_url = redis_url.strip() or None
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
     poll_seconds_raw = os.getenv("SCHEDULER_POLL_SECONDS")
@@ -85,6 +89,7 @@ def load_config() -> Config:
     return Config(
         bot_token=bot_token,
         db_path=db_path,
+        redis_url=redis_url,
         log_level=log_level,
         scheduler_poll_seconds=scheduler_poll_seconds,
         telegram_polling_timeout_seconds=telegram_polling_timeout_seconds,

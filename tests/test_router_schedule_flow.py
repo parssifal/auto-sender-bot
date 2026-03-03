@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from typing import Any
 
 import pytest
@@ -137,6 +138,7 @@ async def test_schedule_flow_enters_datetime_picker_after_destination_selection(
 
     assert await schedule_flow.get_state() == ScheduleStates.entering_datetime.state
     data = await schedule_flow.get_data()
+    json.dumps(data)
     assert data["chat_id"] == DESTINATION_CHAT_ID
     prompt_call = schedule_flow.last_call()
     assert isinstance(prompt_call, SendMessage)
@@ -165,6 +167,7 @@ async def test_schedule_flow_date_and_time_callbacks_move_to_collecting_post(sch
 
     assert await schedule_flow.get_state() == ScheduleStates.collecting_post.state
     data = await schedule_flow.get_data()
+    json.dumps(data)
     assert data["scheduled_at_utc"] == int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     recent_calls = schedule_flow.bot.calls[before_time_calls:]
     assert [type(item).__name__ for item in recent_calls] == [

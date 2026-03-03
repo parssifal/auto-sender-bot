@@ -5,10 +5,10 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.fsm.storage.memory import MemoryStorage
 
 from core.config import load_config
 from core.db import open_db
+from core.fsm_storage import build_fsm_event_isolation, build_fsm_storage
 from core.logging_setup import configure_logging
 from core.scheduler import scheduler_loop
 from core.state import StateStore
@@ -26,8 +26,8 @@ async def amain() -> None:
     store = StateStore(conn)
     await store.migrate()
 
-    storage = MemoryStorage()
-    dp = Dispatcher(storage=storage)
+    storage = build_fsm_storage(cfg)
+    dp = Dispatcher(storage=storage, events_isolation=build_fsm_event_isolation(storage))
     dp.include_router(build_router(store=store))
 
     session = AiohttpSession(timeout=cfg.telegram_http_timeout_seconds)

@@ -1,4 +1,5 @@
 aiogram==3.25.0
 aiosqlite==0.21.0
+redis==7.2.1
 structlog==25.5.0
 timezonefinder==8.2.0

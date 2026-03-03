@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import json
 from typing import Any
 
 import pytest
@@ -236,6 +237,7 @@ async def test_draft_create_personal_text_flow_saves_draft(draft_flow: DraftFlow
     await draft_flow.feed_callback(f"ddsel:{DESTINATION_CHAT_ID}", update_id=2, message_id=50)
 
     assert await draft_flow.get_state() == DraftStates.collecting_post.state
+    json.dumps(await draft_flow.get_data())
     collect_call = draft_flow.last_call()
     assert isinstance(collect_call, SendMessage)
     assert collect_call.text == tr("ru", "schedule_post_prompt")

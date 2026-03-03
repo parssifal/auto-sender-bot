@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from typing import Any
 
 import pytest
@@ -205,6 +206,7 @@ async def test_broadcast_command_enters_destination_picker_and_clears_stale_stat
 
     assert await broadcast_flow.get_state() == BroadcastStates.choosing_destinations.state
     data = await broadcast_flow.get_data()
+    json.dumps(data)
     assert data == {"selected_chat_ids": [], "dest_page": 0}
     call = broadcast_flow.last_call()
     assert isinstance(call, SendMessage)

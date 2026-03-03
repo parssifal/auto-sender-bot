@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -184,6 +185,7 @@ async def test_repeat_flow_quick_time_moves_to_destination_selection(repeat_flow
 
     assert await repeat_flow.get_state() == RepeatStates.choosing_destination.state
     data = await repeat_flow.get_data()
+    json.dumps(data)
     assert data["interval_type"] == "weekdays"
     assert int(data["scheduled_at_utc"]) > 0
     recent_calls = repeat_flow.bot.calls[before_quick_calls:]

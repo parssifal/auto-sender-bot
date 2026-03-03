@@ -38,3 +38,23 @@ def test_load_config_rejects_non_positive_polling_timeout(monkeypatch: pytest.Mo
 
     with pytest.raises(RuntimeError, match="TELEGRAM_POLLING_TIMEOUT_SECONDS must be > 0"):
         config_module.load_config()
+
+
+def test_load_config_parses_redis_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("REDIS_URL", "redis://redis:6379/0")
+
+    cfg = config_module.load_config()
+
+    assert cfg.redis_url == "redis://redis:6379/0"
+
+
+def test_load_config_treats_blank_redis_url_as_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("REDIS_URL", "   ")
+
+    cfg = config_module.load_config()
+
+    assert cfg.redis_url is None
