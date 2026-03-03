@@ -19,7 +19,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
-from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, StateStore, Team
+from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, ScheduledPostRow, StateStore, Team
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -86,6 +86,14 @@ class BroadcastStates(StatesGroup):
     confirming = State()
 
 
+class EditStates(StatesGroup):
+    choosing_field = State()
+    entering_text = State()
+    entering_datetime = State()
+    selecting_time = State()
+    collecting_media = State()
+
+
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
 _MENU_QUEUE_TEXTS = key_values("menu_queue")
 _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
@@ -104,6 +112,7 @@ def _is_datetime_entry_state(state_name: str | None) -> bool:
         RepeatStates.entering_datetime.state,
         DraftStates.entering_datetime.state,
         BroadcastStates.entering_datetime.state,
+        EditStates.entering_datetime.state,
     }
 
 
@@ -113,6 +122,7 @@ def _is_time_selection_state(state_name: str | None) -> bool:
         RepeatStates.selecting_time.state,
         DraftStates.selecting_time.state,
         BroadcastStates.selecting_time.state,
+        EditStates.selecting_time.state,
     }
 
 
@@ -296,6 +306,34 @@ def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _queue_edit_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in posts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_edit_post", label=item["label"]),
+                    callback_data=f"qedit:{item['id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _edit_field_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=tr(lang, "btn_edit_text"), callback_data=f"eact:text:{post_id}"),
+                InlineKeyboardButton(text=tr(lang, "btn_edit_time"), callback_data=f"eact:time:{post_id}"),
+            ],
+            [InlineKeyboardButton(text=tr(lang, "btn_edit_media"), callback_data=f"eact:media:{post_id}")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
+        ]
+    )
+
+
 def _repeats_manage_kb(items: list[RecurringPatternSummary], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in items:
@@ -464,6 +502,21 @@ def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
     if len(matches) == 1:
         return matches[0]
     return None
+
+
+def _resolve_scheduled_post_id(posts: list[ScheduledPostRow], post_ref: str) -> tuple[str | None, bool]:
+    ref = post_ref.strip().lower()
+    if not ref:
+        return None, False
+
+    for post in posts:
+        if post.id == ref:
+            return post.id, False
+
+    matches = [post.id for post in posts if post.id.startswith(ref)]
+    if len(matches) == 1:
+        return matches[0], False
+    return None, len(matches) > 1
 
 
 def _resolve_team_id(teams: list[Team], team_ref: str) -> str | None:
@@ -998,6 +1051,334 @@ def build_router(store: StateStore) -> Router:
             "kind": kind,
             "preview": preview,
         }
+
+    async def _build_scheduled_post_summary(post: ScheduledPostRow, *, lang: str) -> dict[str, str]:
+        where = await store.get_destination_title(post.chat_id) or str(post.chat_id)
+        if post.kind == "text":
+            kind = tr(lang, "kind_text")
+            preview = _draft_preview_text(
+                post.text,
+                fallback=tr(lang, "draft_preview_empty"),
+                limit=80,
+            )
+        else:
+            media_count = len(await store.get_post_media(post.id))
+            kind = tr(lang, "kind_media", count=media_count)
+            preview = _draft_preview_text(
+                post.caption,
+                fallback=tr(lang, "draft_preview_media_no_caption"),
+                limit=80,
+            )
+        return {
+            "where": where,
+            "kind": kind,
+            "preview": preview,
+        }
+
+    async def _load_pending_post_for_edit(user_id: int, post_id: str) -> tuple[ScheduledPostRow | None, str | None]:
+        post = await store.get_scheduled_post(post_id)
+        if post is None or post.user_id != user_id:
+            return None, "missing"
+        if post.status != "pending":
+            return None, "unavailable"
+        if await store.get_recurring_instance_by_post_id(post_id) is not None:
+            return None, "recurring"
+        return post, None
+
+    async def _render_edit_posts(message: Message, *, user_id: int) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        posts = await store.list_editable_pending_posts(user_id=user_id, limit=10)
+        if not posts:
+            await message.answer(tr(lang, "edit_empty"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        lines: list[str] = []
+        edit_buttons: list[dict[str, str]] = []
+        for post in posts:
+            summary = await _build_scheduled_post_summary(post, lang=lang)
+            lines.append(
+                tr(
+                    lang,
+                    "edit_list_item",
+                    post_id=_short_id(post.id),
+                    where=summary["where"],
+                    local_time=_format_local(post.scheduled_at_utc, tz_name),
+                    kind=summary["kind"],
+                    preview=summary["preview"],
+                )
+            )
+            edit_buttons.append({"id": post.id, "label": _short_id(post.id)})
+
+        await message.answer(
+            tr(lang, "edit_list_header", lines="\n\n".join(lines)),
+            reply_markup=_queue_edit_kb(edit_buttons, lang),
+        )
+
+    async def _start_scheduled_post_edit(message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        summary = await _build_scheduled_post_summary(post, lang=lang)
+        await state.clear()
+        await state.update_data(
+            edit_post_id=post.id,
+            chat_id=post.chat_id,
+        )
+        await state.set_state(EditStates.choosing_field)
+        await message.answer(
+            tr(
+                lang,
+                "edit_choose_field",
+                post_id=_short_id(post.id),
+                where=summary["where"],
+                local_time=_format_local(post.scheduled_at_utc, tz_name),
+                tz_name=tz_name,
+                kind=summary["kind"],
+                preview=summary["preview"],
+            ),
+            reply_markup=_edit_field_kb(post_id=post.id, lang=lang),
+        )
+
+    async def _start_scheduled_post_text_edit(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        post: ScheduledPostRow,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        summary = await _build_scheduled_post_summary(post, lang=lang)
+        await state.clear()
+        await state.update_data(
+            edit_post_id=post.id,
+            chat_id=post.chat_id,
+        )
+        await state.set_state(EditStates.entering_text)
+        await message.answer(
+            tr(
+                lang,
+                "edit_text_prompt",
+                post_id=_short_id(post.id),
+                kind=summary["kind"],
+                preview=summary["preview"],
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")]]
+            ),
+        )
+
+    async def _start_scheduled_post_time_edit(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        post: ScheduledPostRow,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id)
+        if not tz_name:
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        summary = await _build_scheduled_post_summary(post, lang=lang)
+        local_dt = datetime.fromtimestamp(post.scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
+        await state.clear()
+        await state.update_data(
+            edit_post_id=post.id,
+            chat_id=post.chat_id,
+            selected_date=local_dt.date().isoformat(),
+            calendar_year=local_dt.year,
+            calendar_month=local_dt.month,
+        )
+        await state.set_state(EditStates.entering_datetime)
+        await _prompt_for_datetime(
+            message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(
+                lang,
+                "edit_time_prompt",
+                post_id=_short_id(post.id),
+                where=summary["where"],
+                local_time=_format_local(post.scheduled_at_utc, tz_name),
+                tz_name=tz_name,
+            ),
+            data=await state.get_data(),
+            state_name=EditStates.entering_datetime.state,
+        )
+
+    async def _start_scheduled_post_media_edit(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        post: ScheduledPostRow,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        summary = await _build_scheduled_post_summary(post, lang=lang)
+        existing_text = post.caption if post.kind == "media" else post.text
+        existing_entities = post.caption_entities_json if post.kind == "media" else post.entities_json
+        existing_caption_above = None if post.caption_above is None else bool(post.caption_above)
+        await state.clear()
+        await state.update_data(
+            edit_post_id=post.id,
+            chat_id=post.chat_id,
+            kind=None,
+            text=None,
+            entities_json=None,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=False if existing_caption_above is None else existing_caption_above,
+            media_items=[],
+            draft_text=existing_text,
+            draft_entities_json=existing_entities,
+            text_before_media=post.kind == "text" and bool(existing_text),
+            edit_preserve_caption_above=post.kind == "media" and existing_caption_above is not None,
+        )
+        await state.set_state(EditStates.collecting_media)
+        await message.answer(
+            tr(
+                lang,
+                "edit_media_prompt",
+                post_id=_short_id(post.id),
+                preview=summary["preview"],
+            ),
+            reply_markup=_media_collect_kb(lang),
+        )
+
+    async def _send_edit_unavailable(message: Message, *, user_id: int, reason: str) -> None:
+        lang = await _user_lang(user_id)
+        key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
+        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+
+    async def _save_scheduled_post_time(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        scheduled_at_utc: int,
+    ) -> bool:
+        data = await state.get_data()
+        post_id = data.get("edit_post_id")
+        if not isinstance(post_id, str):
+            return False
+
+        updated = await store.update_editable_post_time(post_id, user_id, scheduled_at_utc=scheduled_at_utc)
+        if not updated:
+            await state.clear()
+            _, reason = await _load_pending_post_for_edit(user_id, post_id)
+            await _send_edit_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
+            return False
+
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        await state.clear()
+        await message.answer(
+            tr(
+                lang,
+                "edit_time_updated_ok",
+                post_id=_short_id(post_id),
+                local_time=_format_local(scheduled_at_utc, tz_name),
+                tz_name=tz_name,
+            ),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
+
+    async def _save_scheduled_post_text(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        text: str,
+        entities_json: str | None,
+    ) -> bool:
+        data = await state.get_data()
+        post_id = data.get("edit_post_id")
+        if not isinstance(post_id, str):
+            return False
+
+        post, reason = await _load_pending_post_for_edit(user_id, post_id)
+        if post is None:
+            await state.clear()
+            await _send_edit_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
+            return False
+
+        lang = await _user_lang(user_id)
+        if not str(text).strip():
+            await message.answer(tr(lang, "text_required"))
+            return False
+
+        if post.kind == "media":
+            media_items = await store.get_post_media(post_id)
+            updated = await store.update_editable_post_content(
+                post_id,
+                user_id,
+                kind="media",
+                caption=text,
+                caption_entities_json=entities_json,
+                caption_above=None if post.caption_above is None else bool(post.caption_above),
+                media_items=media_items,
+            )
+        else:
+            updated = await store.update_editable_post_content(
+                post_id,
+                user_id,
+                kind="text",
+                text=text,
+                entities_json=entities_json,
+            )
+
+        if not updated:
+            await state.clear()
+            await _send_edit_unavailable(message, user_id=user_id, reason="missing")
+            return False
+
+        await state.clear()
+        await message.answer(
+            tr(lang, "edit_text_updated_ok", post_id=_short_id(post_id)),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
+
+    async def _save_scheduled_post_media(message: Message, state: FSMContext, *, user_id: int) -> bool:
+        data = await state.get_data()
+        post_id = data.get("edit_post_id")
+        if not isinstance(post_id, str):
+            return False
+
+        media_items = list(data.get("media_items", []))
+        if not media_items:
+            return False
+
+        draft_text = data.get("draft_text")
+        draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
+        updated = await store.update_editable_post_content(
+            post_id,
+            user_id,
+            kind="media",
+            caption=draft_text if draft_text_valid else None,
+            caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
+            caption_above=bool(data.get("caption_above", False)) if draft_text_valid else None,
+            media_items=media_items,
+        )
+        if not updated:
+            await state.clear()
+            await _send_edit_unavailable(message, user_id=user_id, reason="missing")
+            return False
+
+        lang = await _user_lang(user_id)
+        await state.clear()
+        await message.answer(
+            tr(
+                lang,
+                "edit_media_updated_ok",
+                post_id=_short_id(post_id),
+                kind=tr(lang, "kind_media", count=len(media_items)),
+            ),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
 
     async def _render_drafts(message: Message, *, user_id: int, scope: str, page: int, edit: bool) -> None:
         lang = await _user_lang(user_id)
@@ -1712,11 +2093,77 @@ def build_router(store: StateStore) -> Router:
             reply_markup=await _main_menu_for(message.from_user.id),
         )
 
+    @router.message(Command("edit"))
+    async def cmd_edit(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await _render_edit_posts(message, user_id=message.from_user.id)
+            return
+
+        posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
+        post_id, ambiguous = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
+        lang = await _user_lang(message.from_user.id)
+        if post_id is None:
+            key = "edit_post_ambiguous" if ambiguous else "edit_post_missing"
+            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        post, reason = await _load_pending_post_for_edit(message.from_user.id, post_id)
+        if post is None:
+            await _send_edit_unavailable(message, user_id=message.from_user.id, reason=str(reason or "missing"))
+            return
+
+        await _start_scheduled_post_edit(message, state, user_id=message.from_user.id, post=post)
+
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
         await query.answer()
         await _render_repeats(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("qedit:"))
+    async def cb_queue_edit(query: CallbackQuery, state: FSMContext) -> None:
+        post_id = query.data.split(":", 1)[1]
+        post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
+        lang = await _user_lang(query.from_user.id)
+        if post is None:
+            key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
+            await query.answer(tr(lang, key), show_alert=True)
+            return
+
+        await query.answer()
+        await _start_scheduled_post_edit(query.message, state, user_id=query.from_user.id, post=post)
+
+    @router.callback_query(F.data.startswith("eact:"))
+    async def cb_edit_action(query: CallbackQuery, state: FSMContext) -> None:
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        action = parts[1]
+        post_id = parts[2]
+        post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
+        lang = await _user_lang(query.from_user.id)
+        if post is None:
+            key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
+            await query.answer(tr(lang, key), show_alert=True)
+            return
+
+        await query.answer()
+        if action == "text":
+            await _start_scheduled_post_text_edit(query.message, state, user_id=query.from_user.id, post=post)
+            return
+        if action == "time":
+            await _start_scheduled_post_time_edit(query.message, state, user_id=query.from_user.id, post=post)
+            return
+        if action == "media":
+            await _start_scheduled_post_media_edit(query.message, state, user_id=query.from_user.id, post=post)
+            return
+
+        await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await _main_menu_for(query.from_user.id))
 
     @router.callback_query(F.data.startswith("rstop:"))
     async def cb_repeats_stop(query: CallbackQuery) -> None:
@@ -2233,6 +2680,8 @@ def build_router(store: StateStore) -> Router:
             text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
         elif current_state == RepeatStates.entering_datetime.state:
             text = tr(lang, "repeat_enter_datetime")
+        elif current_state == EditStates.entering_datetime.state:
+            text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
         else:
             text = tr(lang, "enter_datetime")
         await query.answer()
@@ -2278,6 +2727,8 @@ def build_router(store: StateStore) -> Router:
             next_state = DraftStates.selecting_time
         elif current_state == BroadcastStates.entering_datetime.state:
             next_state = BroadcastStates.selecting_time
+        elif current_state == EditStates.entering_datetime.state:
+            next_state = EditStates.selecting_time
         else:
             next_state = ScheduleStates.selecting_time
         await state.set_state(next_state)
@@ -2338,6 +2789,14 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == EditStates.entering_datetime.state:
+            await _save_scheduled_post_time(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+            )
+            return
         if current_state == BroadcastStates.entering_datetime.state:
             await _move_to_post_collection(
                 query.message,
@@ -2382,6 +2841,8 @@ def build_router(store: StateStore) -> Router:
             previous_state = DraftStates.entering_datetime
         elif current_state == BroadcastStates.selecting_time.state:
             previous_state = BroadcastStates.entering_datetime
+        elif current_state == EditStates.selecting_time.state:
+            previous_state = EditStates.entering_datetime
         else:
             previous_state = ScheduleStates.entering_datetime
         await state.set_state(previous_state)
@@ -2391,6 +2852,8 @@ def build_router(store: StateStore) -> Router:
             text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
         elif previous_state == RepeatStates.entering_datetime:
             text = tr(lang, "repeat_enter_datetime")
+        elif previous_state == EditStates.entering_datetime:
+            text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
         else:
             text = tr(lang, "enter_datetime")
         await query.answer()
@@ -2427,6 +2890,8 @@ def build_router(store: StateStore) -> Router:
                 previous_state = DraftStates.entering_datetime
             elif current_state == BroadcastStates.selecting_time.state:
                 previous_state = BroadcastStates.entering_datetime
+            elif current_state == EditStates.selecting_time.state:
+                previous_state = EditStates.entering_datetime
             else:
                 previous_state = ScheduleStates.entering_datetime
             await state.set_state(previous_state)
@@ -2436,6 +2901,8 @@ def build_router(store: StateStore) -> Router:
                 text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
             elif previous_state == RepeatStates.entering_datetime:
                 text = tr(lang, "repeat_enter_datetime")
+            elif previous_state == EditStates.entering_datetime:
+                text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
             else:
                 text = tr(lang, "enter_datetime")
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
@@ -2482,6 +2949,14 @@ def build_router(store: StateStore) -> Router:
                 scheduled_local=str(parsed.local_dt),
             )
             return
+        if current_state == EditStates.selecting_time.state:
+            await _save_scheduled_post_time(
+                query.message,
+                state,
+                user_id=query.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+            )
+            return
         if current_state == BroadcastStates.selecting_time.state:
             await _move_to_post_collection(
                 query.message,
@@ -2501,8 +2976,25 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(EditStates.entering_text)
+    async def edit_enter_text(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await _user_lang(message.from_user.id)
+        if not message.text:
+            await message.answer(tr(lang, "text_required"))
+            return
+        await _save_scheduled_post_text(
+            message,
+            state,
+            user_id=message.from_user.id,
+            text=message.text,
+            entities_json=store.dump_entities(message.entities),
+        )
+
     @router.message(BroadcastStates.selecting_time)
     @router.message(BroadcastStates.entering_datetime)
+    @router.message(EditStates.selecting_time)
+    @router.message(EditStates.entering_datetime)
     @router.message(DraftStates.selecting_time)
     @router.message(DraftStates.entering_datetime)
     @router.message(RepeatStates.selecting_time)
@@ -2565,6 +3057,15 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
+        if current_state in {EditStates.entering_datetime.state, EditStates.selecting_time.state}:
+            await _save_scheduled_post_time(
+                message,
+                state,
+                user_id=message.from_user.id,
+                scheduled_at_utc=parsed.utc_epoch,
+            )
+            return
+
         if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
             await _move_to_post_collection(
                 message,
@@ -2585,6 +3086,7 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(EditStates.collecting_media)
     @router.message(BroadcastStates.collecting_post)
     @router.message(DraftStates.editing_post)
     @router.message(DraftStates.collecting_post)
@@ -2592,6 +3094,7 @@ def build_router(store: StateStore) -> Router:
     @router.message(ScheduleStates.collecting_post)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
         lang = await _user_lang(message.from_user.id)
+        current_state = await state.get_state()
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
         draft_text: str | None = data.get("draft_text")
@@ -2644,13 +3147,21 @@ def build_router(store: StateStore) -> Router:
             explicit_above = None if incoming is None else bool(incoming)
             text_before_media = False
 
-        caption_above = _resolve_caption_above(
-            current=caption_above,
-            had_media_before=had_media_before,
-            text_before_media=text_before_media,
-            text_after_media=False,
-            explicit_above=explicit_above,
-        )
+        if (
+            current_state == EditStates.collecting_media.state
+            and bool(data.get("edit_preserve_caption_above"))
+            and not had_media_before
+            and not caption_from_message
+        ):
+            caption_above = bool(data.get("caption_above", False))
+        else:
+            caption_above = _resolve_caption_above(
+                current=caption_above,
+                had_media_before=had_media_before,
+                text_before_media=text_before_media,
+                text_after_media=False,
+                explicit_above=explicit_above,
+            )
 
         await state.update_data(
             media_items=media,
@@ -2671,6 +3182,7 @@ def build_router(store: StateStore) -> Router:
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
             DraftStates.editing_post.state,
+            EditStates.collecting_media.state,
         }:
             await query.answer()
             return
@@ -2680,6 +3192,8 @@ def build_router(store: StateStore) -> Router:
             collecting_state = RepeatStates.collecting_post
         elif current_state == BroadcastStates.collecting_post.state:
             collecting_state = BroadcastStates.collecting_post
+        elif current_state == EditStates.collecting_media.state:
+            collecting_state = EditStates.collecting_media
         elif current_state == DraftStates.editing_post.state:
             collecting_state = DraftStates.editing_post
         elif current_state == DraftStates.collecting_post.state:
@@ -2710,6 +3224,7 @@ def build_router(store: StateStore) -> Router:
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
             DraftStates.editing_post.state,
+            EditStates.collecting_media.state,
         }:
             await query.answer()
             return
@@ -2720,6 +3235,21 @@ def build_router(store: StateStore) -> Router:
         media: list[dict[str, str]] = list(data.get("media_items", []))
         draft_text = data.get("draft_text")
         draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
+
+        if current_state == EditStates.collecting_media.state:
+            if not media:
+                await query.message.answer(tr(lang, "media_need_at_least_one"), reply_markup=_media_collect_kb(lang))
+                return
+            await state.update_data(
+                kind="media",
+                caption=draft_text if draft_text_valid else None,
+                caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
+                text=None,
+                entities_json=None,
+            )
+            if await _save_scheduled_post_media(query.message, state, user_id=query.from_user.id):
+                return
+            return
 
         if media:
             await state.update_data(

@@ -1221,6 +1221,27 @@ class StateStore:
                 (post_id, idx, str(item["type"]), str(item["file_id"])),
             )
 
+    @staticmethod
+    def _normalize_scheduled_payload(
+        *,
+        kind: str,
+        text: str | None,
+        entities_json: str | None,
+        caption: str | None,
+        caption_entities_json: str | None,
+        caption_above: bool | None,
+        media_items: list[dict[str, str]] | None,
+    ) -> tuple[str | None, str | None, str | None, str | None, int | None, list[dict[str, str]]]:
+        return StateStore._normalize_draft_payload(
+            kind=kind,
+            text=text,
+            entities_json=entities_json,
+            caption=caption,
+            caption_entities_json=caption_entities_json,
+            caption_above=caption_above,
+            media_items=media_items,
+        )
+
     async def list_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(
             """
@@ -1234,12 +1255,122 @@ class StateStore:
         )
         return [self._row_to_post(r) for r in rows]
 
+    async def list_editable_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT sp.*
+            FROM scheduled_posts sp
+            LEFT JOIN recurring_instances ri ON ri.post_id = sp.id
+            WHERE sp.user_id=?
+              AND sp.status='pending'
+              AND ri.post_id IS NULL
+            ORDER BY sp.scheduled_at_utc ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        return [self._row_to_post(r) for r in rows]
+
     async def get_scheduled_post(self, post_id: str) -> ScheduledPostRow | None:
         row = await self._execute_fetchone(
             "SELECT * FROM scheduled_posts WHERE id=?",
             (post_id,),
         )
         return None if row is None else self._row_to_post(row)
+
+    async def update_editable_post_time(self, post_id: str, user_id: int, *, scheduled_at_utc: int) -> bool:
+        cur = await self._conn.execute(
+            """
+            UPDATE scheduled_posts
+            SET scheduled_at_utc=?
+            WHERE id=?
+              AND user_id=?
+              AND status='pending'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recurring_instances
+                  WHERE post_id=?
+              )
+            """,
+            (scheduled_at_utc, post_id, user_id, post_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
+    async def update_editable_post_content(
+        self,
+        post_id: str,
+        user_id: int,
+        *,
+        kind: str,
+        text: str | None = None,
+        entities_json: str | None = None,
+        caption: str | None = None,
+        caption_entities_json: str | None = None,
+        caption_above: bool | None = None,
+        media_items: list[dict[str, str]] | None = None,
+    ) -> bool:
+        normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
+            self._normalize_scheduled_payload(
+                kind=kind,
+                text=text,
+                entities_json=entities_json,
+                caption=caption,
+                caption_entities_json=caption_entities_json,
+                caption_above=caption_above,
+                media_items=media_items,
+            )
+        )
+
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                """
+                UPDATE scheduled_posts
+                SET kind=?,
+                    text=?,
+                    entities_json=?,
+                    caption=?,
+                    caption_entities_json=?,
+                    caption_above=?
+                WHERE id=?
+                  AND user_id=?
+                  AND status='pending'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM recurring_instances
+                      WHERE post_id=?
+                  )
+                """,
+                (
+                    kind,
+                    normalized_text,
+                    normalized_entities,
+                    normalized_caption,
+                    normalized_caption_entities,
+                    normalized_caption_above,
+                    post_id,
+                    user_id,
+                    post_id,
+                ),
+            )
+            if cur.rowcount != 1:
+                await self._conn.rollback()
+                return False
+
+            await self._conn.execute("DELETE FROM scheduled_post_media WHERE post_id=?", (post_id,))
+            for idx, item in enumerate(items):
+                await self._conn.execute(
+                    "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
+                    (post_id, idx, str(item["type"]), str(item["file_id"])),
+                )
+
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return True
 
     async def cancel_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(

@@ -237,6 +237,36 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "queue_header": "Upcoming posts:\n{lines}",
         "queue_cancel_ok": "Cancelled",
         "queue_cancel_missing": "Not found / already sent",
+        "edit_empty": "No editable pending posts.",
+        "edit_list_header": "Choose a post to edit:\n\n{lines}",
+        "edit_list_item": (
+            "id={post_id}\n"
+            "- Where: {where}\n"
+            "- When: {local_time}\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}"
+        ),
+        "edit_choose_field": (
+            "Editing post id={post_id}\n"
+            "- Where: {where}\n"
+            "- When: {local_time} ({tz_name})\n"
+            "- Type: {kind}\n"
+            "- Preview: {preview}\n\n"
+            "Choose what to change."
+        ),
+        "edit_text_prompt": "Send new text/caption for post id={post_id}.\nCurrent: {preview}",
+        "edit_media_prompt": (
+            "Send new photo/video for post id={post_id}.\n"
+            "Current text will be kept unless you send a new caption.\n"
+            "Current: {preview}"
+        ),
+        "edit_time_prompt": "Choose new date and time for post id={post_id}.",
+        "edit_post_missing": "Post not found or unavailable.",
+        "edit_post_ambiguous": "This short id matches multiple pending posts. Use a longer id.",
+        "edit_post_recurring_blocked": "This post belongs to a recurring series and cannot be edited here yet.",
+        "edit_text_updated_ok": "Text updated. id={post_id}",
+        "edit_media_updated_ok": "Media updated. id={post_id}\n- Type: {kind}",
+        "edit_time_updated_ok": "Time updated. id={post_id}\n- When: {local_time} ({tz_name})",
         "done": "Done.",
         "timezone_private_only": (
             "Auto-detect by location works only in private chat with the bot.\n"
@@ -300,6 +330,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_caption_below": "Caption below",
         "btn_confirm": "Confirm",
         "btn_queue_cancel": "Cancel {label}",
+        "btn_edit_post": "Edit {label}",
+        "btn_edit_text": "Text",
+        "btn_edit_time": "Time",
+        "btn_edit_media": "Media",
         "btn_repeat_stop": "Stop {label}",
         "btn_draft_open": "Open {label}",
         "btn_draft_edit": "Edit",
@@ -539,6 +573,36 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "queue_header": "Ближайшие посты:\n{lines}",
         "queue_cancel_ok": "Отменено",
         "queue_cancel_missing": "Не найдено/уже отправлено",
+        "edit_empty": "Нет доступных для редактирования pending-постов.",
+        "edit_list_header": "Выберите пост для редактирования:\n\n{lines}",
+        "edit_list_item": (
+            "id={post_id}\n"
+            "- Куда: {where}\n"
+            "- Когда: {local_time}\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}"
+        ),
+        "edit_choose_field": (
+            "Редактирование post id={post_id}\n"
+            "- Куда: {where}\n"
+            "- Когда: {local_time} ({tz_name})\n"
+            "- Тип: {kind}\n"
+            "- Превью: {preview}\n\n"
+            "Выберите, что изменить."
+        ),
+        "edit_text_prompt": "Отправьте новый текст/подпись для post id={post_id}.\nТекущее: {preview}",
+        "edit_media_prompt": (
+            "Отправьте новое фото/видео для post id={post_id}.\n"
+            "Текущий текст сохранится, если не пришлёте новую подпись.\n"
+            "Текущее: {preview}"
+        ),
+        "edit_time_prompt": "Выберите новую дату и время для post id={post_id}.",
+        "edit_post_missing": "Пост не найден или уже недоступен.",
+        "edit_post_ambiguous": "Этот short_id совпал с несколькими pending-постами. Укажите более длинный id.",
+        "edit_post_recurring_blocked": "Этот пост относится к recurring-серии и пока не редактируется через /edit.",
+        "edit_text_updated_ok": "Текст обновлён. id={post_id}",
+        "edit_media_updated_ok": "Медиа обновлено. id={post_id}\n- Тип: {kind}",
+        "edit_time_updated_ok": "Время обновлено. id={post_id}\n- Когда: {local_time} ({tz_name})",
         "done": "Готово.",
         "timezone_private_only": (
             "Автоопределение по геопозиции работает только в личном чате с ботом.\n"
@@ -602,6 +666,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_caption_below": "Подпись снизу",
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
+        "btn_edit_post": "Изменить {label}",
+        "btn_edit_text": "Текст",
+        "btn_edit_time": "Время",
+        "btn_edit_media": "Медиа",
         "btn_repeat_stop": "Остановить {label}",
         "btn_draft_open": "Открыть {label}",
         "btn_draft_edit": "Изменить",
