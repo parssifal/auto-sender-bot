@@ -284,6 +284,97 @@ async def test_draft_create_team_media_flow_saves_team_draft(draft_flow: DraftFl
 
 
 @pytest.mark.asyncio
+async def test_draft_edit_via_detail_button_updates_personal_draft_in_place(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Старый личный черновик",
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    await draft_flow.feed_callback(f"dopen:all:0:{draft_id}", update_id=2, message_id=50)
+    await draft_flow.feed_callback(f"dact:edit:{draft_id}", update_id=3, message_id=50)
+
+    assert await draft_flow.get_state() == DraftStates.editing_post.state
+    prompt_call = draft_flow.last_call()
+    assert isinstance(prompt_call, SendMessage)
+    assert _short_id(draft_id) in prompt_call.text
+
+    await draft_flow.feed_message("Новый личный черновик", update_id=4, message_id=11)
+    await draft_flow.feed_callback("smedia:done", update_id=5, message_id=51)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert "draft=" in final_call.text
+
+    updated = await draft_flow.store.get_draft(draft_id)
+    assert updated is not None
+    assert updated.id == draft_id
+    assert updated.kind == "text"
+    assert updated.text == "Новый личный черновик"
+    assert await draft_flow.store.get_draft_media(draft_id) == []
+
+
+@pytest.mark.asyncio
+async def test_draft_edit_command_updates_team_draft_in_place(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        team_id=draft_flow.owner_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Старый командный черновик",
+    )
+
+    await draft_flow.feed_message(f"/draft_edit {draft_id[:8]}", update_id=1, message_id=10)
+
+    assert await draft_flow.get_state() == DraftStates.editing_post.state
+    prompt_call = draft_flow.last_call()
+    assert isinstance(prompt_call, SendMessage)
+    assert "Owners" in prompt_call.text
+
+    await draft_flow.feed_photo("photo-edit-1", update_id=2, message_id=11, caption="Новый командный медиа черновик")
+    await draft_flow.feed_callback("smedia:done", update_id=3, message_id=51)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert "Owners" in final_call.text
+
+    updated = await draft_flow.store.get_draft(draft_id)
+    assert updated is not None
+    assert updated.id == draft_id
+    assert updated.team_id == draft_flow.owner_team_id
+    assert updated.kind == "media"
+    assert updated.caption == "Новый командный медиа черновик"
+    assert updated.text is None
+    assert await draft_flow.store.get_draft_media(draft_id) == [{"type": "photo", "file_id": "photo-edit-1"}]
+
+
+@pytest.mark.asyncio
+async def test_draft_edit_command_rejects_viewer_role(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        team_id=draft_flow.viewer_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Недоступный для редактирования",
+    )
+
+    await draft_flow.feed_message(f"/draft_edit {draft_id[:8]}", update_id=1, message_id=10)
+
+    assert await draft_flow.get_state() is None
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "draft_missing")
+
+    unchanged = await draft_flow.store.get_draft(draft_id)
+    assert unchanged is not None
+    assert unchanged.text == "Недоступный для редактирования"
+
+
+@pytest.mark.asyncio
 async def test_drafts_filter_switches_to_team_scope_without_leaking_personal_drafts(draft_flow: DraftFlowHarness) -> None:
     personal_id = await draft_flow.store.create_draft(
         author_user_id=USER_ID,

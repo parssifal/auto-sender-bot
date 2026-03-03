@@ -108,6 +108,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Where: {where}\n"
             "- Type: {kind}"
         ),
+        "draft_edit_prompt": (
+            "Editing draft={draft_id}\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Current type: {kind}\n"
+            "Send new text, photo, or video to replace the content. Tap Done when ready."
+        ),
+        "draft_updated_ok": (
+            "Draft updated. draft={draft_id}\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Type: {kind}"
+        ),
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -316,6 +329,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "draft_create_scope_invalid": "Этот вариант сохранения черновика больше недоступен.",
         "draft_created_ok": (
             "Черновик сохранён. draft={draft_id}\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Тип: {kind}"
+        ),
+        "draft_edit_prompt": (
+            "Редактирование draft={draft_id}\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Текущий тип: {kind}\n"
+            "Отправьте новый текст, фото или видео, чтобы заменить содержимое. Когда всё готово, нажмите «Готово»."
+        ),
+        "draft_updated_ok": (
+            "Черновик обновлён. draft={draft_id}\n"
             "- Область: {location}\n"
             "- Куда: {where}\n"
             "- Тип: {kind}"

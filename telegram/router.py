@@ -72,6 +72,7 @@ class DraftStates(StatesGroup):
     choosing_destination = State()
     collecting_post = State()
     choosing_scope = State()
+    editing_post = State()
 
 
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
@@ -321,6 +322,21 @@ def _draft_create_scope_kb(teams: list[Team], lang: str) -> InlineKeyboardMarkup
         )
     rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
+    ref = draft_ref.strip().lower()
+    if not ref:
+        return None
+
+    for draft in drafts:
+        if draft.id == ref:
+            return draft.id
+
+    matches = [draft.id for draft in drafts if draft.id.startswith(ref)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def _schedule_quick_labels(lang: str) -> dict[str, str]:
@@ -931,6 +947,98 @@ def build_router(store: StateStore) -> Router:
             reply_markup=_draft_create_scope_kb(writable_teams, lang),
         )
 
+    async def _start_draft_edit(message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
+        lang = await _user_lang(user_id)
+        summary = await _build_draft_summary(draft, lang=lang)
+        await state.clear()
+        await state.update_data(
+            edit_draft_id=draft.id,
+            chat_id=draft.chat_id,
+            team_id=draft.team_id,
+            kind=None,
+            text=None,
+            entities_json=None,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=False,
+            media_items=[],
+            draft_text=None,
+            draft_entities_json=None,
+            text_before_media=False,
+        )
+        await state.set_state(DraftStates.editing_post)
+        await message.answer(
+            tr(
+                lang,
+                "draft_edit_prompt",
+                draft_id=_short_id(draft.id),
+                location=summary["location"],
+                where=summary["where"],
+                kind=summary["kind"],
+            ),
+            reply_markup=_media_collect_kb(lang),
+        )
+
+    async def _update_draft_from_state(message: Message, state: FSMContext, *, user_id: int) -> bool:
+        data = await state.get_data()
+        draft_id = data.get("edit_draft_id")
+        chat_id = data.get("chat_id")
+        team_id = data.get("team_id")
+        kind = data.get("kind")
+        lang = await _user_lang(user_id)
+        if not isinstance(draft_id, str) or not isinstance(chat_id, int) or kind not in {"text", "media"}:
+            return False
+
+        try:
+            if kind == "text":
+                updated = await store.update_draft(
+                    draft_id,
+                    user_id,
+                    chat_id=chat_id,
+                    kind="text",
+                    text=data.get("text"),
+                    entities_json=data.get("entities_json"),
+                )
+                kind_label = tr(lang, "kind_text")
+            else:
+                media_items: list[dict[str, str]] = list(data.get("media_items", []))
+                updated = await store.update_draft(
+                    draft_id,
+                    user_id,
+                    chat_id=chat_id,
+                    kind="media",
+                    caption=data.get("caption"),
+                    caption_entities_json=data.get("caption_entities_json"),
+                    caption_above=bool(data.get("caption_above", False)),
+                    media_items=media_items,
+                )
+                kind_label = tr(lang, "kind_media", count=len(media_items))
+        except ValueError:
+            return False
+
+        if not updated:
+            return False
+
+        team_name: str | None = None
+        if isinstance(team_id, str):
+            team = await store.get_team(team_id)
+            team_name = team.name if team is not None else _short_id(team_id)
+        where = await store.get_destination_title(chat_id) or str(chat_id)
+
+        await state.clear()
+        await message.answer(
+            tr(
+                lang,
+                "draft_updated_ok",
+                draft_id=_short_id(draft_id),
+                location=_draft_location_label(lang, team_name),
+                where=where,
+                kind=kind_label,
+            ),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
+
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -992,6 +1100,32 @@ def build_router(store: StateStore) -> Router:
         await state.set_state(DraftStates.choosing_destination)
         await state.update_data(dest_page=0)
         await _render_destinations(message, page=0, user_id=message.from_user.id, select_prefix="ddsel", page_prefix="ddpage")
+
+    @router.message(Command("draft_edit"))
+    async def cmd_draft_edit(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await _render_drafts(message, user_id=message.from_user.id, scope="all", page=0, edit=False)
+            return
+
+        draft_ref = parts[1].strip().lower()
+        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
+        draft_id = _resolve_draft_id(drafts, draft_ref)
+        if draft_id is None:
+            lang = await _user_lang(message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        draft = await store.get_draft(draft_id)
+        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
+        if draft is None or permissions is None or not permissions.can_edit:
+            lang = await _user_lang(message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await _start_draft_edit(message, state, user_id=message.from_user.id, draft=draft)
 
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
@@ -1117,7 +1251,7 @@ def build_router(store: StateStore) -> Router:
         )
 
     @router.callback_query(F.data.startswith("dact:"))
-    async def cb_draft_action_placeholder(query: CallbackQuery) -> None:
+    async def cb_draft_action(query: CallbackQuery, state: FSMContext) -> None:
         parts = query.data.split(":", 2)
         if len(parts) != 3:
             await query.answer()
@@ -1126,15 +1260,23 @@ def build_router(store: StateStore) -> Router:
         action = parts[1]
         draft_id = parts[2]
         permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
+        lang = await _user_lang(query.from_user.id)
+        if action == "edit":
+            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_edit else None
+            if draft is None or permissions is None or not permissions.can_edit:
+                await query.answer(tr(lang, "draft_missing"), show_alert=True)
+                return
+
+            await query.answer()
+            await _start_draft_edit(query.message, state, user_id=query.from_user.id, draft=draft)
+            return
+
         allowed = False
         if permissions is not None:
             allowed = (
-                (action == "edit" and permissions.can_edit)
-                or (action == "delete" and permissions.can_delete)
+                (action == "delete" and permissions.can_delete)
                 or (action == "publish" and permissions.can_publish)
             )
-
-        lang = await _user_lang(query.from_user.id)
         await query.answer(
             tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
             show_alert=True,
@@ -1595,6 +1737,7 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(DraftStates.editing_post)
     @router.message(DraftStates.collecting_post)
     @router.message(RepeatStates.collecting_post)
     @router.message(ScheduleStates.collecting_post)
@@ -1677,6 +1820,7 @@ def build_router(store: StateStore) -> Router:
             ScheduleStates.collecting_post.state,
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
+            DraftStates.editing_post.state,
         }:
             await query.answer()
             return
@@ -1684,6 +1828,8 @@ def build_router(store: StateStore) -> Router:
         await query.answer()
         if current_state == RepeatStates.collecting_post.state:
             collecting_state = RepeatStates.collecting_post
+        elif current_state == DraftStates.editing_post.state:
+            collecting_state = DraftStates.editing_post
         elif current_state == DraftStates.collecting_post.state:
             collecting_state = DraftStates.collecting_post
         else:
@@ -1710,6 +1856,7 @@ def build_router(store: StateStore) -> Router:
             ScheduleStates.collecting_post.state,
             RepeatStates.collecting_post.state,
             DraftStates.collecting_post.state,
+            DraftStates.editing_post.state,
         }:
             await query.answer()
             return
@@ -1729,6 +1876,12 @@ def build_router(store: StateStore) -> Router:
                 text=None,
                 entities_json=None,
             )
+            if current_state == DraftStates.editing_post.state:
+                if await _update_draft_from_state(query.message, state, user_id=query.from_user.id):
+                    return
+                await state.clear()
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                return
             if current_state == DraftStates.collecting_post.state:
                 await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
                 return
@@ -1744,6 +1897,12 @@ def build_router(store: StateStore) -> Router:
                 caption_entities_json=None,
                 caption_above=False,
             )
+            if current_state == DraftStates.editing_post.state:
+                if await _update_draft_from_state(query.message, state, user_id=query.from_user.id):
+                    return
+                await state.clear()
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                return
             if current_state == DraftStates.collecting_post.state:
                 await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
                 return
