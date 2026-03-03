@@ -173,6 +173,78 @@ def _destinations_kb(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _normalize_selected_chat_ids(raw_value: object) -> list[int]:
+    if not isinstance(raw_value, list):
+        return []
+
+    selected: set[int] = set()
+    for item in raw_value:
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            selected.add(item)
+            continue
+        if isinstance(item, str):
+            try:
+                selected.add(int(item))
+            except ValueError:
+                continue
+    return sorted(selected)
+
+
+def _toggle_selected_chat_ids(selected_chat_ids: list[int], chat_id: int, enabled: bool) -> list[int]:
+    selected = set(selected_chat_ids)
+    if enabled:
+        selected.add(chat_id)
+    else:
+        selected.discard(chat_id)
+    return sorted(selected)
+
+
+def _broadcast_destinations_kb(
+    destinations: list[Destination],
+    *,
+    page: int,
+    has_more: bool,
+    selected_chat_ids: list[int],
+    lang: str,
+) -> InlineKeyboardMarkup:
+    selected = set(selected_chat_ids)
+    buttons: list[list[InlineKeyboardButton]] = []
+    for destination in destinations:
+        title = _destination_label(destination.title, destination.username)
+        is_selected = destination.chat_id in selected
+        checkbox = "☑️" if is_selected else "⬜️"
+        action = "off" if is_selected else "on"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{checkbox} {title[:56]}",
+                    callback_data=f"bc:{destination.chat_id}:{action}",
+                )
+            ]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"bcpage:{page-1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"bcpage:{page+1}"))
+    if nav:
+        buttons.append(nav)
+
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text=f"{tr(lang, 'btn_done')} ({len(selected_chat_ids)})",
+                callback_data="bcdone",
+            )
+        ]
+    )
+    buttons.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def _repeat_interval_kb(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -748,6 +820,58 @@ def build_router(store: StateStore) -> Router:
                 page_prefix=page_prefix,
             ),
         )
+
+    async def _list_all_user_destinations(user_id: int) -> list[Destination]:
+        total = await store.count_user_destinations(user_id)
+        if total <= 0:
+            return []
+        return await store.list_user_destinations(user_id=user_id, offset=0, limit=total)
+
+    async def _render_broadcast_destinations(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        page: int,
+        edit: bool,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        page_size = 5
+        current_page = max(page, 0)
+
+        while True:
+            offset = current_page * page_size
+            items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
+            if items or current_page == 0:
+                break
+            current_page -= 1
+
+        has_more = len(items) > page_size
+        items = items[:page_size]
+        await state.update_data(dest_page=current_page)
+        if not items:
+            if edit:
+                await _clear_inline_markup(message)
+            await message.answer(
+                tr(lang, "no_destinations"),
+                reply_markup=await _main_menu_for(user_id),
+            )
+            return
+
+        data = await state.get_data()
+        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
+        text = tr(lang, "broadcast_choose_destinations", count=len(selected_chat_ids))
+        reply_markup = _broadcast_destinations_kb(
+            items,
+            page=current_page,
+            has_more=has_more,
+            selected_chat_ids=selected_chat_ids,
+            lang=lang,
+        )
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
 
     async def _move_repeat_to_destination_selection(
         message: Message,
@@ -1823,6 +1947,110 @@ def build_router(store: StateStore) -> Router:
                 reply_markup=_draft_create_scope_kb(await store.list_writable_teams(query.from_user.id), lang),
             )
             return
+
+    @router.callback_query(F.data.startswith("bcpage:"))
+    async def cb_broadcast_dest_page(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != BroadcastStates.choosing_destinations.state:
+            await query.answer()
+            return
+
+        try:
+            page = int(query.data.split(":", 1)[1])
+        except ValueError:
+            await query.answer()
+            return
+
+        await query.answer()
+        await _render_broadcast_destinations(
+            query.message,
+            state,
+            user_id=query.from_user.id,
+            page=page,
+            edit=True,
+        )
+
+    @router.callback_query(F.data.startswith("bc:"))
+    async def cb_broadcast_dest_toggle(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != BroadcastStates.choosing_destinations.state:
+            await query.answer()
+            return
+
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer()
+            return
+
+        try:
+            chat_id = int(parts[1])
+        except ValueError:
+            await query.answer()
+            return
+
+        enabled_token = parts[2]
+        if enabled_token not in {"on", "off"}:
+            await query.answer()
+            return
+
+        all_destinations = await _list_all_user_destinations(query.from_user.id)
+        if chat_id not in {destination.chat_id for destination in all_destinations}:
+            await query.answer(tr(await _user_lang(query.from_user.id), "broadcast_destination_missing"), show_alert=True)
+            return
+
+        data = await state.get_data()
+        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
+        next_selected_chat_ids = _toggle_selected_chat_ids(selected_chat_ids, chat_id, enabled_token == "on")
+        page = int(data.get("dest_page", 0) or 0)
+        await state.update_data(selected_chat_ids=next_selected_chat_ids)
+        await query.answer()
+        await _render_broadcast_destinations(
+            query.message,
+            state,
+            user_id=query.from_user.id,
+            page=page,
+            edit=True,
+        )
+
+    @router.callback_query(F.data == "bcdone")
+    async def cb_broadcast_dest_done(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != BroadcastStates.choosing_destinations.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        tz_name = await store.get_user_timezone(query.from_user.id)
+        if not tz_name:
+            await query.answer()
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await state.clear()
+            return
+
+        data = await state.get_data()
+        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
+        valid_chat_ids = {destination.chat_id for destination in await _list_all_user_destinations(query.from_user.id)}
+        selected_chat_ids = [chat_id for chat_id in selected_chat_ids if chat_id in valid_chat_ids]
+        await state.update_data(selected_chat_ids=selected_chat_ids)
+        if not selected_chat_ids:
+            await query.answer(tr(lang, "broadcast_choose_one"), show_alert=True)
+            return
+
+        await state.update_data(
+            selected_date=None,
+            calendar_year=None,
+            calendar_month=None,
+            scheduled_at_utc=None,
+            scheduled_local=None,
+        )
+        await state.set_state(BroadcastStates.entering_datetime)
+        await query.answer()
+        await _clear_inline_markup(query.message)
+        await _prompt_for_datetime(
+            query.message,
+            lang=lang,
+            tz_name=tz_name,
+            text=tr(lang, "enter_datetime"),
+            data=await state.get_data(),
+            state_name=BroadcastStates.entering_datetime.state,
+        )
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:

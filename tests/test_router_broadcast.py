@@ -9,7 +9,7 @@ import pytest_asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import EditMessageText, SendMessage
+from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, SendMessage
 from aiogram.types import Update
 
 from core.db import open_db
@@ -21,6 +21,7 @@ USER_ID = 1001
 PRIVATE_CHAT_ID = USER_ID
 BOT_ID = 42
 DESTINATION_CHAT_IDS = [-2001, -2002]
+ALL_DESTINATION_CHAT_IDS = [-2001, -2002, -2003, -2004, -2005, -2006]
 
 
 class FakeBot(Bot):
@@ -94,6 +95,16 @@ async def broadcast_flow() -> BroadcastFlowHarness:
     await store.ensure_user(USER_ID)
     await store.set_user_language(USER_ID, "ru")
     await store.set_user_timezone(USER_ID, "Europe/Moscow")
+    for index, chat_id in enumerate(ALL_DESTINATION_CHAT_IDS, start=1):
+        await store.upsert_destination(
+            chat_id,
+            "channel",
+            f"Channel {index}",
+            f"channel_{index}",
+            "administrator",
+            True,
+        )
+        await store.link_user_destination(USER_ID, chat_id, "link")
 
     bot = FakeBot()
     dispatcher = Dispatcher(storage=MemoryStorage())
@@ -110,14 +121,118 @@ async def broadcast_flow() -> BroadcastFlowHarness:
     await bot.session.close()
 
 
-def _broadcast_seed_data() -> dict[str, Any]:
+def _broadcast_seed_data(*, selected_chat_ids: list[int] | None = None, page: int = 0) -> dict[str, Any]:
     return {
-        "selected_chat_ids": DESTINATION_CHAT_IDS.copy(),
-        "dest_page": 0,
+        "selected_chat_ids": DESTINATION_CHAT_IDS.copy() if selected_chat_ids is None else selected_chat_ids,
+        "dest_page": page,
         "selected_date": None,
         "calendar_year": None,
         "calendar_month": None,
     }
+
+
+def _callback_data(call: Any) -> list[str]:
+    return [
+        button.callback_data
+        for row in call.reply_markup.inline_keyboard
+        for button in row
+        if getattr(button, "callback_data", None) is not None
+    ]
+
+
+def _destination_buttons(call: Any) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for row in call.reply_markup.inline_keyboard:
+        for button in row:
+            callback_data = getattr(button, "callback_data", None)
+            if isinstance(callback_data, str) and callback_data.startswith("bc:"):
+                out.append((button.text, callback_data))
+    return out
+
+
+@pytest.mark.asyncio
+async def test_broadcast_destination_picker_renders_checkboxes_and_pagination(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(BroadcastStates.choosing_destinations.state, data=_broadcast_seed_data(selected_chat_ids=[]))
+
+    await broadcast_flow.feed_callback("bcpage:0", update_id=1, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.choosing_destinations.state
+    call = broadcast_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    assert call.text == tr("ru", "broadcast_choose_destinations", count=0)
+    assert "bcpage:1" in _callback_data(call)
+    assert "bcdone" in _callback_data(call)
+    assert "scancel" in _callback_data(call)
+    destination_buttons = _destination_buttons(call)
+    assert len(destination_buttons) == 5
+    assert all(text.startswith("⬜️ ") for text, _ in destination_buttons)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_toggle_updates_selected_channels_and_count(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(BroadcastStates.choosing_destinations.state, data=_broadcast_seed_data(selected_chat_ids=[]))
+    await broadcast_flow.feed_callback("bcpage:0", update_id=1, message_id=50)
+
+    first_label, first_callback = _destination_buttons(broadcast_flow.last_call())[0]
+    assert first_label.startswith("⬜️ ")
+    selected_chat_id = int(first_callback.split(":")[1])
+
+    await broadcast_flow.feed_callback(first_callback, update_id=2, message_id=50)
+
+    data = await broadcast_flow.get_data()
+    assert data["selected_chat_ids"] == [selected_chat_id]
+    call = broadcast_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    assert call.text == tr("ru", "broadcast_choose_destinations", count=1)
+    assert f"bc:{selected_chat_id}:off" in _callback_data(call)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_pagination_keeps_selected_channels(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(BroadcastStates.choosing_destinations.state, data=_broadcast_seed_data(selected_chat_ids=[]))
+    await broadcast_flow.feed_callback("bcpage:0", update_id=1, message_id=50)
+
+    selected_chat_id = int(_destination_buttons(broadcast_flow.last_call())[0][1].split(":")[1])
+    await broadcast_flow.feed_callback(f"bc:{selected_chat_id}:on", update_id=2, message_id=50)
+    await broadcast_flow.feed_callback("bcpage:1", update_id=3, message_id=50)
+
+    data = await broadcast_flow.get_data()
+    assert data["selected_chat_ids"] == [selected_chat_id]
+    call = broadcast_flow.last_call()
+    assert isinstance(call, EditMessageText)
+    assert call.text == tr("ru", "broadcast_choose_destinations", count=1)
+    assert "bcpage:0" in _callback_data(call)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_done_requires_non_empty_selection(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(BroadcastStates.choosing_destinations.state, data=_broadcast_seed_data(selected_chat_ids=[]))
+
+    await broadcast_flow.feed_callback("bcdone", update_id=1, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.choosing_destinations.state
+    data = await broadcast_flow.get_data()
+    assert data["selected_chat_ids"] == []
+    alert_call = broadcast_flow.last_call()
+    assert isinstance(alert_call, AnswerCallbackQuery)
+    assert alert_call.text == tr("ru", "broadcast_choose_one")
+    assert alert_call.show_alert is True
+
+
+@pytest.mark.asyncio
+async def test_broadcast_done_moves_to_datetime_prompt(broadcast_flow: BroadcastFlowHarness) -> None:
+    await broadcast_flow.set_state(BroadcastStates.choosing_destinations.state, data=_broadcast_seed_data())
+
+    await broadcast_flow.feed_callback("bcdone", update_id=1, message_id=50)
+
+    assert await broadcast_flow.get_state() == BroadcastStates.entering_datetime.state
+    data = await broadcast_flow.get_data()
+    assert data["selected_chat_ids"] == sorted(DESTINATION_CHAT_IDS)
+    assert data["selected_date"] is None
+    assert isinstance(broadcast_flow.bot.calls[-2], EditMessageReplyMarkup)
+    prompt_call = broadcast_flow.last_call()
+    assert isinstance(prompt_call, SendMessage)
+    assert prompt_call.text == tr("ru", "enter_datetime")
 
 
 @pytest.mark.asyncio

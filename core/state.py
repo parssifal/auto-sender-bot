@@ -527,7 +527,7 @@ class StateStore:
             SELECT *
             FROM teams
             WHERE owner_user_id=?
-            ORDER BY created_at DESC, id ASC
+            ORDER BY created_at DESC, rowid DESC, id ASC
             LIMIT ? OFFSET ?
             """,
             (owner_user_id, limit, offset),

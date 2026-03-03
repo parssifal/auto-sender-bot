@@ -23,6 +23,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "If the channel is private without @username, use /destinations and link it by forwarding a message."
         ),
         "choose_destination": "Choose a channel/chat:",
+        "broadcast_choose_destinations": "Choose one or more channels/chats.\nSelected: {count}",
+        "broadcast_choose_one": "Choose at least one channel/chat first.",
+        "broadcast_destination_missing": "This channel/chat is no longer available. Refresh the list.",
         "timezone_required": "Set timezone first: /timezone",
         "enter_datetime": (
             "Enter date and time: `DD.MM.YYYY HH:MM` (for example `12.03.2026 12:15`).\n"
@@ -309,6 +312,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Если канал приватный без @username — используйте /destinations и привязку через пересланное сообщение."
         ),
         "choose_destination": "Выберите канал/чат:",
+        "broadcast_choose_destinations": "Выберите один или несколько каналов/чатов.\nВыбрано: {count}",
+        "broadcast_choose_one": "Сначала выберите хотя бы один канал/чат.",
+        "broadcast_destination_missing": "Этот канал/чат больше недоступен. Обновите список.",
         "timezone_required": "Сначала задайте часовой пояс: /timezone",
         "enter_datetime": (
             "Введите дату и время: `ДД.ММ.ГГГГ ЧЧ:ММ` (например `12.03.2026 12:15`).\n"
