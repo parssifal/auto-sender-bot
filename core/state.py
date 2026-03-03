@@ -38,6 +38,22 @@ class TeamMember:
 
 
 @dataclass(frozen=True)
+class DraftRow:
+    id: str
+    team_id: str | None
+    author_user_id: int
+    chat_id: int
+    kind: str
+    text: str | None
+    entities_json: str | None
+    caption: str | None
+    caption_entities_json: str | None
+    caption_above: int | None
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
 class ScheduledPostRow:
     id: str
     user_id: int
@@ -166,6 +182,40 @@ class StateStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_single_owner
                 ON team_members(team_id)
                 WHERE role='owner';
+
+            CREATE TABLE IF NOT EXISTS drafts (
+                id TEXT PRIMARY KEY,
+                team_id TEXT NULL,
+                author_user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                text TEXT NULL,
+                entities_json TEXT NULL,
+                caption TEXT NULL,
+                caption_entities_json TEXT NULL,
+                caption_above INTEGER NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                CHECK (kind IN ('text', 'media')),
+                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_drafts_author_created
+                ON drafts(author_user_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_drafts_team_created
+                ON drafts(team_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS draft_media (
+                draft_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                file_id TEXT NOT NULL,
+                PRIMARY KEY (draft_id, idx),
+                FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
+            );
 
             CREATE TABLE IF NOT EXISTS scheduled_posts (
                 id TEXT PRIMARY KEY,
@@ -499,6 +549,99 @@ class StateStore:
             (team_id,),
         )
         return [self._row_to_team_member(row) for row in rows]
+
+    async def create_draft(
+        self,
+        *,
+        author_user_id: int,
+        chat_id: int,
+        kind: str,
+        team_id: str | None = None,
+        text: str | None = None,
+        entities_json: str | None = None,
+        caption: str | None = None,
+        caption_entities_json: str | None = None,
+        caption_above: bool | None = None,
+        media_items: list[dict[str, str]] | None = None,
+    ) -> str:
+        if kind not in {"text", "media"}:
+            raise ValueError(f"Unsupported draft kind: {kind}")
+        if kind == "text" and not str(text or "").strip():
+            raise ValueError("Text draft must contain text")
+
+        items = list(media_items or [])
+        if kind == "media" and not items:
+            raise ValueError("Media draft must contain at least one media item")
+
+        now = int(time.time())
+        draft_id = uuid.uuid4().hex
+
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute(
+                """
+                INSERT INTO drafts(
+                    id,
+                    team_id,
+                    author_user_id,
+                    chat_id,
+                    kind,
+                    text,
+                    entities_json,
+                    caption,
+                    caption_entities_json,
+                    caption_above,
+                    created_at,
+                    updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft_id,
+                    team_id,
+                    author_user_id,
+                    chat_id,
+                    kind,
+                    text if kind == "text" else None,
+                    entities_json if kind == "text" else None,
+                    caption if kind == "media" else None,
+                    caption_entities_json if kind == "media" else None,
+                    None if kind != "media" or caption_above is None else int(caption_above),
+                    now,
+                    now,
+                ),
+            )
+
+            for idx, item in enumerate(items):
+                await self._conn.execute(
+                    "INSERT INTO draft_media(draft_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
+                    (draft_id, idx, item["type"], item["file_id"]),
+                )
+
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return draft_id
+
+    async def get_draft(self, draft_id: str) -> DraftRow | None:
+        row = await self._execute_fetchone(
+            "SELECT * FROM drafts WHERE id=?",
+            (draft_id,),
+        )
+        return None if row is None else self._row_to_draft(row)
+
+    async def get_draft_media(self, draft_id: str) -> list[dict[str, str]]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT idx, type, file_id
+            FROM draft_media
+            WHERE draft_id=?
+            ORDER BY idx ASC
+            """,
+            (draft_id,),
+        )
+        return [{"type": str(row["type"]), "file_id": str(row["file_id"])} for row in rows]
 
     async def create_scheduled_text_post(
         self,
@@ -1167,6 +1310,23 @@ class StateStore:
             team_id=str(row["team_id"]),
             user_id=int(row["user_id"]),
             role=str(row["role"]),
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_draft(row: aiosqlite.Row) -> DraftRow:
+        return DraftRow(
+            id=str(row["id"]),
+            team_id=None if row["team_id"] is None else str(row["team_id"]),
+            author_user_id=int(row["author_user_id"]),
+            chat_id=int(row["chat_id"]),
+            kind=str(row["kind"]),
+            text=row["text"],
+            entities_json=row["entities_json"],
+            caption=row["caption"],
+            caption_entities_json=row["caption_entities_json"],
+            caption_above=row["caption_above"],
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
         )
