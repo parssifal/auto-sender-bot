@@ -375,6 +375,88 @@ async def test_draft_edit_command_rejects_viewer_role(draft_flow: DraftFlowHarne
 
 
 @pytest.mark.asyncio
+async def test_draft_delete_via_detail_confirmation_updates_list(draft_flow: DraftFlowHarness) -> None:
+    kept_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Оставшийся черновик",
+    )
+    deleted_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="media",
+        caption="Удаляемый черновик",
+        media_items=[{"type": "photo", "file_id": "photo-delete-1"}],
+    )
+
+    await draft_flow.feed_message("/drafts", update_id=1, message_id=10)
+    await draft_flow.feed_callback(f"dopen:all:0:{deleted_id}", update_id=2, message_id=50)
+    await draft_flow.feed_callback(f"ddelask:all:0:{deleted_id}", update_id=3, message_id=50)
+
+    confirm_call = draft_flow.last_call()
+    assert isinstance(confirm_call, EditMessageText)
+    assert tr("ru", "draft_delete_confirm", draft_id=_short_id(deleted_id), location="", where="", kind="").startswith(
+        "Удалить"
+    )
+    callbacks = _callback_data(confirm_call)
+    assert f"ddelyes:all:0:{deleted_id}" in callbacks
+    assert f"dopen:all:0:{deleted_id}" in callbacks
+
+    await draft_flow.feed_callback(f"ddelyes:all:0:{deleted_id}", update_id=4, message_id=50)
+
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, EditMessageText)
+    assert _short_id(kept_id) in final_call.text
+    assert _short_id(deleted_id) not in final_call.text
+    assert await draft_flow.store.get_draft(deleted_id) is None
+    assert await draft_flow.store.get_draft_media(deleted_id) == []
+
+
+@pytest.mark.asyncio
+async def test_draft_delete_command_confirms_and_removes_draft(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=USER_ID,
+        team_id=draft_flow.owner_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Черновик для удаления",
+    )
+
+    await draft_flow.feed_message(f"/draft_delete {draft_id[:8]}", update_id=1, message_id=10)
+
+    confirm_call = draft_flow.last_call()
+    assert isinstance(confirm_call, SendMessage)
+    assert _short_id(draft_id) in confirm_call.text
+    assert f"ddelcmd:{draft_id}" in _callback_data(confirm_call)
+
+    await draft_flow.feed_callback(f"ddelcmd:{draft_id}", update_id=2, message_id=50)
+
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, EditMessageText)
+    assert final_call.text == tr("ru", "draft_delete_ok", draft_id=_short_id(draft_id))
+    assert await draft_flow.store.get_draft(draft_id) is None
+
+
+@pytest.mark.asyncio
+async def test_draft_delete_command_rejects_viewer_role(draft_flow: DraftFlowHarness) -> None:
+    draft_id = await draft_flow.store.create_draft(
+        author_user_id=ALT_USER_ID,
+        team_id=draft_flow.viewer_team_id,
+        chat_id=DESTINATION_CHAT_ID,
+        kind="text",
+        text="Удалять нельзя",
+    )
+
+    await draft_flow.feed_message(f"/draft_delete {draft_id[:8]}", update_id=1, message_id=10)
+
+    call = draft_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "draft_missing")
+    assert await draft_flow.store.get_draft(draft_id) is not None
+
+
+@pytest.mark.asyncio
 async def test_drafts_filter_switches_to_team_scope_without_leaking_personal_drafts(draft_flow: DraftFlowHarness) -> None:
     personal_id = await draft_flow.store.create_draft(
         author_user_id=USER_ID,
@@ -457,7 +539,7 @@ async def test_draft_detail_shows_manager_actions_for_personal_draft(draft_flow:
     assert isinstance(call, EditMessageText)
     callbacks = _callback_data(call)
     assert f"dact:edit:{draft_id}" in callbacks
-    assert f"dact:delete:{draft_id}" in callbacks
+    assert f"ddelask:all:0:{draft_id}" in callbacks
     assert f"dact:publish:{draft_id}" in callbacks
     assert f"dback:all:0" in callbacks
 

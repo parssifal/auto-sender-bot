@@ -121,6 +121,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Where: {where}\n"
             "- Type: {kind}"
         ),
+        "draft_delete_usage": "Usage: /draft_delete <draft_id>",
+        "draft_delete_confirm": (
+            "Delete draft={draft_id}?\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Type: {kind}"
+        ),
+        "draft_delete_ok": "Draft deleted. draft={draft_id}",
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -346,6 +354,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Куда: {where}\n"
             "- Тип: {kind}"
         ),
+        "draft_delete_usage": "Использование: /draft_delete <draft_id>",
+        "draft_delete_confirm": (
+            "Удалить draft={draft_id}?\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Тип: {kind}"
+        ),
+        "draft_delete_ok": "Черновик удалён. draft={draft_id}",
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",

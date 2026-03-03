@@ -297,7 +297,7 @@ def _draft_detail_kb(*, draft_id: str, permissions: DraftPermissions, scope: str
         )
     if permissions.can_delete:
         primary_actions.append(
-            InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"dact:delete:{draft_id}")
+            InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"ddelask:{scope}:{page}:{draft_id}")
         )
     if primary_actions:
         rows.append(primary_actions)
@@ -305,6 +305,24 @@ def _draft_detail_kb(*, draft_id: str, permissions: DraftPermissions, scope: str
         rows.append([InlineKeyboardButton(text=tr(lang, "btn_draft_publish"), callback_data=f"dact:publish:{draft_id}")])
     rows.append([InlineKeyboardButton(text=tr(lang, "btn_back"), callback_data=f"dback:{_normalize_draft_scope(scope)}:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _draft_delete_confirm_kb(*, draft_id: str, scope: str, page: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"ddelyes:{scope}:{page}:{draft_id}")],
+            [InlineKeyboardButton(text=tr(lang, "btn_back"), callback_data=f"dopen:{scope}:{page}:{draft_id}")],
+        ]
+    )
+
+
+def _draft_delete_command_kb(*, draft_id: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=tr(lang, "btn_draft_delete"), callback_data=f"ddelcmd:{draft_id}")],
+            [InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")],
+        ]
+    )
 
 
 def _draft_create_scope_kb(teams: list[Team], lang: str) -> InlineKeyboardMarkup:
@@ -873,6 +891,39 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
+    async def _render_draft_delete_confirm(
+        message: Message,
+        *,
+        user_id: int,
+        draft: DraftRow,
+        scope: str | None,
+        page: int | None,
+        edit: bool,
+    ) -> None:
+        lang = await _user_lang(user_id)
+        summary = await _build_draft_summary(draft, lang=lang)
+        text = tr(
+            lang,
+            "draft_delete_confirm",
+            draft_id=_short_id(draft.id),
+            location=summary["location"],
+            where=summary["where"],
+            kind=summary["kind"],
+        )
+        if scope is None or page is None:
+            reply_markup = _draft_delete_command_kb(draft_id=draft.id, lang=lang)
+        else:
+            reply_markup = _draft_delete_confirm_kb(
+                draft_id=draft.id,
+                scope=_normalize_draft_scope(scope),
+                page=page,
+                lang=lang,
+            )
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
     async def _save_draft_from_state(
         message: Message,
         state: FSMContext,
@@ -1127,6 +1178,38 @@ def build_router(store: StateStore) -> Router:
 
         await _start_draft_edit(message, state, user_id=message.from_user.id, draft=draft)
 
+    @router.message(Command("draft_delete"))
+    async def cmd_draft_delete(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        lang = await _user_lang(message.from_user.id)
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await message.answer(tr(lang, "draft_delete_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        draft_ref = parts[1].strip().lower()
+        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
+        draft_id = _resolve_draft_id(drafts, draft_ref)
+        if draft_id is None:
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        draft = await store.get_draft(draft_id)
+        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
+        if draft is None or permissions is None or not permissions.can_delete:
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await _render_draft_delete_confirm(
+            message,
+            user_id=message.from_user.id,
+            draft=draft,
+            scope=None,
+            page=None,
+            edit=False,
+        )
+
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
@@ -1248,6 +1331,76 @@ def build_router(store: StateStore) -> Router:
             draft=draft,
             permissions=permissions,
             edit=True,
+        )
+
+    @router.callback_query(F.data.startswith("ddelask:"))
+    async def cb_draft_delete_prompt(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 3)
+        if len(parts) != 4:
+            await query.answer()
+            return
+
+        scope = _normalize_draft_scope(parts[1])
+        try:
+            page = int(parts[2])
+        except ValueError:
+            await query.answer()
+            return
+
+        draft_id = parts[3]
+        lang = await _user_lang(query.from_user.id)
+        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
+        draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_delete else None
+        if draft is None or permissions is None or not permissions.can_delete:
+            await query.answer(tr(lang, "draft_missing"), show_alert=True)
+            await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
+            return
+
+        await query.answer()
+        await _render_draft_delete_confirm(
+            query.message,
+            user_id=query.from_user.id,
+            draft=draft,
+            scope=scope,
+            page=page,
+            edit=True,
+        )
+
+    @router.callback_query(F.data.startswith("ddelyes:"))
+    async def cb_draft_delete_confirm(query: CallbackQuery) -> None:
+        parts = query.data.split(":", 3)
+        if len(parts) != 4:
+            await query.answer()
+            return
+
+        scope = _normalize_draft_scope(parts[1])
+        try:
+            page = int(parts[2])
+        except ValueError:
+            await query.answer()
+            return
+
+        draft_id = parts[3]
+        lang = await _user_lang(query.from_user.id)
+        ok = await store.delete_draft(draft_id, query.from_user.id)
+        await query.answer(
+            tr(lang, "draft_delete_ok", draft_id=_short_id(draft_id)) if ok else tr(lang, "draft_missing"),
+            show_alert=not ok,
+        )
+        await _render_drafts(query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("ddelcmd:"))
+    async def cb_draft_delete_command_confirm(query: CallbackQuery) -> None:
+        draft_id = query.data.split(":", 1)[1]
+        lang = await _user_lang(query.from_user.id)
+        ok = await store.delete_draft(draft_id, query.from_user.id)
+        await query.answer(
+            tr(lang, "draft_delete_ok", draft_id=_short_id(draft_id)) if ok else tr(lang, "draft_missing"),
+            show_alert=not ok,
+        )
+        await query.message.edit_text(
+            tr(lang, "draft_delete_ok", draft_id=_short_id(draft_id)) if ok else tr(lang, "draft_missing"),
+            reply_markup=None,
         )
 
     @router.callback_query(F.data.startswith("dact:"))
