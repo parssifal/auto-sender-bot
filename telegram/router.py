@@ -19,7 +19,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
-from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, StateStore
+from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, StateStore, Team
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -66,6 +66,12 @@ class RepeatStates(StatesGroup):
     choosing_destination = State()
     collecting_post = State()
     confirming = State()
+
+
+class DraftStates(StatesGroup):
+    choosing_destination = State()
+    collecting_post = State()
+    choosing_scope = State()
 
 
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
@@ -297,6 +303,23 @@ def _draft_detail_kb(*, draft_id: str, permissions: DraftPermissions, scope: str
     if permissions.can_publish:
         rows.append([InlineKeyboardButton(text=tr(lang, "btn_draft_publish"), callback_data=f"dact:publish:{draft_id}")])
     rows.append([InlineKeyboardButton(text=tr(lang, "btn_back"), callback_data=f"dback:{_normalize_draft_scope(scope)}:{page}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _draft_create_scope_kb(teams: list[Team], lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=tr(lang, "draft_location_personal"), callback_data="dcscope:personal")]
+    ]
+    for team in teams:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "draft_location_team", team_name=team.name)[:60],
+                    callback_data=f"dcscope:team:{team.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -661,6 +684,23 @@ def build_router(store: StateStore) -> Router:
         await state.set_state(RepeatStates.choosing_destination)
         await _render_destinations(message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
 
+    async def _move_to_draft_collection(message: Message, state: FSMContext, *, chat_id: int, lang: str) -> None:
+        await state.update_data(
+            chat_id=chat_id,
+            kind=None,
+            text=None,
+            entities_json=None,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=False,
+            media_items=[],
+            draft_text=None,
+            draft_entities_json=None,
+            text_before_media=False,
+        )
+        await state.set_state(DraftStates.collecting_post)
+        await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
+
     async def _render_repeats(message: Message, *, user_id: int, page: int, edit: bool) -> None:
         lang = await _user_lang(user_id)
         page_size = 5
@@ -817,6 +857,80 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
+    async def _save_draft_from_state(
+        message: Message,
+        state: FSMContext,
+        *,
+        user_id: int,
+        team_id: str | None,
+    ) -> bool:
+        data = await state.get_data()
+        chat_id = data.get("chat_id")
+        kind = data.get("kind")
+        lang = await _user_lang(user_id)
+        if not isinstance(chat_id, int) or kind not in {"text", "media"}:
+            return False
+
+        try:
+            if kind == "text":
+                draft_id = await store.create_draft(
+                    author_user_id=user_id,
+                    team_id=team_id,
+                    chat_id=chat_id,
+                    kind="text",
+                    text=data.get("text"),
+                    entities_json=data.get("entities_json"),
+                )
+                kind_label = tr(lang, "kind_text")
+            else:
+                media_items: list[dict[str, str]] = list(data.get("media_items", []))
+                draft_id = await store.create_draft(
+                    author_user_id=user_id,
+                    team_id=team_id,
+                    chat_id=chat_id,
+                    kind="media",
+                    caption=data.get("caption"),
+                    caption_entities_json=data.get("caption_entities_json"),
+                    caption_above=bool(data.get("caption_above", False)),
+                    media_items=media_items,
+                )
+                kind_label = tr(lang, "kind_media", count=len(media_items))
+        except ValueError:
+            return False
+
+        team_name: str | None = None
+        if team_id is not None:
+            team = await store.get_team(team_id)
+            team_name = team.name if team is not None else _short_id(team_id)
+        where = await store.get_destination_title(chat_id) or str(chat_id)
+
+        await state.clear()
+        await message.answer(
+            tr(
+                lang,
+                "draft_created_ok",
+                draft_id=_short_id(draft_id),
+                location=_draft_location_label(lang, team_name),
+                where=where,
+                kind=kind_label,
+            ),
+            reply_markup=await _main_menu_for(user_id),
+        )
+        return True
+
+    async def _prompt_draft_scope(message: Message, state: FSMContext, *, user_id: int) -> None:
+        lang = await _user_lang(user_id)
+        writable_teams = await store.list_writable_teams(user_id)
+        if not writable_teams:
+            await _save_draft_from_state(message, state, user_id=user_id, team_id=None)
+            return
+
+        await state.set_state(DraftStates.choosing_scope)
+        await message.answer(
+            tr(lang, "draft_create_scope_prompt"),
+            reply_markup=_draft_create_scope_kb(writable_teams, lang),
+        )
+
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -870,6 +984,14 @@ def build_router(store: StateStore) -> Router:
     async def cmd_drafts(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
         await _render_drafts(message, user_id=message.from_user.id, scope="all", page=0, edit=False)
+
+    @router.message(Command("draft_create"))
+    async def cmd_draft_create(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        await state.set_state(DraftStates.choosing_destination)
+        await state.update_data(dest_page=0)
+        await _render_destinations(message, page=0, user_id=message.from_user.id, select_prefix="ddsel", page_prefix="ddpage")
 
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
@@ -1017,6 +1139,66 @@ def build_router(store: StateStore) -> Router:
             tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
             show_alert=True,
         )
+
+    @router.callback_query(F.data.startswith("ddpage:"))
+    async def cb_draft_create_dest_page(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != DraftStates.choosing_destination.state:
+            await query.answer()
+            return
+
+        page = int(query.data.split(":")[1])
+        await state.update_data(dest_page=page)
+        await query.answer()
+        await _render_destinations(
+            query.message,
+            page=page,
+            user_id=query.from_user.id,
+            select_prefix="ddsel",
+            page_prefix="ddpage",
+        )
+
+    @router.callback_query(F.data.startswith("ddsel:"))
+    async def cb_draft_create_dest_select(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != DraftStates.choosing_destination.state:
+            await query.answer()
+            return
+
+        chat_id = int(query.data.split(":")[1])
+        lang = await _user_lang(query.from_user.id)
+        await state.update_data(chat_id=chat_id)
+        await query.answer()
+        await _move_to_draft_collection(query.message, state, chat_id=chat_id, lang=lang)
+
+    @router.callback_query(F.data.startswith("dcscope:"))
+    async def cb_draft_create_scope(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != DraftStates.choosing_scope.state:
+            await query.answer()
+            return
+
+        lang = await _user_lang(query.from_user.id)
+        parts = query.data.split(":", 2)
+        if len(parts) < 2:
+            await query.answer()
+            return
+
+        team_id: str | None = None
+        if parts[1] == "team":
+            if len(parts) != 3:
+                await query.answer()
+                return
+            team_id = parts[2]
+            writable_teams = await store.list_writable_teams(query.from_user.id)
+            if team_id not in {team.id for team in writable_teams}:
+                await query.answer(tr(lang, "draft_create_scope_invalid"), show_alert=True)
+                return
+
+        await query.answer()
+        if not await _save_draft_from_state(query.message, state, user_id=query.from_user.id, team_id=team_id):
+            await query.message.answer(
+                tr(lang, "draft_create_scope_prompt"),
+                reply_markup=_draft_create_scope_kb(await store.list_writable_teams(query.from_user.id), lang),
+            )
+            return
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
@@ -1413,6 +1595,7 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
+    @router.message(DraftStates.collecting_post)
     @router.message(RepeatStates.collecting_post)
     @router.message(ScheduleStates.collecting_post)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
@@ -1489,9 +1672,22 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data == "smedia:clear")
     async def cb_media_clear(query: CallbackQuery, state: FSMContext) -> None:
         lang = await _user_lang(query.from_user.id)
-        await query.answer()
         current_state = await state.get_state()
-        collecting_state = RepeatStates.collecting_post if current_state == RepeatStates.collecting_post.state else ScheduleStates.collecting_post
+        if current_state not in {
+            ScheduleStates.collecting_post.state,
+            RepeatStates.collecting_post.state,
+            DraftStates.collecting_post.state,
+        }:
+            await query.answer()
+            return
+
+        await query.answer()
+        if current_state == RepeatStates.collecting_post.state:
+            collecting_state = RepeatStates.collecting_post
+        elif current_state == DraftStates.collecting_post.state:
+            collecting_state = DraftStates.collecting_post
+        else:
+            collecting_state = ScheduleStates.collecting_post
         await state.update_data(
             media_items=[],
             text=None,
@@ -1509,6 +1705,15 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data == "smedia:done")
     async def cb_media_done(query: CallbackQuery, state: FSMContext) -> None:
+        current_state = await state.get_state()
+        if current_state not in {
+            ScheduleStates.collecting_post.state,
+            RepeatStates.collecting_post.state,
+            DraftStates.collecting_post.state,
+        }:
+            await query.answer()
+            return
+
         lang = await _user_lang(query.from_user.id)
         await query.answer()
         data = await state.get_data()
@@ -1524,6 +1729,9 @@ def build_router(store: StateStore) -> Router:
                 text=None,
                 entities_json=None,
             )
+            if current_state == DraftStates.collecting_post.state:
+                await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
+                return
             await _send_confirmation(query.message, state, store, user_id=query.from_user.id)
             return
 
@@ -1536,10 +1744,22 @@ def build_router(store: StateStore) -> Router:
                 caption_entities_json=None,
                 caption_above=False,
             )
+            if current_state == DraftStates.collecting_post.state:
+                await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
+                return
             await _send_confirmation(query.message, state, store, user_id=query.from_user.id)
             return
 
         await query.message.answer(tr(lang, "post_need_content"), reply_markup=_media_collect_kb(lang))
+
+    @router.message(DraftStates.choosing_scope)
+    async def draft_choose_scope(message: Message) -> None:
+        lang = await _user_lang(message.from_user.id)
+        writable_teams = await store.list_writable_teams(message.from_user.id)
+        await message.answer(
+            tr(lang, "draft_create_scope_prompt"),
+            reply_markup=_draft_create_scope_kb(writable_teams, lang),
+        )
 
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore, *, user_id: int) -> None:
         lang = await _user_lang(user_id)

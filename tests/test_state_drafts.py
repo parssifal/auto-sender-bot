@@ -205,7 +205,7 @@ async def test_state_store_team_crud_uses_public_methods(monkeypatch: pytest.Mon
         monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
         second_team_id = await store.create_team(123, "Beta")
         monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
-        await store.create_team(456, "Gamma")
+        third_team_id = await store.create_team(456, "Gamma")
 
         team = await store.get_team(first_team_id)
         assert team is not None
@@ -219,6 +219,13 @@ async def test_state_store_team_crud_uses_public_methods(monkeypatch: pytest.Mon
         owned_teams = await store.list_owned_teams(123)
         assert [item.id for item in owned_teams] == [second_team_id, first_team_id]
         assert [item.name for item in owned_teams] == ["Beta", "Alpha"]
+        assert [item.name for item in await store.list_writable_teams(123)] == ["Beta", "Alpha"]
+
+        monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_035)
+        gamma_editor_member = await store.upsert_team_member(third_team_id, 123, "editor")
+        assert gamma_editor_member.role == "editor"
+        assert gamma_editor_member.created_at == 1_700_000_035
+        assert gamma_editor_member.updated_at == 1_700_000_035
 
         monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
         editor_member = await store.upsert_team_member(first_team_id, 456, "editor")
@@ -239,9 +246,14 @@ async def test_state_store_team_crud_uses_public_methods(monkeypatch: pytest.Mon
             (456, "viewer"),
         ]
 
+        writable_teams = await store.list_writable_teams(123)
+        assert [item.id for item in writable_teams] == [second_team_id, first_team_id, third_team_id]
+        assert [item.name for item in writable_teams] == ["Beta", "Alpha", "Gamma"]
+
         assert await store.get_team("missing-team") is None
         assert await store.get_team_member_role(first_team_id, 999) is None
         assert [item.name for item in await store.list_owned_teams(456)] == ["Gamma"]
+        assert [item.name for item in await store.list_writable_teams(456)] == ["Gamma"]
     finally:
         await conn.close()
 

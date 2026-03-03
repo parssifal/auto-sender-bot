@@ -14,7 +14,7 @@ from aiogram.types import Update
 from core.db import open_db
 from core.state import StateStore
 from telegram.i18n import tr
-from telegram.router import build_router
+from telegram.router import DraftStates, build_router
 
 USER_ID = 1001
 PRIVATE_CHAT_ID = USER_ID
@@ -96,6 +96,44 @@ class DraftFlowHarness:
         }
         await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
 
+    async def feed_photo(
+        self,
+        file_id: str,
+        *,
+        update_id: int,
+        message_id: int,
+        caption: str | None = None,
+        user_id: int = USER_ID,
+        chat_id: int | None = None,
+    ) -> None:
+        effective_chat_id = user_id if chat_id is None else chat_id
+        payload: dict[str, Any] = {
+            "update_id": update_id,
+            "message": {
+                "message_id": message_id,
+                "date": 1_700_000_000,
+                "chat": {"id": effective_chat_id, "type": "private"},
+                "from": {"id": user_id, "is_bot": False, "first_name": "Test"},
+                "photo": [
+                    {
+                        "file_id": file_id,
+                        "file_unique_id": f"{file_id}_unique",
+                        "width": 100,
+                        "height": 100,
+                    }
+                ],
+            },
+        }
+        if caption is not None:
+            payload["message"]["caption"] = caption
+        await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
+
+    async def get_state(self) -> str | None:
+        return await self.dispatcher.storage.get_state(self.storage_key)
+
+    async def get_data(self) -> dict[str, Any]:
+        return await self.dispatcher.storage.get_data(self.storage_key)
+
     def last_call(self) -> Any:
         return self.bot.calls[-1]
 
@@ -164,6 +202,85 @@ async def test_drafts_command_shows_empty_state_with_filters(draft_flow: DraftFl
     assert call.reply_markup.inline_keyboard[0][0].text == f"[{tr('ru', 'draft_filter_all')}]"
     assert call.reply_markup.inline_keyboard[0][1].callback_data == "dscope:mine"
     assert call.reply_markup.inline_keyboard[0][2].callback_data == "dscope:team"
+
+
+@pytest.mark.asyncio
+async def test_draft_create_personal_text_flow_saves_draft(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/draft_create", update_id=1, message_id=10)
+
+    assert await draft_flow.get_state() == DraftStates.choosing_destination.state
+    choose_call = draft_flow.last_call()
+    assert isinstance(choose_call, SendMessage)
+    assert choose_call.text == tr("ru", "choose_destination")
+    assert f"ddsel:{DESTINATION_CHAT_ID}" in _callback_data(choose_call)
+
+    await draft_flow.feed_callback(f"ddsel:{DESTINATION_CHAT_ID}", update_id=2, message_id=50)
+
+    assert await draft_flow.get_state() == DraftStates.collecting_post.state
+    collect_call = draft_flow.last_call()
+    assert isinstance(collect_call, SendMessage)
+    assert collect_call.text == tr("ru", "schedule_post_prompt")
+
+    await draft_flow.feed_message("Личный текстовый черновик", update_id=3, message_id=11)
+    await draft_flow.feed_callback("smedia:done", update_id=4, message_id=51)
+
+    assert await draft_flow.get_state() == DraftStates.choosing_scope.state
+    scope_call = draft_flow.last_call()
+    assert isinstance(scope_call, SendMessage)
+    assert scope_call.text == tr("ru", "draft_create_scope_prompt")
+    callbacks = _callback_data(scope_call)
+    assert "dcscope:personal" in callbacks
+    assert f"dcscope:team:{draft_flow.owner_team_id}" in callbacks
+    assert f"dcscope:team:{draft_flow.viewer_team_id}" not in callbacks
+
+    await draft_flow.feed_callback("dcscope:personal", update_id=5, message_id=52)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert "draft=" in final_call.text
+    assert tr("ru", "draft_location_personal") in final_call.text
+
+    drafts = await draft_flow.store.list_drafts(USER_ID, scope="all")
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft.team_id is None
+    assert draft.author_user_id == USER_ID
+    assert draft.chat_id == DESTINATION_CHAT_ID
+    assert draft.kind == "text"
+    assert draft.text == "Личный текстовый черновик"
+
+
+@pytest.mark.asyncio
+async def test_draft_create_team_media_flow_saves_team_draft(draft_flow: DraftFlowHarness) -> None:
+    await draft_flow.feed_message("/draft_create", update_id=1, message_id=10)
+    await draft_flow.feed_callback(f"ddsel:{DESTINATION_CHAT_ID}", update_id=2, message_id=50)
+
+    assert await draft_flow.get_state() == DraftStates.collecting_post.state
+    await draft_flow.feed_photo("photo-1", update_id=3, message_id=11, caption="Командный медиа черновик")
+    await draft_flow.feed_callback("smedia:done", update_id=4, message_id=51)
+
+    scope_call = draft_flow.last_call()
+    assert isinstance(scope_call, SendMessage)
+    callbacks = _callback_data(scope_call)
+    assert f"dcscope:team:{draft_flow.owner_team_id}" in callbacks
+    assert f"dcscope:team:{draft_flow.viewer_team_id}" not in callbacks
+
+    await draft_flow.feed_callback(f"dcscope:team:{draft_flow.owner_team_id}", update_id=5, message_id=52)
+
+    assert await draft_flow.get_state() is None
+    final_call = draft_flow.last_call()
+    assert isinstance(final_call, SendMessage)
+    assert "draft=" in final_call.text
+    assert "Owners" in final_call.text
+
+    drafts = await draft_flow.store.list_drafts(USER_ID, scope="team")
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft.team_id == draft_flow.owner_team_id
+    assert draft.kind == "media"
+    assert draft.caption == "Командный медиа черновик"
+    assert await draft_flow.store.get_draft_media(draft.id) == [{"type": "photo", "file_id": "photo-1"}]
 
 
 @pytest.mark.asyncio

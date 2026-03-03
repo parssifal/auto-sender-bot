@@ -100,6 +100,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "draft_actions_view_only": "view only",
         "draft_missing": "Draft not found or unavailable.",
         "draft_action_unavailable": "This action is not available yet.",
+        "draft_create_scope_prompt": "Save draft as:",
+        "draft_create_scope_invalid": "This draft space is no longer available.",
+        "draft_created_ok": (
+            "Draft saved. draft={draft_id}\n"
+            "- Space: {location}\n"
+            "- Where: {where}\n"
+            "- Type: {kind}"
+        ),
         "schedule_weekday_mon": "Mo",
         "schedule_weekday_tue": "Tu",
         "schedule_weekday_wed": "We",
@@ -304,6 +312,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "draft_actions_view_only": "только просмотр",
         "draft_missing": "Черновик не найден или недоступен.",
         "draft_action_unavailable": "Это действие пока недоступно.",
+        "draft_create_scope_prompt": "Куда сохранить черновик:",
+        "draft_create_scope_invalid": "Этот вариант сохранения черновика больше недоступен.",
+        "draft_created_ok": (
+            "Черновик сохранён. draft={draft_id}\n"
+            "- Область: {location}\n"
+            "- Куда: {where}\n"
+            "- Тип: {kind}"
+        ),
         "schedule_weekday_mon": "Пн",
         "schedule_weekday_tue": "Вт",
         "schedule_weekday_wed": "Ср",

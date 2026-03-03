@@ -493,6 +493,27 @@ class StateStore:
         )
         return [self._row_to_team(row) for row in rows]
 
+    async def list_writable_teams(self, user_id: int, offset: int = 0, limit: int = 20) -> list[Team]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT t.*
+            FROM team_members tm
+            JOIN teams t ON t.id = tm.team_id
+            WHERE tm.user_id=?
+              AND tm.role IN ('owner', 'editor')
+            ORDER BY
+                CASE tm.role
+                    WHEN 'owner' THEN 0
+                    ELSE 1
+                END,
+                t.created_at DESC,
+                t.id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        )
+        return [self._row_to_team(row) for row in rows]
+
     async def upsert_team_member(self, team_id: str, user_id: int, role: str) -> TeamMember:
         team_row = await self._execute_fetchone(
             "SELECT owner_user_id FROM teams WHERE id=?",
