@@ -360,6 +360,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_draft_edit": "Edit",
         "btn_draft_delete": "Delete",
         "btn_draft_publish": "Publish",
+        "btn_view_post": "👁 {label}",
+        "view_not_found": "Post not found or unavailable.",
+        "view_post_info": "Preview — id={post_id}\n• Where: {where}\n• When: {local_time} ({tz_name})\n• Type: {kind}",
     },
     "ru": {
         "menu_schedule": "Запланировать",
@@ -717,6 +720,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_draft_edit": "Изменить",
         "btn_draft_delete": "Удалить",
         "btn_draft_publish": "Запланировать",
+        "btn_view_post": "👁 {label}",
+        "view_not_found": "Пост не найден или недоступен.",
+        "view_post_info": "Предпросмотр — id={post_id}\n• Куда: {where}\n• Когда: {local_time} ({tz_name})\n• Тип: {kind}",
     },
     "de": {
         "menu_schedule": "Planen",

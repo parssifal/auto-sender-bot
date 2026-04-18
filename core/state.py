@@ -1255,20 +1255,20 @@ class StateStore:
             "media_items",
         }
 
-    async def list_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
+    async def list_pending_posts(self, user_id: int, limit: int = 10, offset: int = 0) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(
             """
             SELECT *
             FROM scheduled_posts
             WHERE user_id=? AND status='pending'
             ORDER BY scheduled_at_utc ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (user_id, limit),
+            (user_id, limit, offset),
         )
         return [self._row_to_post(r) for r in rows]
 
-    async def list_editable_pending_posts(self, user_id: int, limit: int = 10) -> list[ScheduledPostRow]:
+    async def list_editable_pending_posts(self, user_id: int, limit: int = 10, offset: int = 0) -> list[ScheduledPostRow]:
         rows = await self._conn.execute_fetchall(
             """
             SELECT sp.*
@@ -1278,9 +1278,9 @@ class StateStore:
               AND sp.status='pending'
               AND ri.post_id IS NULL
             ORDER BY sp.scheduled_at_utc ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (user_id, limit),
+            (user_id, limit, offset),
         )
         return [self._row_to_post(r) for r in rows]
 

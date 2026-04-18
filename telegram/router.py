@@ -336,6 +336,75 @@ def _queue_delete_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in posts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_view_post", label=item["label"]),
+                    callback_data=f"qview:{item['id']}",
+                ),
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_queue_cancel", label=item["label"]),
+                    callback_data=f"qcancel:{item['id']}",
+                ),
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"qpage:{page - 1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"qpage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _edit_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in posts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_edit_post", label=item["label"]),
+                    callback_data=f"qedit:{item['id']}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"epage:{page - 1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"epage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _delete_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in posts:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_delete_post", label=item["label"]),
+                    callback_data=f"qdelask:{item['id']}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"delpage:{page - 1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"delpage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _edit_field_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1109,12 +1178,26 @@ def build_router(store: StateStore) -> Router:
             return None, "recurring"
         return post, None
 
-    async def _render_edit_posts(message: Message, *, user_id: int) -> None:
+    async def _render_edit_posts(message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
         lang = await _user_lang(user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        posts = await store.list_editable_pending_posts(user_id=user_id, limit=10)
+        page_size = 8
+        while True:
+            offset = page * page_size
+            posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
+            if posts or page == 0:
+                break
+            page -= 1
+
+        has_more = len(posts) > page_size
+        posts = posts[:page_size]
+
         if not posts:
-            await message.answer(tr(lang, "edit_empty"), reply_markup=await _main_menu_for(user_id))
+            text = tr(lang, "edit_empty")
+            if edit:
+                await message.edit_text(text, reply_markup=None)
+            else:
+                await message.answer(text, reply_markup=await _main_menu_for(user_id))
             return
 
         lines: list[str] = []
@@ -1134,17 +1217,33 @@ def build_router(store: StateStore) -> Router:
             )
             edit_buttons.append({"id": post.id, "label": _short_id(post.id)})
 
-        await message.answer(
-            tr(lang, "edit_list_header", lines="\n\n".join(lines)),
-            reply_markup=_queue_edit_kb(edit_buttons, lang),
-        )
+        text = tr(lang, "edit_list_header", lines="\n\n".join(lines))
+        reply_markup = _edit_paged_kb(edit_buttons, page=page, has_more=has_more, lang=lang)
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
 
-    async def _render_delete_posts(message: Message, *, user_id: int) -> None:
+    async def _render_delete_posts(message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
         lang = await _user_lang(user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        posts = await store.list_editable_pending_posts(user_id=user_id, limit=10)
+        page_size = 8
+        while True:
+            offset = page * page_size
+            posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
+            if posts or page == 0:
+                break
+            page -= 1
+
+        has_more = len(posts) > page_size
+        posts = posts[:page_size]
+
         if not posts:
-            await message.answer(tr(lang, "delete_empty"), reply_markup=await _main_menu_for(user_id))
+            text = tr(lang, "delete_empty")
+            if edit:
+                await message.edit_text(text, reply_markup=None)
+            else:
+                await message.answer(text, reply_markup=await _main_menu_for(user_id))
             return
 
         lines: list[str] = []
@@ -1164,10 +1263,94 @@ def build_router(store: StateStore) -> Router:
             )
             delete_buttons.append({"id": post.id, "label": _short_id(post.id)})
 
+        text = tr(lang, "delete_list_header", lines="\n\n".join(lines))
+        reply_markup = _delete_paged_kb(delete_buttons, page=page, has_more=has_more, lang=lang)
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
+    async def _render_queue_page(message: Message, page: int, user_id: int, *, edit: bool = False) -> None:
+        lang = await _user_lang(user_id)
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        page_size = 8
+        while True:
+            offset = page * page_size
+            posts = await store.list_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
+            if posts or page == 0:
+                break
+            page -= 1
+
+        has_more = len(posts) > page_size
+        posts = posts[:page_size]
+
+        if not posts:
+            text = tr(lang, "queue_empty")
+            if edit:
+                await message.edit_text(text, reply_markup=None)
+            else:
+                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+            return
+
+        lines: list[str] = []
+        buttons: list[dict[str, str]] = []
+        for p in posts:
+            when = _format_local(p.scheduled_at_utc, tz_name)
+            title = await store.get_destination_title(p.chat_id) or str(p.chat_id)
+            label = _short_id(p.id)
+            if p.kind == "text":
+                k = tr(lang, "kind_text")
+            else:
+                media = await store.get_post_media(p.id)
+                k = tr(lang, "kind_media", count=len(media))
+            lines.append(f"{label} — {when} — {title} — {k}")
+            buttons.append({"id": p.id, "label": label})
+
+        text = tr(lang, "queue_header", lines="\n".join(lines))
+        reply_markup = _queue_paged_kb(buttons, page=page, has_more=has_more, lang=lang)
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
+
+    async def _send_post_preview(message: Message, *, user_id: int, post_id: str) -> None:
+        lang = await _user_lang(user_id)
+        post = await store.get_scheduled_post(post_id)
+        if post is None or post.user_id != user_id:
+            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(user_id))
+            return
+
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        summary = await _build_scheduled_post_summary(post, lang=lang)
         await message.answer(
-            tr(lang, "delete_list_header", lines="\n\n".join(lines)),
-            reply_markup=_queue_delete_kb(delete_buttons, lang),
+            tr(
+                lang,
+                "view_post_info",
+                post_id=_short_id(post.id),
+                where=summary["where"],
+                local_time=_format_local(post.scheduled_at_utc, tz_name),
+                tz_name=tz_name,
+                kind=summary["kind"],
+            )
         )
+
+        if post.kind == "text" and post.text:
+            import json as _json
+            from aiogram.types import MessageEntity as _ME
+            entities = [_ME.model_validate(e) for e in _json.loads(post.entities_json)] if post.entities_json else None
+            await message.answer(post.text, entities=entities)
+        elif post.kind == "media":
+            media_items = await store.get_post_media(post.id)
+            if media_items:
+                from core.notifier import send_media_post
+                await send_media_post(
+                    bot=message.bot,
+                    chat_id=message.chat.id,
+                    media_items=media_items,
+                    caption=post.caption,
+                    caption_entities_json=post.caption_entities_json,
+                    caption_above=post.caption_above,
+                )
 
     async def _start_scheduled_post_edit(message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
         lang = await _user_lang(user_id)
@@ -2235,11 +2418,40 @@ def build_router(store: StateStore) -> Router:
 
         await _render_delete_confirm(message, user_id=message.from_user.id, post=post)
 
+    @router.message(Command("view"))
+    async def cmd_view(message: Message) -> None:
+        await store.ensure_user(message.from_user.id)
+        parts = (message.text or "").split(maxsplit=1)
+        lang = await _user_lang(message.from_user.id)
+        if len(parts) != 2 or not parts[1].strip():
+            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
+        post_id, _ = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
+        if post_id is None:
+            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(message.from_user.id))
+            return
+
+        await _send_post_preview(message, user_id=message.from_user.id, post_id=post_id)
+
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
         await query.answer()
         await _render_repeats(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("epage:"))
+    async def cb_edit_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_edit_posts(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("delpage:"))
+    async def cb_delete_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_delete_posts(query.message, user_id=query.from_user.id, page=page, edit=True)
 
     @router.callback_query(F.data.startswith("qedit:"))
     async def cb_queue_edit(query: CallbackQuery, state: FSMContext) -> None:
@@ -3755,29 +3967,19 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("queue"))
     async def cmd_queue(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id) or "UTC"
-        posts = await store.list_pending_posts(user_id=message.from_user.id, limit=10)
-        if not posts:
-            await message.answer(tr(lang, "queue_empty"), reply_markup=await _main_menu_for(message.from_user.id))
-            return
-        lines: list[str] = []
-        cancel_buttons: list[dict[str, str]] = []
-        for p in posts:
-            when = _format_local(p.scheduled_at_utc, tz_name)
-            title = await store.get_destination_title(p.chat_id) or str(p.chat_id)
-            label = _short_id(p.id)
-            if p.kind == "text":
-                k = tr(lang, "kind_text")
-            else:
-                media = await store.get_post_media(p.id)
-                k = tr(lang, "kind_media", count=len(media))
-            lines.append(f"{label} — {when} — {title} — {k}")
-            cancel_buttons.append({"id": p.id, "label": label})
-        await message.answer(
-            tr(lang, "queue_header", lines="\n".join(lines)),
-            reply_markup=_queue_cancel_kb(cancel_buttons, lang),
-        )
+        await _render_queue_page(message, page=0, user_id=message.from_user.id)
+
+    @router.callback_query(F.data.startswith("qpage:"))
+    async def cb_queue_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_queue_page(query.message, page=page, user_id=query.from_user.id, edit=True)
+
+    @router.callback_query(F.data.startswith("qview:"))
+    async def cb_queue_view(query: CallbackQuery) -> None:
+        post_id = query.data.split(":", 1)[1]
+        await query.answer()
+        await _send_post_preview(query.message, user_id=query.from_user.id, post_id=post_id)
 
     @router.callback_query(F.data.startswith("qcancel:"))
     async def cb_queue_cancel(query: CallbackQuery) -> None:
