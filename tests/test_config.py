@@ -75,3 +75,84 @@ def test_load_config_treats_blank_redis_url_as_disabled(monkeypatch: pytest.Monk
     cfg = config_module.load_config()
 
     assert cfg.redis_url is None
+
+
+def test_load_config_admin_and_webapp_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.delenv("ADMIN_IDS", raising=False)
+    monkeypatch.delenv("WEBAPP_URL", raising=False)
+    monkeypatch.delenv("WEBAPP_HOST", raising=False)
+    monkeypatch.delenv("WEBAPP_PORT", raising=False)
+
+    cfg = config_module.load_config()
+
+    assert cfg.admin_ids == ()
+    assert cfg.webapp_url is None
+    assert cfg.webapp_host == "0.0.0.0"
+    assert cfg.webapp_port == 8081
+
+
+def test_load_config_parses_admin_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_IDS", " 123, 456 ,789,")
+
+    cfg = config_module.load_config()
+
+    assert cfg.admin_ids == (123, 456, 789)
+
+
+def test_load_config_accepts_bot_admin_ids_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.delenv("ADMIN_IDS", raising=False)
+    monkeypatch.setenv("BOT_ADMIN_IDS", "410680038")
+
+    cfg = config_module.load_config()
+
+    assert cfg.admin_ids == (410680038,)
+
+
+def test_load_config_prefers_admin_ids_over_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_IDS", "1")
+    monkeypatch.setenv("BOT_ADMIN_IDS", "2")
+
+    cfg = config_module.load_config()
+
+    assert cfg.admin_ids == (1,)
+
+
+def test_load_config_rejects_non_integer_admin_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_IDS", "123,abc")
+
+    with pytest.raises(RuntimeError, match="ADMIN_IDS"):
+        config_module.load_config()
+
+
+def test_load_config_parses_webapp_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("WEBAPP_URL", "https://example.com/app")
+    monkeypatch.setenv("WEBAPP_HOST", "127.0.0.1")
+    monkeypatch.setenv("WEBAPP_PORT", "9000")
+
+    cfg = config_module.load_config()
+
+    assert cfg.webapp_url == "https://example.com/app"
+    assert cfg.webapp_host == "127.0.0.1"
+    assert cfg.webapp_port == 9000
+
+
+def test_load_config_treats_blank_webapp_url_as_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("WEBAPP_URL", "   ")
+
+    cfg = config_module.load_config()
+
+    assert cfg.webapp_url is None

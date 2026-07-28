@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Панель бота</title>
+<style>
+  :root{
+    --bg:#ffffff; --group-bg:#eef0f3; --card:#ffffff; --text:#0b0b0f;
+    --hint:#8a8f98; --accent:#3390ec; --separator:rgba(0,0,0,.07);
+    --c1:#5b6cf0; --c2:#2fb6a8; --c3:#f5a524; --c4:#f2557a; --c5:#9b6dff;
+    --radius:18px; --gap:12px; --pad:16px;
+    --num:"ui-rounded","SF Pro Rounded",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17212b; --group-bg:#0e1621; --card:#232e3c; --text:#f4f6f8;
+      --hint:#8596a8; --accent:#64a9ee; --separator:rgba(255,255,255,.08);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--group-bg); color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
+    padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom));
+  }
+  #app{max-width:560px; margin:0 auto; padding:0 var(--pad)}
+  .num{font-family:var(--num); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+  .eyebrow{
+    font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--hint);
+  }
+
+  /* Top bar */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 2px 14px;
+  }
+  .topbar h1{font-size:20px; font-weight:800; margin:0; letter-spacing:-.01em}
+  .topbar .live{font-size:11px; font-weight:700; color:var(--hint); letter-spacing:.06em; text-transform:uppercase}
+  .ghost-btn{
+    appearance:none; border:0; background:transparent; color:var(--accent);
+    font-size:20px; width:38px; height:38px; border-radius:12px; cursor:pointer;
+    display:grid; place-items:center;
+  }
+  .ghost-btn:active{background:var(--separator)}
+  .ghost-btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  .card{background:var(--card); border-radius:var(--radius); padding:var(--pad)}
+  section{margin-bottom:var(--gap)}
+
+  /* Hero — the pulse */
+  .hero{position:relative; overflow:hidden; padding-bottom:0}
+  .hero .eyebrow{position:relative; z-index:2}
+  .hero-num{font-family:var(--num); font-weight:800; font-size:46px; line-height:1.02; margin:6px 0 2px; position:relative; z-index:2}
+  .hero-sub{font-size:13px; color:var(--hint); position:relative; z-index:2}
+  .hero-sub b{color:var(--c2); font-weight:700}
+  .hero-sub b.down{color:var(--c4)}
+  .hero-chart{display:block; width:calc(100% + var(--pad)*2); margin:2px 0 0 calc(var(--pad)*-1); height:118px}
+
+  /* KPI grid */
+  .kpis{display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); margin-bottom:var(--gap)}
+  .kpi{background:var(--card); border-radius:var(--radius); padding:14px var(--pad)}
+  .kpi .v{font-family:var(--num); font-weight:800; font-size:28px; line-height:1.1; margin-top:8px}
+  .kpi .d{font-size:12px; color:var(--hint); margin-top:3px}
+  .kpi .d b{color:var(--c2)}
+  .kpi .accent{color:var(--accent)}
+
+  .block-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px}
+  .block-head .meta{font-size:12px; color:var(--hint)}
+
+  /* Sparkline block */
+  .spark{display:block; width:100%; height:76px}
+
+  /* Languages */
+  .lang-row{display:flex; align-items:center; gap:10px; margin:9px 0}
+  .lang-row .name{width:52px; font-size:13px; font-weight:600}
+  .lang-row .track{flex:1; height:8px; border-radius:6px; background:var(--separator); overflow:hidden}
+  .lang-row .fill{height:100%; border-radius:6px}
+  .lang-row .cnt{width:34px; text-align:right; font-family:var(--num); font-weight:700; font-size:13px; color:var(--hint)}
+
+  /* Status segmented bar */
+  .seg{display:flex; height:14px; border-radius:8px; overflow:hidden; background:var(--separator)}
+  .seg span{display:block; height:100%}
+  .legend{display:flex; flex-wrap:wrap; gap:12px 16px; margin-top:14px}
+  .legend .item{display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--hint)}
+  .legend .dot{width:9px; height:9px; border-radius:3px; flex:none}
+  .legend b{color:var(--text); font-family:var(--num); font-weight:700}
+
+  /* Top users */
+  .u-row{display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid var(--separator)}
+  .u-row:first-of-type{border-top:0}
+  .u-rank{width:20px; font-family:var(--num); font-weight:800; color:var(--hint); font-size:14px}
+  .u-id{font-size:14px; font-weight:600; flex:none; width:104px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .u-bar{flex:1; height:7px; border-radius:5px; background:var(--separator); overflow:hidden}
+  .u-bar span{display:block; height:100%; border-radius:5px; background:linear-gradient(90deg,var(--c1),var(--c5))}
+  .u-cnt{font-family:var(--num); font-weight:700; font-size:13px; width:30px; text-align:right}
+
+  /* Find user */
+  .find .row{display:flex; gap:8px; margin-top:12px}
+  .find input{
+    flex:1; appearance:none; border:1px solid var(--separator); background:var(--group-bg);
+    color:var(--text); border-radius:12px; padding:11px 13px; font-size:15px; font-family:var(--num);
+  }
+  .find input:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:transparent}
+  .find button{
+    appearance:none; border:0; background:var(--accent); color:#fff; font-weight:700; font-size:15px;
+    border-radius:12px; padding:0 18px; cursor:pointer;
+  }
+  .find button:active{opacity:.85}
+  .find button:focus-visible{outline:2px solid var(--text); outline-offset:2px}
+  .u-card{margin-top:14px; display:none}
+  .u-card.show{display:block}
+  .u-card .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .u-card .f .k{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--hint); font-weight:700}
+  .u-card .f .val{font-family:var(--num); font-weight:700; font-size:19px; margin-top:3px}
+  .u-msg{margin-top:12px; font-size:13px; color:var(--c4); display:none}
+  .u-msg.show{display:block}
+
+  .foot{text-align:center; font-size:11.5px; color:var(--hint); padding:14px 0 4px; letter-spacing:.02em}
+  .banner{display:none; background:var(--c4); color:#fff; border-radius:12px; padding:10px 14px; font-size:13px; margin-bottom:var(--gap)}
+  .banner.show{display:block}
+
+  @media (prefers-reduced-motion: no-preference){
+    .draw{stroke-dasharray:var(--len); stroke-dashoffset:var(--len); animation:draw 900ms ease forwards}
+    @keyframes draw{to{stroke-dashoffset:0}}
+    .fade{opacity:0; animation:fade 500ms ease forwards}
+    @keyframes fade{to{opacity:1}}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <h1>Панель бота</h1>
+    <button id="refresh" class="ghost-btn" title="Обновить" aria-label="Обновить данные">↻</button>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <section class="hero card">
+    <div class="eyebrow">Отправлено · 30 дней</div>
+    <div class="hero-num num" id="heroTotal">0</div>
+    <div class="hero-sub" id="heroSub">&nbsp;</div>
+    <svg class="hero-chart" id="heroChart" viewBox="0 0 340 118" preserveAspectRatio="none" aria-hidden="true"></svg>
+  </section>
+
+  <div class="kpis">
+    <div class="kpi"><div class="eyebrow">Пользователи</div><div class="v num" id="kUsers">0</div><div class="d" id="kUsersD">&nbsp;</div></div>
+    <div class="kpi"><div class="eyebrow">Каналов на юзера</div><div class="v num" id="kAvg">0</div><div class="d">в среднем</div></div>
+    <div class="kpi"><div class="eyebrow">Активны · 7 дней</div><div class="v num" id="kActive">0</div><div class="d" id="kActiveD">&nbsp;</div></div>
+    <div class="kpi"><div class="eyebrow">В очереди</div><div class="v num accent" id="kQueue">0</div><div class="d" id="kQueueD">&nbsp;</div></div>
+  </div>
+
+  <section class="card">
+    <div class="block-head"><div class="eyebrow">Новые пользователи · 30 дней</div><div class="meta" id="usersMeta"></div></div>
+    <svg class="spark" id="usersChart" viewBox="0 0 340 76" preserveAspectRatio="none" aria-hidden="true"></svg>
+  </section>
+
+  <section class="card">
+    <div class="block-head"><div class="eyebrow">Языки интерфейса</div><div class="meta" id="langMeta"></div></div>
+    <div id="langList"></div>
+  </section>
+
+  <section class="card">
+    <div class="block-head"><div class="eyebrow">Посты по статусам</div></div>
+    <div class="seg" id="statusSeg"></div>
+    <div class="legend" id="statusLegend"></div>
+  </section>
+
+  <section class="card">
+    <div class="block-head"><div class="eyebrow">Топ активных · 30 дней</div></div>
+    <div id="topUsers"></div>
+  </section>
+
+  <section class="card find">
+    <div class="block-head"><div class="eyebrow">Найти пользователя</div></div>
+    <div class="row">
+      <input id="findInput" inputmode="numeric" placeholder="ID пользователя" aria-label="ID пользователя">
+      <button id="findBtn">Найти</button>
+    </div>
+    <div class="u-msg" id="findMsg">Пользователь не найден</div>
+    <div class="u-card" id="findCard">
+      <div class="grid">
+        <div class="f"><div class="k">Каналы</div><div class="val num" id="ucChannels">—</div></div>
+        <div class="f"><div class="k">Посты</div><div class="val num" id="ucPosts">—</div></div>
+        <div class="f"><div class="k">Язык</div><div class="val num" id="ucLang">—</div></div>
+        <div class="f"><div class="k">Часовой пояс</div><div class="val num" id="ucTz" style="font-size:14px">—</div></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot" id="foot">&nbsp;</div>
+</div>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+(function(){
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+  var initData = tg && tg.initData ? tg.initData : "";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var nf = new Intl.NumberFormat("ru-RU");
+  var PALETTE = ["--c1","--c2","--c3","--c4","--c5"];
+  var STATUS = [
+    {key:"sent", label:"Отправлено", color:"--c2"},
+    {key:"pending", label:"В очереди", color:"--c1"},
+    {key:"failed", label:"Ошибки", color:"--c4"},
+    {key:"cancelled", label:"Отменено", color:"--hint"}
+  ];
+
+  function $(id){ return document.getElementById(id); }
+  function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888"; }
+
+  // ---- Telegram theme -> local vars ----
+  function applyTheme(){
+    if(!tg) return;
+    var p = tg.themeParams || {};
+    var root = document.documentElement.style;
+    var map = {
+      "--bg":p.bg_color, "--text":p.text_color, "--hint":p.hint_color,
+      "--accent":p.button_color || p.link_color,
+      "--card":p.section_bg_color || p.bg_color,
+      "--group-bg":p.secondary_bg_color || p.bg_color
+    };
+    for(var k in map){ if(map[k]) root.setProperty(k, map[k]); }
+    if(p.text_color){ root.setProperty("--separator", hexA(p.text_color, .08)); }
+  }
+  function hexA(hex, a){
+    var m = /^#?([0-9a-f]{6})$/i.exec(hex||""); if(!m) return "rgba(128,128,128,"+a+")";
+    var n = parseInt(m[1],16);
+    return "rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+a+")";
+  }
+
+  // ---- SVG builders ----
+  function areaPaths(values, w, h){
+    var n = values.length, pb = 6, pt = 10;
+    var max = Math.max.apply(null, values.concat([1]));
+    var dx = n>1 ? w/(n-1) : w;
+    var pts = values.map(function(v,i){
+      var x = i*dx, y = pt + (h-pt-pb)*(1 - v/max);
+      return [x, y];
+    });
+    var line = pts.map(function(p,i){ return (i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1); }).join(" ");
+    var area = "M0 "+h+" L"+pts.map(function(p){return p[0].toFixed(1)+" "+p[1].toFixed(1);}).join(" L")+" L"+w+" "+h+" Z";
+    return {line:line, area:area, pts:pts, max:max};
+  }
+
+  function renderHero(values){
+    var w=340, h=118, svg=$("heroChart");
+    var a = areaPaths(values, w, h);
+    var last = a.pts[a.pts.length-1];
+    var acc = cssVar("--c1"), acc2 = cssVar("--c5");
+    svg.innerHTML =
+      '<defs><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">'
+      +'<stop offset="0" stop-color="'+acc+'" stop-opacity="0.28"/>'
+      +'<stop offset="1" stop-color="'+acc+'" stop-opacity="0"/></linearGradient></defs>'
+      +'<path d="'+a.area+'" fill="url(#hg)"/>'
+      +'<path class="'+(reduce?"":"draw")+'" d="'+a.line+'" fill="none" stroke="'+acc+'" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>'
+      +'<g transform="translate('+(last[0]-15).toFixed(1)+','+(last[1]-6).toFixed(1)+')">'
+      +'<circle cx="15" cy="6" r="9" fill="'+acc+'" opacity="0.16"/>'
+      +'<path d="M2 6 L15 1 L11 6 L15 11 Z" fill="'+acc2+'"/></g>';
+    if(!reduce){
+      var pathEl = svg.querySelector(".draw");
+      if(pathEl){ var len = pathEl.getTotalLength(); pathEl.style.setProperty("--len", len); }
+    }
+  }
+
+  function renderSpark(id, values, color){
+    var w=340, h=76, svg=$(id);
+    var a = areaPaths(values, w, h);
+    var c = cssVar(color);
+    svg.innerHTML =
+      '<defs><linearGradient id="'+id+'g" x1="0" y1="0" x2="0" y2="1">'
+      +'<stop offset="0" stop-color="'+c+'" stop-opacity="0.22"/>'
+      +'<stop offset="1" stop-color="'+c+'" stop-opacity="0"/></linearGradient></defs>'
+      +'<path d="'+a.area+'" fill="url(#'+id+'g)"/>'
+      +'<path class="'+(reduce?"":"draw")+'" d="'+a.line+'" fill="none" stroke="'+c+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    if(!reduce){ var p=svg.querySelector(".draw"); if(p){ p.style.setProperty("--len", p.getTotalLength()); } }
+  }
+
+  function renderLanguages(list){
+    var total = list.reduce(function(s,x){return s+x[1];},0) || 1;
+    var max = list.reduce(function(m,x){return Math.max(m,x[1]);},1);
+    $("langMeta").textContent = nf.format(total)+" польз.";
+    var html = list.slice(0,6).map(function(x,i){
+      var c = cssVar(PALETTE[i%PALETTE.length]);
+      var wpct = Math.round(100*x[1]/max);
+      return '<div class="lang-row"><div class="name">'+esc(x[0])+'</div>'
+        +'<div class="track"><div class="fill" style="width:'+wpct+'%;background:'+c+'"></div></div>'
+        +'<div class="cnt">'+nf.format(x[1])+'</div></div>';
+    }).join("");
+    $("langList").innerHTML = html || '<div class="meta">Нет данных</div>';
+  }
+
+  function renderStatuses(counts){
+    var total = STATUS.reduce(function(s,x){return s+(counts[x.key]||0);},0);
+    var seg = STATUS.map(function(x){
+      var v = counts[x.key]||0; if(!v) return "";
+      var pct = 100*v/(total||1);
+      return '<span style="width:'+pct+'%;background:'+cssVar(x.color)+'"></span>';
+    }).join("");
+    $("statusSeg").innerHTML = seg || '<span style="width:100%;background:var(--separator)"></span>';
+    $("statusLegend").innerHTML = STATUS.map(function(x){
+      return '<div class="item"><span class="dot" style="background:'+cssVar(x.color)+'"></span>'
+        +x.label+' · <b>'+nf.format(counts[x.key]||0)+'</b></div>';
+    }).join("");
+  }
+
+  function renderTopUsers(list){
+    var max = list.reduce(function(m,x){return Math.max(m,x[1]);},1);
+    $("topUsers").innerHTML = (list.length? list.map(function(x,i){
+      return '<div class="u-row"><div class="u-rank num">'+(i+1)+'</div>'
+        +'<div class="u-id">ID '+x[0]+'</div>'
+        +'<div class="u-bar"><span style="width:'+Math.round(100*x[1]/max)+'%"></span></div>'
+        +'<div class="u-cnt num">'+nf.format(x[1])+'</div></div>';
+    }).join("") : '<div class="meta">Пока никто не публиковал</div>');
+  }
+
+  function countUp(el, to){
+    if(reduce){ el.textContent = nf.format(to); return; }
+    var start=performance.now(), dur=650;
+    function step(t){
+      var k = Math.min(1,(t-start)/dur); var e = 1-Math.pow(1-k,3);
+      el.textContent = nf.format(Math.round(to*e));
+      if(k<1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+
+  function render(d){
+    countUp($("heroTotal"), sum(d.daily_posts_sent));
+    var todayTxt = d.sent_today>0 ? '<b>+'+nf.format(d.sent_today)+'</b> сегодня' : 'сегодня без отправок';
+    $("heroSub").innerHTML = todayTxt + ' · <span style="color:var(--hint)">'+nf.format(d.sent_7d)+' за неделю</span>';
+    renderHero(d.daily_posts_sent.map(function(x){return x[1];}));
+
+    countUp($("kUsers"), d.total_users);
+    $("kUsersD").innerHTML = d.new_users_7d>0 ? '<b>+'+d.new_users_7d+'</b> за 7 дней' : 'нет новых за 7 дней';
+    $("kAvg").textContent = String(d.avg_channels).replace(".", ",");
+    countUp($("kActive"), d.active_users_7d);
+    $("kActiveD").textContent = d.active_users_30d+' за 30 дней';
+    countUp($("kQueue"), d.queue);
+    $("kQueueD").textContent = 'ждут отправки';
+
+    $("usersMeta").textContent = "+"+nf.format(sum(d.daily_new_users))+" всего";
+    renderSpark("usersChart", d.daily_new_users.map(function(x){return x[1];}), "--c1");
+    renderLanguages(d.languages);
+    renderStatuses(d.posts_by_status);
+    renderTopUsers(d.top_users);
+
+    var when = new Date((d.generated_at||Date.now()/1000)*1000);
+    $("foot").textContent = (initData? "Данные бота" : "Демо-режим")+" · обновлено "+when.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
+  }
+  function sum(series){ return series.reduce(function(s,x){return s+x[1];},0); }
+
+  function banner(msg){ var b=$("banner"); b.textContent=msg; b.classList.add("show"); }
+
+  function api(path){
+    return fetch(path, { headers: initData ? {Authorization: initData} : {} })
+      .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); });
+  }
+
+  // ---- Find user ----
+  function findUser(){
+    var id = ($("findInput").value||"").replace(/[^0-9]/g,"");
+    $("findMsg").classList.remove("show"); $("findCard").classList.remove("show");
+    if(!id){ return; }
+    if(!initData){
+      showProfile({user_id:id, channels:3, posts:14, language:"ru", timezone:"Europe/Moscow"});
+      return;
+    }
+    api("/api/user/"+id).then(showProfile).catch(function(e){
+      if(String(e.message)==="404"){ $("findMsg").classList.add("show"); }
+      else { banner("Не удалось загрузить профиль"); }
+    });
+  }
+  function showProfile(p){
+    $("ucChannels").textContent = nf.format(p.channels);
+    $("ucPosts").textContent = nf.format(p.posts);
+    $("ucLang").textContent = p.language || "—";
+    $("ucTz").textContent = p.timezone || "—";
+    $("findCard").classList.add("show");
+  }
+
+  // ---- Demo data (standalone preview) ----
+  function demo(){
+    function series(days, base, spread){
+      var out=[], now=Date.now();
+      for(var i=days-1;i>=0;i--){
+        var day=new Date(now-i*86400000).toISOString().slice(0,10);
+        out.push([day, Math.max(0, Math.round(base + Math.sin(i/3)*spread + (Math.random()*spread)))]);
+      }
+      return out;
+    }
+    return {
+      generated_at: Date.now()/1000,
+      total_users: 1284, avg_channels: 2.4,
+      new_users_7d: 37, new_users_30d: 168,
+      active_users_7d: 214, active_users_30d: 611,
+      queue: 46, sent_today: 23, sent_7d: 402,
+      posts_by_status:{pending:46, sending:2, sent:5120, failed:31, cancelled:88},
+      teams:12, drafts:57,
+      languages:[["ru",742],["en",381],["de",96],["ar",41],["zh",24]],
+      top_users:[[81724,143],[24019,118],[550212,97],[13,84],[99182,63],[7003,52]],
+      daily_new_users: series(30, 3, 5),
+      daily_posts_sent: series(30, 12, 10)
+    };
+  }
+
+  function load(){
+    if(!initData){ render(demo()); return; }
+    api("/api/stats").then(render).catch(function(){
+      banner("Нет доступа. Проверьте, что вы в списке администраторов.");
+    });
+  }
+
+  // ---- Wire up ----
+  applyTheme();
+  if(tg){ tg.ready(); tg.expand(); tg.onEvent("themeChanged", function(){ applyTheme(); load(); }); }
+  $("refresh").addEventListener("click", load);
+  $("findBtn").addEventListener("click", findUser);
+  $("findInput").addEventListener("keydown", function(e){ if(e.key==="Enter") findUser(); });
+  load();
+})();
+</script>
+</body>
+</html>

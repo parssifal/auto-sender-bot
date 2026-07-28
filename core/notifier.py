@@ -20,6 +20,7 @@ def _load_entities(entities_json: str | None) -> list[MessageEntity] | None:
 @dataclass(frozen=True)
 class SendStats:
     messages_sent: int
+    message_ids: tuple[int, ...] = ()
 
 
 async def send_text(
@@ -54,12 +55,19 @@ async def send_media_post(
     # If caption too long, send it separately as text (ordering respects above/below).
     send_caption_separately = bool(caption_text) and len(caption_text) > 1024
 
+    message_ids: list[int] = []
+
+    def _track(sent: Any) -> None:
+        message_id = getattr(sent, "message_id", None)
+        if message_id is not None:
+            message_ids.append(int(message_id))
+
     async def _send_caption_plain() -> int:
         if not caption_text:
             return 0
         chunks = split_text(caption_text, max_len=4096)
         for chunk in chunks:
-            await bot.send_message(chat_id=chat_id, text=chunk)
+            _track(await bot.send_message(chat_id=chat_id, text=chunk))
         return len(chunks)
 
     messages_sent = 0
@@ -71,23 +79,23 @@ async def send_media_post(
         media_type = item["type"]
         file_id = item["file_id"]
         if media_type == "photo":
-            await bot.send_photo(
+            _track(await bot.send_photo(
                 chat_id=chat_id,
                 photo=file_id,
                 caption=None if send_caption_separately else caption_text or None,
                 caption_entities=None if send_caption_separately else caption_entities,
                 show_caption_above_media=caption_above_value,
-            )
+            ))
             messages_sent += 1
         elif media_type == "video":
-            await bot.send_video(
+            _track(await bot.send_video(
                 chat_id=chat_id,
                 video=file_id,
                 caption=None if send_caption_separately else caption_text or None,
                 caption_entities=None if send_caption_separately else caption_entities,
                 show_caption_above_media=caption_above_value,
                 supports_streaming=True,
-            )
+            ))
             messages_sent += 1
         else:
             raise ValueError(f"Unsupported media type: {media_type}")
@@ -113,10 +121,13 @@ async def send_media_post(
             else:
                 raise ValueError(f"Unsupported media type: {media_type}")
 
-        await bot.send_media_group(chat_id=chat_id, media=media)
+        group_messages = await bot.send_media_group(chat_id=chat_id, media=media)
+        if isinstance(group_messages, (list, tuple)):
+            for sent in group_messages:
+                _track(sent)
         messages_sent += 1
 
     if send_caption_separately and not caption_above_value:
         messages_sent += await _send_caption_plain()
 
-    return SendStats(messages_sent=messages_sent)
+    return SendStats(messages_sent=messages_sent, message_ids=tuple(message_ids))
