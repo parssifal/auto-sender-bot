@@ -16,6 +16,10 @@ class Config:
     scheduler_poll_seconds: float = 2.0
     telegram_polling_timeout_seconds: int = 30
     telegram_http_timeout_seconds: float = 75.0
+    admin_ids: tuple[int, ...] = ()
+    webapp_url: str | None = None
+    webapp_host: str = "0.0.0.0"
+    webapp_port: int = 8081
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -99,6 +103,32 @@ def load_config() -> Config:
     if telegram_http_timeout_seconds <= 0:
         raise RuntimeError("TELEGRAM_HTTP_TIMEOUT_SECONDS must be > 0")
 
+    admin_ids_raw = os.getenv("ADMIN_IDS") or os.getenv("BOT_ADMIN_IDS") or ""
+    admin_ids: list[int] = []
+    for token in admin_ids_raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            admin_ids.append(int(token))
+        except ValueError as exc:
+            raise RuntimeError(f"ADMIN_IDS must be comma-separated integers, got {token!r}") from exc
+
+    webapp_url = os.getenv("WEBAPP_URL")
+    if webapp_url is not None:
+        webapp_url = webapp_url.strip() or None
+    webapp_host = os.getenv("WEBAPP_HOST", "0.0.0.0").strip() or "0.0.0.0"
+
+    webapp_port_raw = os.getenv("WEBAPP_PORT")
+    webapp_port = 8081
+    if webapp_port_raw:
+        try:
+            webapp_port = int(webapp_port_raw)
+        except ValueError as exc:
+            raise RuntimeError("WEBAPP_PORT must be an integer") from exc
+    if webapp_port <= 0:
+        raise RuntimeError("WEBAPP_PORT must be > 0")
+
     return Config(
         bot_token=bot_token,
         db_path=db_path,
@@ -109,4 +139,8 @@ def load_config() -> Config:
         scheduler_poll_seconds=scheduler_poll_seconds,
         telegram_polling_timeout_seconds=telegram_polling_timeout_seconds,
         telegram_http_timeout_seconds=telegram_http_timeout_seconds,
+        admin_ids=tuple(admin_ids),
+        webapp_url=webapp_url,
+        webapp_host=webapp_host,
+        webapp_port=webapp_port,
     )

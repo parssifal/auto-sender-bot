@@ -320,6 +320,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "link_ok": "Okay, linked: {title}",
         "link_forward_prompt": "Forward a message from the channel/chat you want to link.",
         "link_forward_not_seen": "I cannot see forwarded chat. Forward a message exactly from the target channel/chat.",
+        "admin_intro": "📊 Admin panel — open the dashboard to see bot stats.",
+        "admin_open_btn": "Open dashboard",
+        "admin_not_configured": "Admin panel is not configured. Set WEBAPP_URL to enable the mini app.",
         "rights_not_member": (
             "Bot is not in this channel/chat. Add the bot as admin with posting rights "
             "and repeat linking via /link or /link_forward."
@@ -680,6 +683,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "link_ok": "Ок, привязано: {title}",
         "link_forward_prompt": "Перешлите сообщение из канала/чата, который хотите привязать.",
         "link_forward_not_seen": "Не вижу пересланный чат. Перешлите сообщение именно из канала/чата.",
+        "admin_intro": "📊 Админ-панель — откройте дашборд со статистикой бота.",
+        "admin_open_btn": "Открыть панель",
+        "admin_not_configured": "Админ-панель не настроена. Задайте WEBAPP_URL, чтобы включить мини-приложение.",
         "rights_not_member": (
             "Бот не состоит в этом канале/чате. Добавьте бота администратором с правом "
             "публикации и повторите привязку через /link или /link_forward."

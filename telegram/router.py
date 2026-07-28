@@ -1313,16 +1313,40 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
-    async def _send_post_preview(message: Message, *, user_id: int, post_id: str) -> None:
+    async def _clear_live_preview(bot: Bot, state: FSMContext | None) -> None:
+        """Delete the previously-sent preview messages, if any (best-effort)."""
+        if state is None:
+            return
+        data = await state.get_data()
+        chat_id = data.get("preview_chat_id")
+        msg_ids = data.get("preview_msg_ids") or []
+        if chat_id is not None and msg_ids:
+            for msg_id in msg_ids:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                except Exception:
+                    # Already deleted, too old (>48h), or otherwise gone — ignore.
+                    pass
+        if "preview_msg_ids" in data or "preview_chat_id" in data:
+            await state.update_data(preview_msg_ids=[], preview_chat_id=None)
+
+    async def _send_post_preview(
+        message: Message, *, user_id: int, post_id: str, state: FSMContext | None = None
+    ) -> None:
         lang = await _user_lang(user_id)
         post = await store.get_scheduled_post(post_id)
         if post is None or post.user_id != user_id:
             await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(user_id))
             return
 
+        # Replace any previous live preview instead of stacking a new one.
+        await _clear_live_preview(message.bot, state)
+
+        sent_ids: list[int] = []
+
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         summary = await _build_scheduled_post_summary(post, lang=lang)
-        await message.answer(
+        info_msg = await message.answer(
             tr(
                 lang,
                 "view_post_info",
@@ -1333,17 +1357,21 @@ def build_router(store: StateStore) -> Router:
                 kind=summary["kind"],
             )
         )
+        if info_msg is not None:
+            sent_ids.append(info_msg.message_id)
 
         if post.kind == "text" and post.text:
             import json as _json
             from aiogram.types import MessageEntity as _ME
             entities = [_ME.model_validate(e) for e in _json.loads(post.entities_json)] if post.entities_json else None
-            await message.answer(post.text, entities=entities)
+            body_msg = await message.answer(post.text, entities=entities)
+            if body_msg is not None:
+                sent_ids.append(body_msg.message_id)
         elif post.kind == "media":
             media_items = await store.get_post_media(post.id)
             if media_items:
                 from core.notifier import send_media_post
-                await send_media_post(
+                stats = await send_media_post(
                     bot=message.bot,
                     chat_id=message.chat.id,
                     media_items=media_items,
@@ -1351,6 +1379,10 @@ def build_router(store: StateStore) -> Router:
                     caption_entities_json=post.caption_entities_json,
                     caption_above=post.caption_above,
                 )
+                sent_ids.extend(stats.message_ids)
+
+        if state is not None:
+            await state.update_data(preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)
 
     async def _start_scheduled_post_edit(message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
         lang = await _user_lang(user_id)
@@ -2419,7 +2451,7 @@ def build_router(store: StateStore) -> Router:
         await _render_delete_confirm(message, user_id=message.from_user.id, post=post)
 
     @router.message(Command("view"))
-    async def cmd_view(message: Message) -> None:
+    async def cmd_view(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
         lang = await _user_lang(message.from_user.id)
@@ -2433,7 +2465,7 @@ def build_router(store: StateStore) -> Router:
             await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(message.from_user.id))
             return
 
-        await _send_post_preview(message, user_id=message.from_user.id, post_id=post_id)
+        await _send_post_preview(message, user_id=message.from_user.id, post_id=post_id, state=state)
 
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
@@ -3976,10 +4008,10 @@ def build_router(store: StateStore) -> Router:
         await _render_queue_page(query.message, page=page, user_id=query.from_user.id, edit=True)
 
     @router.callback_query(F.data.startswith("qview:"))
-    async def cb_queue_view(query: CallbackQuery) -> None:
+    async def cb_queue_view(query: CallbackQuery, state: FSMContext) -> None:
         post_id = query.data.split(":", 1)[1]
         await query.answer()
-        await _send_post_preview(query.message, user_id=query.from_user.id, post_id=post_id)
+        await _send_post_preview(query.message, user_id=query.from_user.id, post_id=post_id, state=state)
 
     @router.callback_query(F.data.startswith("qcancel:"))
     async def cb_queue_cancel(query: CallbackQuery) -> None:
