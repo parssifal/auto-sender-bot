@@ -42,10 +42,10 @@ ALTER TABLE users ADD COLUMN username TEXT NULL;
 ALTER TABLE users ADD COLUMN first_name TEXT NULL;
 ```
 
-Follow the project's current schema approach (in-place `CREATE TABLE` + additive
-`ALTER` guarded so re-running `migrate()` is safe — mirror how existing optional
-columns are handled). Versioned migrations (Phase 2 of the refactor plan) are out
-of scope here.
+Follow the project's current schema approach — mirror the existing PRAGMA
+`table_info` check + guarded `ALTER` pattern in `migrate()` (state.py ~line 343) so
+re-running `migrate()` is safe. Do **not** emit a bare unguarded `ALTER` (it fails on
+re-run). Versioned migrations (Phase 2 of the refactor plan) are out of scope here.
 
 **`ensure_user` capture.** Extend the signature, keeping new params optional so the
 ~20 existing call sites keep compiling:
@@ -89,8 +89,12 @@ then `user_id` ascending. `limit`/`offset` exist for safety but at current scale
 single query returns everyone.
 
 **`get_user_profile` enrichment.** Add `username` and `first_name` to the returned
-dict, plus a per-status breakdown of the user's posts (`pending` / `sent` / `failed`)
-alongside the existing total `posts`.
+dict, plus a per-status breakdown of the user's posts alongside the existing total
+`posts`. The DB has **five** statuses (`pending, sending, sent, failed, cancelled` —
+see `count_posts_by_status`, state.py). Return all five as a `posts_by_status` map so
+the breakdown always sums to `posts` and the frontend never shows numbers that don't
+add up; the UI may collapse `sending`→pending-ish and hide zero `cancelled` if desired,
+but the data layer returns the full map.
 
 ### 2. API (`core/webapp.py`)
 
@@ -112,8 +116,11 @@ alongside the existing total `posts`.
     copy-to-clipboard affordance.
   - Right side: compact counters (posts · channels) and last-active date.
 - Clicking a row reuses the existing detail card (`#findCard`): set the id, call
-  `/api/user/{id}`, render timezone / language / created-at / channels and the
-  `pending / sent / failed` post breakdown. The manual id search box stays as-is.
+  `/api/user/{id}`, render the details. Note this is **not pure reuse** — today
+  `#findCard` has four fields (Каналы, Посты, Язык, Часовой пояс) and no created-at
+  or status-breakdown UI (admin.html). The plan must budget new DOM/render code to
+  add a created-at field and a `posts_by_status` breakdown. The manual id search box
+  stays as-is and benefits from the same additions.
 - Match existing file conventions: `esc()` for all user-controlled strings
   (username/first_name), graceful empty-list state, and demo-data rendering when
   the page is opened outside Telegram (as the rest of the dashboard already does).
