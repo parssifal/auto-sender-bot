@@ -334,6 +334,8 @@ inside `cmd_start` with:
         )
 ```
 
+> The bare string `await store.ensure_user(message.from_user.id)` appears ~20 times in `router.py`. Target ONLY the `cmd_start` occurrence (~line 2073) — do NOT use `replace_all`.
+
 Leave the other `ensure_user(...)` call sites unchanged — the `COALESCE` upsert keeps their stored name intact; `/start` is the reliable first-contact point that seeds it.
 
 - [ ] **Step 2: Run the full suite to confirm no regression**
@@ -358,28 +360,32 @@ git commit -m "feat(router): pass username/first_name to ensure_user on /start"
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/test_webapp_server.py`, add (the file already has `_init_data`, `ADMIN_ID`, `NON_ADMIN_ID`, `store`, and `server` fixtures — reuse them; check how existing tests call the server for the exact client/URL pattern and mirror it):
+In `tests/test_webapp_server.py`, add these. The `server` fixture yields a `WebappServer` dataclass — use `server.url(path)` and open your own `ClientSession` (this mirrors the five existing tests directly above the insertion point). The `store` fixture already seeds `ADMIN_ID` (and `_init_data` carries `first_name:"Ann"`), so an admin row exists and `ADMIN_ID in ids` holds.
 
 ```python
 @pytest.mark.asyncio
 async def test_api_users_forbidden_without_admin(server, store) -> None:
-    base, session = server  # adjust to match the existing server fixture's return shape
-    async with session.get(base + "/api/users", headers={"Authorization": _init_data(NON_ADMIN_ID)}) as resp:
-        assert resp.status == 403
+    async with ClientSession() as session:
+        async with session.get(
+            server.url("/api/users"),
+            headers={"Authorization": _init_data(NON_ADMIN_ID)},
+        ) as resp:
+            assert resp.status == 403
 
 
 @pytest.mark.asyncio
 async def test_api_users_returns_list_for_admin(server, store) -> None:
-    base, session = server
-    async with session.get(base + "/api/users", headers={"Authorization": _init_data(ADMIN_ID)}) as resp:
-        assert resp.status == 200
-        body = await resp.json()
-        assert "users" in body
-        ids = [u["user_id"] for u in body["users"]]
-        assert ADMIN_ID in ids
+    async with ClientSession() as session:
+        async with session.get(
+            server.url("/api/users"),
+            headers={"Authorization": _init_data(ADMIN_ID)},
+        ) as resp:
+            assert resp.status == 200
+            body = await resp.json()
+            assert "users" in body
+            ids = [u["user_id"] for u in body["users"]]
+            assert ADMIN_ID in ids
 ```
-
-> Match the existing `server` fixture's return shape and how other tests in this file issue requests — copy their exact call style rather than the placeholder `base, session` above.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -487,7 +493,7 @@ In the `<script>`, add a render helper and fetch. Reuse the existing `api()`, `e
 Add minimal CSS in the existing `<style>` block (match the file's visual language — reuse existing color CSS vars):
 
 ```css
-  .urow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
+  .urow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--separator);cursor:pointer}
   .urow:last-child{border-bottom:none}
   .ulabel{font-weight:600}
   .uid{display:flex;align-items:center;gap:6px;margin-top:2px}
@@ -496,7 +502,7 @@ Add minimal CSS in the existing `<style>` block (match the file's visual languag
   .ustat{font-variant-numeric:tabular-nums;opacity:.8;font-size:13px;white-space:nowrap}
 ```
 
-> If `--line` doesn't exist in the file's CSS vars, use the border color the other cards already use — check the `<style>` block and match it.
+> `admin.html` uses `var(--separator)` for borders (confirmed — there is no `--line`). If the var name differs in your copy, match whatever the other cards already use.
 
 - [ ] **Step 4: Extend `showProfile` for the new fields**
 
