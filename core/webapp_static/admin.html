@@ -98,6 +98,15 @@
   .u-bar span{display:block; height:100%; border-radius:5px; background:linear-gradient(90deg,var(--c1),var(--c5))}
   .u-cnt{font-family:var(--num); font-weight:700; font-size:13px; width:30px; text-align:right}
 
+  /* All users */
+  .urow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--separator);cursor:pointer}
+  .urow:last-child{border-bottom:none}
+  .ulabel{font-weight:600}
+  .uid{display:flex;align-items:center;gap:6px;margin-top:2px}
+  .uidnum{font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.7}
+  .ucopy{background:none;border:none;cursor:pointer;font-size:13px;opacity:.6;padding:0}
+  .ustat{font-variant-numeric:tabular-nums;opacity:.8;font-size:13px;white-space:nowrap}
+
   /* Find user */
   .find .row{display:flex; gap:8px; margin-top:12px}
   .find input{
@@ -175,6 +184,11 @@
     <div id="topUsers"></div>
   </section>
 
+  <section class="card">
+    <div class="block-head"><div class="eyebrow">Все пользователи</div><div class="meta" id="usersListMeta"></div></div>
+    <div id="usersList"></div>
+  </section>
+
   <section class="card find">
     <div class="block-head"><div class="eyebrow">Найти пользователя</div></div>
     <div class="row">
@@ -188,6 +202,8 @@
         <div class="f"><div class="k">Посты</div><div class="val num" id="ucPosts">—</div></div>
         <div class="f"><div class="k">Язык</div><div class="val num" id="ucLang">—</div></div>
         <div class="f"><div class="k">Часовой пояс</div><div class="val num" id="ucTz" style="font-size:14px">—</div></div>
+        <div class="f"><div class="k">Регистрация</div><div class="val num" id="ucCreated" style="font-size:14px">—</div></div>
+        <div class="f"><div class="k">Статусы</div><div class="val num" id="ucStatuses" style="font-size:13px">—</div></div>
       </div>
     </div>
   </section>
@@ -319,6 +335,40 @@
     }).join("") : '<div class="meta">Пока никто не публиковал</div>');
   }
 
+  function userLabel(u){
+    if(u.username){ return "@"+esc(u.username); }
+    if(u.first_name){ return esc(u.first_name); }
+    return "ID "+u.user_id;
+  }
+  function renderUsers(list){
+    var el=$("usersList");
+    if(!list || !list.length){ el.innerHTML='<div class="u-msg show">Пока нет пользователей</div>'; return; }
+    $("usersListMeta").textContent = list.length + "";
+    el.innerHTML = list.map(function(u){
+      return '<div class="urow" data-id="'+u.user_id+'">'
+        + '<div class="uinfo"><div class="ulabel">'+userLabel(u)+'</div>'
+        + '<div class="uid"><span class="uidnum">'+u.user_id+'</span>'
+        + '<button class="ucopy" data-copy="'+u.user_id+'" title="Скопировать ID" aria-label="Скопировать ID">⧉</button></div></div>'
+        + '<div class="ustat">'+nf.format(u.posts)+' · '+nf.format(u.channels)+'</div></div>';
+    }).join("");
+    el.querySelectorAll(".urow").forEach(function(row){
+      row.addEventListener("click", function(e){
+        if(e.target.classList.contains("ucopy")) return;
+        $("findInput").value = row.getAttribute("data-id");
+        findUser();
+        $("findCard").scrollIntoView({behavior:"smooth", block:"nearest"});
+      });
+    });
+    el.querySelectorAll(".ucopy").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var v = btn.getAttribute("data-copy");
+        if(navigator.clipboard){ navigator.clipboard.writeText(v); }
+        btn.textContent = "✓"; setTimeout(function(){ btn.textContent="⧉"; }, 900);
+      });
+    });
+  }
+
   function countUp(el, to){
     if(reduce){ el.textContent = nf.format(to); return; }
     var start=performance.now(), dur=650;
@@ -370,7 +420,8 @@
     $("findMsg").classList.remove("show"); $("findCard").classList.remove("show");
     if(!id){ return; }
     if(!initData){
-      showProfile({user_id:id, channels:3, posts:14, language:"ru", timezone:"Europe/Moscow"});
+      showProfile({user_id:id, channels:3, posts:14, language:"ru", timezone:"Europe/Moscow",
+        created_at:1700000000, posts_by_status:{pending:2,sending:0,sent:10,failed:1,cancelled:1}});
       return;
     }
     api("/api/user/"+id).then(showProfile).catch(function(e){
@@ -383,6 +434,15 @@
     $("ucPosts").textContent = nf.format(p.posts);
     $("ucLang").textContent = p.language || "—";
     $("ucTz").textContent = p.timezone || "—";
+    $("ucCreated").textContent = p.created_at
+      ? new Date(p.created_at*1000).toISOString().slice(0,10) : "—";
+    if(p.posts_by_status){
+      var s = p.posts_by_status;
+      $("ucStatuses").textContent =
+        "⏳"+ (s.pending+s.sending) +" ✓"+ s.sent +" ✗"+ s.failed +" ⊘"+ s.cancelled;
+    } else {
+      $("ucStatuses").textContent = "—";
+    }
     $("findCard").classList.add("show");
   }
 
@@ -411,11 +471,20 @@
     };
   }
 
+  function demoUsers(){
+    return [
+      {user_id:81724, username:"alice", first_name:"Alice", posts:143, channels:4, last_active:0, created_at:1700000000},
+      {user_id:24019, username:null, first_name:"Bob", posts:118, channels:2, last_active:0, created_at:1700500000},
+      {user_id:550212, username:null, first_name:null, posts:97, channels:1, last_active:0, created_at:1701000000}
+    ];
+  }
+
   function load(){
-    if(!initData){ render(demo()); return; }
+    if(!initData){ render(demo()); renderUsers(demoUsers()); return; }
     api("/api/stats").then(render).catch(function(){
       banner("Нет доступа. Проверьте, что вы в списке администраторов.");
     });
+    api("/api/users").then(function(d){ renderUsers(d.users); }).catch(function(){});
   }
 
   // ---- Wire up ----
