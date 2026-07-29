@@ -154,10 +154,16 @@ async def start_webapp_server(
             return web.json_response({"error": "not_found"}, status=404)
         return web.json_response(profile)
 
+    async def api_users(request: web.Request) -> web.Response:
+        if _require_admin(request) is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        return web.json_response({"users": await store.list_users()})
+
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/api/stats", api_stats)
     app.router.add_get("/api/user/{id}", api_user)
+    app.router.add_get("/api/users", api_users)
 
     runner = web.AppRunner(app)
     await runner.setup()
