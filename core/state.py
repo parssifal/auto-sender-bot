@@ -344,6 +344,10 @@ class StateStore:
         user_column_names = {str(row["name"]) for row in user_columns}
         if "language" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN language TEXT NULL")
+        if "username" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN username TEXT NULL")
+        if "first_name" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
 
         now = int(time.time())
         await self._conn.execute(
@@ -374,15 +378,23 @@ class StateStore:
         )
         await self._conn.commit()
 
-    async def ensure_user(self, user_id: int) -> None:
+    async def ensure_user(
+        self,
+        user_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+    ) -> None:
         now = int(time.time())
         await self._conn.execute(
             """
-            INSERT INTO users(user_id, timezone, language, created_at, updated_at)
-            VALUES(?, NULL, NULL, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET updated_at=excluded.updated_at
+            INSERT INTO users(user_id, timezone, language, username, first_name, created_at, updated_at)
+            VALUES(?, NULL, NULL, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                username   = COALESCE(excluded.username, users.username),
+                first_name = COALESCE(excluded.first_name, users.first_name)
             """,
-            (user_id, now, now),
+            (user_id, username, first_name, now, now),
         )
         await self._conn.commit()
 
@@ -545,7 +557,7 @@ class StateStore:
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         row = await self._execute_fetchone(
-            "SELECT user_id, timezone, language, created_at FROM users WHERE user_id=?",
+            "SELECT user_id, timezone, language, username, first_name, created_at FROM users WHERE user_id=?",
             (user_id,),
         )
         if row is None:
@@ -560,6 +572,8 @@ class StateStore:
             "user_id": int(row["user_id"]),
             "timezone": row["timezone"],
             "language": row["language"],
+            "username": row["username"],
+            "first_name": row["first_name"],
             "created_at": int(row["created_at"]),
             "channels": channels,
             "posts": posts,
