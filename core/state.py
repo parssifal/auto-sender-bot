@@ -344,6 +344,10 @@ class StateStore:
         user_column_names = {str(row["name"]) for row in user_columns}
         if "language" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN language TEXT NULL")
+        if "username" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN username TEXT NULL")
+        if "first_name" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
 
         now = int(time.time())
         await self._conn.execute(
@@ -374,15 +378,23 @@ class StateStore:
         )
         await self._conn.commit()
 
-    async def ensure_user(self, user_id: int) -> None:
+    async def ensure_user(
+        self,
+        user_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+    ) -> None:
         now = int(time.time())
         await self._conn.execute(
             """
-            INSERT INTO users(user_id, timezone, language, created_at, updated_at)
-            VALUES(?, NULL, NULL, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET updated_at=excluded.updated_at
+            INSERT INTO users(user_id, timezone, language, username, first_name, created_at, updated_at)
+            VALUES(?, NULL, NULL, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                username   = COALESCE(excluded.username, users.username),
+                first_name = COALESCE(excluded.first_name, users.first_name)
             """,
-            (user_id, now, now),
+            (user_id, username, first_name, now, now),
         )
         await self._conn.commit()
 
@@ -543,9 +555,41 @@ class StateStore:
         )
         return [(int(r["user_id"]), int(r["cnt"])) for r in rows]
 
+    async def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT
+                u.user_id,
+                u.username,
+                u.first_name,
+                u.language,
+                u.created_at,
+                u.updated_at AS last_active,
+                (SELECT COUNT(1) FROM scheduled_posts sp WHERE sp.user_id = u.user_id) AS posts,
+                (SELECT COUNT(1) FROM user_destinations ud WHERE ud.user_id = u.user_id) AS channels
+            FROM users u
+            ORDER BY u.updated_at DESC, u.user_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [
+            {
+                "user_id": int(r["user_id"]),
+                "username": r["username"],
+                "first_name": r["first_name"],
+                "language": r["language"],
+                "created_at": int(r["created_at"]),
+                "last_active": int(r["last_active"]),
+                "posts": int(r["posts"]),
+                "channels": int(r["channels"]),
+            }
+            for r in rows
+        ]
+
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         row = await self._execute_fetchone(
-            "SELECT user_id, timezone, language, created_at FROM users WHERE user_id=?",
+            "SELECT user_id, timezone, language, username, first_name, created_at FROM users WHERE user_id=?",
             (user_id,),
         )
         if row is None:
@@ -556,13 +600,23 @@ class StateStore:
             (user_id,),
         )
         posts = 0 if posts_row is None else int(posts_row["cnt"])
+        status_rows = await self._conn.execute_fetchall(
+            "SELECT status, COUNT(1) AS cnt FROM scheduled_posts WHERE user_id=? GROUP BY status",
+            (user_id,),
+        )
+        posts_by_status = {"pending": 0, "sending": 0, "sent": 0, "failed": 0, "cancelled": 0}
+        for r in status_rows:
+            posts_by_status[str(r["status"])] = int(r["cnt"])
         return {
             "user_id": int(row["user_id"]),
             "timezone": row["timezone"],
             "language": row["language"],
+            "username": row["username"],
+            "first_name": row["first_name"],
             "created_at": int(row["created_at"]),
             "channels": channels,
             "posts": posts,
+            "posts_by_status": posts_by_status,
         }
 
     async def daily_new_users(self, since_ts: int) -> list[tuple[str, int]]:

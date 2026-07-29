@@ -2070,7 +2070,11 @@ def build_router(store: StateStore) -> Router:
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
+        await store.ensure_user(
+            message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+        )
         parts = (message.text or "").split(maxsplit=1)
         start_arg = parts[1].strip() if len(parts) == 2 else ""
         if start_arg.startswith("ti_") and len(start_arg) > 3:

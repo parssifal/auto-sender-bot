@@ -114,3 +114,27 @@ async def test_user_endpoint_returns_profile(server) -> None:
         assert payload["channels"] == 1
         async with session.get(server.url("/api/user/999999"), headers=headers) as resp:
             assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_api_users_forbidden_without_admin(server, store) -> None:
+    async with ClientSession() as session:
+        async with session.get(
+            server.url("/api/users"),
+            headers={"Authorization": _init_data(NON_ADMIN_ID)},
+        ) as resp:
+            assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_api_users_returns_list_for_admin(server, store) -> None:
+    async with ClientSession() as session:
+        async with session.get(
+            server.url("/api/users"),
+            headers={"Authorization": _init_data(ADMIN_ID)},
+        ) as resp:
+            assert resp.status == 200
+            body = await resp.json()
+            assert "users" in body
+            ids = [u["user_id"] for u in body["users"]]
+            assert ADMIN_ID in ids
