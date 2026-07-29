@@ -555,6 +555,38 @@ class StateStore:
         )
         return [(int(r["user_id"]), int(r["cnt"])) for r in rows]
 
+    async def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT
+                u.user_id,
+                u.username,
+                u.first_name,
+                u.language,
+                u.created_at,
+                u.updated_at AS last_active,
+                (SELECT COUNT(1) FROM scheduled_posts sp WHERE sp.user_id = u.user_id) AS posts,
+                (SELECT COUNT(1) FROM user_destinations ud WHERE ud.user_id = u.user_id) AS channels
+            FROM users u
+            ORDER BY u.updated_at DESC, u.user_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [
+            {
+                "user_id": int(r["user_id"]),
+                "username": r["username"],
+                "first_name": r["first_name"],
+                "language": r["language"],
+                "created_at": int(r["created_at"]),
+                "last_active": int(r["last_active"]),
+                "posts": int(r["posts"]),
+                "channels": int(r["channels"]),
+            }
+            for r in rows
+        ]
+
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         row = await self._execute_fetchone(
             "SELECT user_id, timezone, language, username, first_name, created_at FROM users WHERE user_id=?",
