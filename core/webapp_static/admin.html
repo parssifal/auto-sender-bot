@@ -105,7 +105,8 @@
   .uid{display:flex;align-items:center;gap:6px;margin-top:2px}
   .uidnum{font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.7}
   .ucopy{background:none;border:none;cursor:pointer;font-size:13px;opacity:.6;padding:0}
-  .ustat{font-variant-numeric:tabular-nums;opacity:.8;font-size:13px;white-space:nowrap}
+  .ustat{font-variant-numeric:tabular-nums;opacity:.8;font-size:13px;white-space:nowrap;text-align:right}
+  .useen{display:block;font-size:11px;opacity:.55;margin-top:2px}
 
   /* Find user */
   .find .row{display:flex; gap:8px; margin-top:12px}
@@ -342,14 +343,16 @@
   }
   function renderUsers(list){
     var el=$("usersList");
-    if(!list || !list.length){ el.innerHTML='<div class="u-msg show">Пока нет пользователей</div>'; return; }
+    if(!list || !list.length){ el.innerHTML='<div class="meta">Пока нет пользователей</div>'; return; }
     $("usersListMeta").textContent = list.length + "";
     el.innerHTML = list.map(function(u){
+      var seen = u.last_active ? new Date(u.last_active*1000).toISOString().slice(0,10) : "";
       return '<div class="urow" data-id="'+u.user_id+'">'
         + '<div class="uinfo"><div class="ulabel">'+userLabel(u)+'</div>'
         + '<div class="uid"><span class="uidnum">'+u.user_id+'</span>'
         + '<button class="ucopy" data-copy="'+u.user_id+'" title="Скопировать ID" aria-label="Скопировать ID">⧉</button></div></div>'
-        + '<div class="ustat">'+nf.format(u.posts)+' · '+nf.format(u.channels)+'</div></div>';
+        + '<div class="ustat">'+nf.format(u.posts)+' · '+nf.format(u.channels)
+        + (seen ? '<span class="useen">'+seen+'</span>' : '')+'</div></div>';
     }).join("");
     el.querySelectorAll(".urow").forEach(function(row){
       row.addEventListener("click", function(e){
@@ -473,9 +476,9 @@
 
   function demoUsers(){
     return [
-      {user_id:81724, username:"alice", first_name:"Alice", posts:143, channels:4, last_active:0, created_at:1700000000},
-      {user_id:24019, username:null, first_name:"Bob", posts:118, channels:2, last_active:0, created_at:1700500000},
-      {user_id:550212, username:null, first_name:null, posts:97, channels:1, last_active:0, created_at:1701000000}
+      {user_id:81724, username:"alice", first_name:"Alice", posts:143, channels:4, last_active:1701200000, created_at:1700000000},
+      {user_id:24019, username:null, first_name:"Bob", posts:118, channels:2, last_active:1700900000, created_at:1700500000},
+      {user_id:550212, username:null, first_name:null, posts:97, channels:1, last_active:1700600000, created_at:1701000000}
     ];
   }
 
