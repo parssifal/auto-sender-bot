@@ -65,3 +65,14 @@ async def test_list_users_limit_offset(store: StateStore) -> None:
         await store.ensure_user(uid)
     page = await store.list_users(limit=2, offset=0)
     assert len(page) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_user_profile_status_breakdown(store: StateStore) -> None:
+    await store.ensure_user(1, username="a", first_name="A")
+    prof = await store.get_user_profile(1)
+    # All five statuses present and summing to total posts.
+    assert set(prof["posts_by_status"]) == {
+        "pending", "sending", "sent", "failed", "cancelled",
+    }
+    assert sum(prof["posts_by_status"].values()) == prof["posts"]

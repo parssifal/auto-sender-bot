@@ -600,6 +600,13 @@ class StateStore:
             (user_id,),
         )
         posts = 0 if posts_row is None else int(posts_row["cnt"])
+        status_rows = await self._conn.execute_fetchall(
+            "SELECT status, COUNT(1) AS cnt FROM scheduled_posts WHERE user_id=? GROUP BY status",
+            (user_id,),
+        )
+        posts_by_status = {"pending": 0, "sending": 0, "sent": 0, "failed": 0, "cancelled": 0}
+        for r in status_rows:
+            posts_by_status[str(r["status"])] = int(r["cnt"])
         return {
             "user_id": int(row["user_id"]),
             "timezone": row["timezone"],
@@ -609,6 +616,7 @@ class StateStore:
             "created_at": int(row["created_at"]),
             "channels": channels,
             "posts": posts,
+            "posts_by_status": posts_by_status,
         }
 
     async def daily_new_users(self, since_ts: int) -> list[tuple[str, int]]:
