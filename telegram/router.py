@@ -20,23 +20,20 @@ from aiogram.types import (
 from core.rbac import DraftPermissions
 from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
-from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
 from telegram.i18n import (
     DEFAULT_LANGUAGE,
     key_values,
-    language_display_name,
     normalize_language,
-    resolve_language_choice,
     resolve_timezone_choice,
     tr,
 )
 from telegram.handlers.states import (
-    TimezoneStates, LanguageStates, DestinationsStates, ScheduleStates,
+    ScheduleStates,
     RepeatStates, DraftStates, BroadcastStates, EditStates,
 )
 from telegram.handlers.keyboards import (
-    _main_menu_kb, _timezone_setup_kb, _language_kb, _destinations_kb,
+    _main_menu_kb, _destinations_kb,
     _media_collect_kb, _confirm_kb, _queue_cancel_kb, _queue_edit_kb,
     _queue_delete_kb, _queue_paged_kb, _edit_paged_kb, _delete_paged_kb, _edit_field_kb,
     _delete_confirm_kb, _drafts_manage_kb, _draft_detail_kb, _draft_delete_confirm_kb,
@@ -74,7 +71,6 @@ from telegram.handlers.helpers import (
     _resolve_recurring_pattern_id,
     _resolve_scheduled_post_id,
     _resolve_team_id,
-    _resolve_timezone_input,
     _save_scheduled_post_media,
     _save_scheduled_post_time,
     _schedule_time_prompt,
@@ -83,7 +79,7 @@ from telegram.handlers.helpers import (
     _update_draft_from_state,
     _user_lang,
 )
-from telegram.handlers import broadcast, drafts, queue, recurring, schedule
+from telegram.handlers import broadcast, drafts, queue, recurring, schedule, settings
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +87,6 @@ logger = logging.getLogger(__name__)
 _MENU_SCHEDULE_TEXTS = key_values("menu_schedule")
 _MENU_QUEUE_TEXTS = key_values("menu_queue")
 _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
-_MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
-_MENU_LANGUAGE_TEXTS = key_values("menu_language")
-_TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 
 
 def build_router(store: StateStore) -> Router:
@@ -103,6 +96,7 @@ def build_router(store: StateStore) -> Router:
     router.include_router(drafts.build_router(store))
     router.include_router(broadcast.build_router(store))
     router.include_router(queue.build_router(store))
+    router.include_router(settings.build_router(store))
 
     async def _handle_team_invite_start(message: Message, state: FSMContext, *, user_id: int, token: str) -> None:
         lang = await _user_lang(store, user_id)
@@ -1290,94 +1284,6 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await query.message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, query.from_user.id))
 
-    @router.message(F.text.in_(_MENU_TIMEZONE_TEXTS))
-    @router.message(Command("timezone"))
-    async def cmd_timezone(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.set_state(TimezoneStates.waiting_tz)
-        if message.chat.type != "private":
-            await message.answer(
-                tr(lang, "timezone_private_only"),
-                parse_mode="Markdown",
-                reply_markup=await _main_menu_for(store, message.from_user.id),
-            )
-            return
-        await message.answer(
-            tr(lang, "timezone_prompt"),
-            parse_mode="Markdown",
-            reply_markup=_timezone_setup_kb(lang),
-        )
-
-    @router.message(TimezoneStates.waiting_tz)
-    async def set_timezone(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(store, message.from_user.id)
-        location = message.location
-        if location is not None:
-            tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
-            if not tz_name:
-                await message.answer(
-                    tr(lang, "timezone_auto_failed"),
-                    parse_mode="Markdown",
-                )
-                return
-            await store.set_user_timezone(message.from_user.id, tz_name)
-            await state.clear()
-            await message.answer(
-                tr(lang, "timezone_auto_saved", tz_name=tz_name),
-                reply_markup=await _main_menu_for(store, message.from_user.id),
-            )
-            return
-
-        tz_raw = (message.text or "").strip()
-        if tz_raw in _TZ_LOCATION_BUTTON_TEXTS:
-            await message.answer(
-                tr(lang, "timezone_location_not_sent"),
-                parse_mode="Markdown",
-                reply_markup=_timezone_setup_kb(lang),
-            )
-            return
-        if tz_raw:
-            resolved_tz = _resolve_timezone_input(tz_raw)
-            if not resolved_tz:
-                await message.answer(tr(lang, "timezone_invalid"), parse_mode="Markdown")
-                return
-            await store.set_user_timezone(message.from_user.id, resolved_tz)
-            await state.clear()
-            await message.answer(
-                tr(lang, "timezone_saved", tz_name=resolved_tz),
-                reply_markup=await _main_menu_for(store, message.from_user.id),
-            )
-            return
-
-        await message.answer(
-            tr(lang, "timezone_prompt_short"),
-            parse_mode="Markdown",
-            reply_markup=_timezone_setup_kb(lang),
-        )
-
-    @router.message(F.text.in_(_MENU_LANGUAGE_TEXTS))
-    @router.message(Command("language"))
-    async def cmd_language(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.set_state(LanguageStates.waiting_lang)
-        await message.answer(tr(lang, "language_prompt"), reply_markup=_language_kb())
-
-    @router.message(LanguageStates.waiting_lang)
-    async def set_language(message: Message, state: FSMContext) -> None:
-        chosen = resolve_language_choice((message.text or "").strip())
-        current_lang = await _user_lang(store, message.from_user.id)
-        if not chosen:
-            await message.answer(tr(current_lang, "language_invalid"), reply_markup=_language_kb())
-            return
-        await store.set_user_language(message.from_user.id, chosen)
-        await state.clear()
-        await message.answer(
-            tr(chosen, "language_saved", language_name=language_display_name(chosen)),
-            reply_markup=_main_menu_kb(chosen),
-        )
-
     @router.message(F.text.in_(_MENU_DESTINATIONS_TEXTS))
     @router.message(Command("destinations"))
     async def cmd_destinations(message: Message, state: FSMContext) -> None:
@@ -1386,92 +1292,6 @@ def build_router(store: StateStore) -> Router:
         total = await store.count_user_destinations(message.from_user.id)
         await message.answer(
             tr(lang, "destinations_info", total=total),
-            reply_markup=await _main_menu_for(store, message.from_user.id),
-        )
-
-    @router.message(Command("link"))
-    async def cmd_link(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) != 2:
-            await message.answer(tr(lang, "link_usage"))
-            return
-        username = parts[1].strip()
-        if not username.startswith("@"):
-            await message.answer(tr(lang, "link_need_username"))
-            return
-
-        try:
-            chat = await message.bot.get_chat(username)
-        except Exception as exc:
-            await message.answer(tr(lang, "link_not_found", username=username, error=exc))
-            return
-
-        ok, err = await _check_user_admin(message.bot, chat_id=chat.id, user_id=message.from_user.id, lang=lang)
-        if not ok:
-            await message.answer(err)
-            return
-        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=chat.id, lang=lang)
-        if not ok:
-            await message.answer(err)
-            return
-
-        await store.upsert_destination(
-            chat_id=chat.id,
-            type_=chat.type,
-            title=chat.title or (chat.username or str(chat.id)),
-            username=chat.username,
-            bot_status="administrator",
-            bot_can_post=True,
-        )
-        await store.link_user_destination(message.from_user.id, chat.id, linked_via="username")
-        await message.answer(
-            tr(lang, "link_ok", title=chat.title or username),
-            reply_markup=await _main_menu_for(store, message.from_user.id),
-        )
-
-    @router.message(Command("link_forward"))
-    async def cmd_link_forward(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.set_state(DestinationsStates.waiting_forward)
-        await message.answer(tr(lang, "link_forward_prompt"))
-
-    @router.message(DestinationsStates.waiting_forward)
-    async def handle_link_forward(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(store, message.from_user.id)
-        # Support both legacy forward_from_chat and new forward_origin structures.
-        forward_chat = getattr(message, "forward_from_chat", None)
-        if forward_chat is None:
-            origin = getattr(message, "forward_origin", None)
-            forward_chat = getattr(origin, "chat", None) if origin else None
-
-        if not forward_chat:
-            await message.answer(tr(lang, "link_forward_not_seen"))
-            return
-
-        ok, err = await _check_user_admin(message.bot, chat_id=forward_chat.id, user_id=message.from_user.id, lang=lang)
-        if not ok:
-            await message.answer(err)
-            return
-        ok, err = await _check_bot_admin_and_post(message.bot, chat_id=forward_chat.id, lang=lang)
-        if not ok:
-            await message.answer(err)
-            return
-
-        await store.upsert_destination(
-            chat_id=forward_chat.id,
-            type_=forward_chat.type,
-            title=forward_chat.title or (forward_chat.username or str(forward_chat.id)),
-            username=forward_chat.username,
-            bot_status="administrator",
-            bot_can_post=True,
-        )
-        await store.link_user_destination(message.from_user.id, forward_chat.id, linked_via="forward")
-        await state.clear()
-        await message.answer(
-            tr(lang, "link_ok", title=forward_chat.title),
             reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
