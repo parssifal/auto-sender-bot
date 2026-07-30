@@ -62,6 +62,7 @@ from telegram.handlers.helpers import (
     _main_menu_for,
     _move_to_post_collection,
     _prompt_for_datetime,
+    _render_destinations,
     _resolve_caption_above,
     _resolve_draft_id,
     _resolve_recurring_pattern_id,
@@ -73,6 +74,7 @@ from telegram.handlers.helpers import (
     _send_post_preview,
     _user_lang,
 )
+from telegram.handlers import schedule
 
 logger = logging.getLogger(__name__)
 
@@ -87,37 +89,7 @@ _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 
 def build_router(store: StateStore) -> Router:
     router = Router()
-
-    async def _render_destinations(
-        message: Message,
-        page: int,
-        *,
-        user_id: int,
-        select_prefix: str = "sdsel",
-        page_prefix: str = "sdpage",
-    ) -> None:
-        lang = await _user_lang(store, user_id)
-        page_size = 5
-        offset = page * page_size
-        items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
-        has_more = len(items) > page_size
-        items = items[:page_size]
-        if not items:
-            await message.answer(
-                tr(lang, "no_destinations"),
-                reply_markup=await _main_menu_for(store, user_id),
-            )
-            return
-        await message.answer(
-            tr(lang, "choose_destination"),
-            reply_markup=_destinations_kb(
-                items,
-                page=page,
-                has_more=has_more,
-                select_prefix=select_prefix,
-                page_prefix=page_prefix,
-            ),
-        )
+    router.include_router(schedule.build_router(store))
 
     async def _list_all_user_destinations(user_id: int) -> list[Destination]:
         total = await store.count_user_destinations(user_id)
@@ -202,7 +174,7 @@ def build_router(store: StateStore) -> Router:
             dest_page=0,
         )
         await state.set_state(RepeatStates.choosing_destination)
-        await _render_destinations(message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
+        await _render_destinations(store, message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
 
     async def _move_to_draft_collection(message: Message, state: FSMContext, *, chat_id: int, lang: str) -> None:
         await state.update_data(
@@ -1294,21 +1266,6 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, message.from_user.id))
 
-    @router.message(F.text.in_(_MENU_SCHEDULE_TEXTS))
-    @router.message(Command("schedule"))
-    async def cmd_schedule(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id)
-        if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        await state.clear()
-        await state.set_state(ScheduleStates.choosing_destination)
-        await state.update_data(dest_page=0)
-        await _render_destinations(message, page=0, user_id=message.from_user.id)
-
     @router.message(Command("broadcast"))
     async def cmd_broadcast(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
@@ -1352,7 +1309,7 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await state.set_state(DraftStates.choosing_destination)
         await state.update_data(dest_page=0)
-        await _render_destinations(message, page=0, user_id=message.from_user.id, select_prefix="ddsel", page_prefix="ddpage")
+        await _render_destinations(store, message, page=0, user_id=message.from_user.id, select_prefix="ddsel", page_prefix="ddpage")
 
     @router.message(Command("draft_edit"))
     async def cmd_draft_edit(message: Message, state: FSMContext) -> None:
@@ -1819,6 +1776,7 @@ def build_router(store: StateStore) -> Router:
         await state.update_data(dest_page=page)
         await query.answer()
         await _render_destinations(
+            store,
             query.message,
             page=page,
             user_id=query.from_user.id,
@@ -1973,13 +1931,6 @@ def build_router(store: StateStore) -> Router:
             state_name=BroadcastStates.entering_datetime.state,
         )
 
-    @router.callback_query(F.data.startswith("sdpage:"))
-    async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
-        page = int(query.data.split(":")[1])
-        await state.update_data(dest_page=page)
-        await query.answer()
-        await _render_destinations(query.message, page=page, user_id=query.from_user.id)
-
     @router.callback_query(F.data.startswith("rdpage:"))
     async def cb_repeat_dest_page(query: CallbackQuery, state: FSMContext) -> None:
         if await state.get_state() != RepeatStates.choosing_destination.state:
@@ -1990,6 +1941,7 @@ def build_router(store: StateStore) -> Router:
         await state.update_data(dest_page=page)
         await query.answer()
         await _render_destinations(
+            store,
             query.message,
             page=page,
             user_id=query.from_user.id,
@@ -2034,34 +1986,6 @@ def build_router(store: StateStore) -> Router:
             text=tr(lang, "repeat_enter_datetime"),
             data=await state.get_data(),
             state_name=RepeatStates.entering_datetime.state,
-        )
-
-    @router.callback_query(F.data.startswith("sdsel:"))
-    async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
-        lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
-            return
-
-        chat_id = int(query.data.split(":")[1])
-        await state.update_data(
-            chat_id=chat_id,
-            selected_date=None,
-            calendar_year=None,
-            calendar_month=None,
-        )
-        await state.set_state(ScheduleStates.entering_datetime)
-        await query.answer()
-        await _prompt_for_datetime(
-            query.message,
-            lang=lang,
-            tz_name=tz_name,
-            text=tr(lang, "enter_datetime"),
-            data=await state.get_data(),
-            state_name=ScheduleStates.entering_datetime.state,
         )
 
     @router.callback_query(F.data.startswith("rdsel:"))

@@ -20,6 +20,7 @@ from telegram.handlers.states import (
     ScheduleStates,
 )
 from telegram.handlers.keyboards import (
+    _destinations_kb,
     _draft_preview_text,
     _format_local,
     _format_selected_date,
@@ -245,6 +246,39 @@ async def _user_lang(store: StateStore, user_id: int) -> str:
 
 async def _main_menu_for(store: StateStore, user_id: int) -> ReplyKeyboardMarkup:
     return _main_menu_kb(await _user_lang(store, user_id))
+
+
+async def _render_destinations(
+    store: StateStore,
+    message: Message,
+    page: int,
+    *,
+    user_id: int,
+    select_prefix: str = "sdsel",
+    page_prefix: str = "sdpage",
+) -> None:
+    lang = await _user_lang(store, user_id)
+    page_size = 5
+    offset = page * page_size
+    items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
+    has_more = len(items) > page_size
+    items = items[:page_size]
+    if not items:
+        await message.answer(
+            tr(lang, "no_destinations"),
+            reply_markup=await _main_menu_for(store, user_id),
+        )
+        return
+    await message.answer(
+        tr(lang, "choose_destination"),
+        reply_markup=_destinations_kb(
+            items,
+            page=page,
+            has_more=has_more,
+            select_prefix=select_prefix,
+            page_prefix=page_prefix,
+        ),
+    )
 
 
 async def _build_scheduled_post_summary(store: StateStore, post: ScheduledPostRow, *, lang: str) -> dict[str, str]:
