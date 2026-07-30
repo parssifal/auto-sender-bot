@@ -18,7 +18,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
-from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
+from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
 from telegram.i18n import (
@@ -40,7 +40,7 @@ from telegram.handlers.keyboards import (
     _draft_delete_command_kb, _draft_create_scope_kb, _schedule_calendar_kb, _schedule_time_kb,
     _schedule_datetime_markup, _normalize_selected_chat_ids, _normalize_draft_scope,
     _draft_scope_label, _draft_location_label, _draft_preview_text, _draft_action_labels,
-    _draft_post_prompt_text, _team_role_label, _repeat_interval_label, _repeat_weekdays_mask,
+    _draft_post_prompt_text, _repeat_interval_label, _repeat_weekdays_mask,
     _schedule_quick_labels, _schedule_weekday_labels, _format_selected_date,
     _parse_calendar_date_token, _parse_calendar_month_token, _parse_time_token, _short_id,
     _format_local, _selected_date_from_state, _calendar_month_from_state,
@@ -70,7 +70,6 @@ from telegram.handlers.helpers import (
     _resolve_draft_id,
     _resolve_recurring_pattern_id,
     _resolve_scheduled_post_id,
-    _resolve_team_id,
     _save_scheduled_post_media,
     _save_scheduled_post_time,
     _schedule_time_prompt,
@@ -79,7 +78,8 @@ from telegram.handlers.helpers import (
     _update_draft_from_state,
     _user_lang,
 )
-from telegram.handlers import broadcast, drafts, queue, recurring, schedule, settings
+from telegram.handlers import broadcast, drafts, queue, recurring, schedule, settings, teams
+from telegram.handlers.teams import _handle_team_invite_start
 
 logger = logging.getLogger(__name__)
 
@@ -97,45 +97,7 @@ def build_router(store: StateStore) -> Router:
     router.include_router(broadcast.build_router(store))
     router.include_router(queue.build_router(store))
     router.include_router(settings.build_router(store))
-
-    async def _handle_team_invite_start(message: Message, state: FSMContext, *, user_id: int, token: str) -> None:
-        lang = await _user_lang(store, user_id)
-        await state.clear()
-        result = await store.accept_team_invite(token, user_id)
-        team = result.team
-        role = result.role
-
-        if result.status == "accepted" and team is not None and role is not None:
-            await message.answer(
-                tr(
-                    lang,
-                    "team_invite_accept_ok",
-                    team_id=_short_id(team.id),
-                    team_name=team.name,
-                    role=_team_role_label(lang, role),
-                ),
-                reply_markup=await _main_menu_for(store, user_id),
-            )
-            return
-
-        if result.status == "already_member" and team is not None and role is not None:
-            await message.answer(
-                tr(
-                    lang,
-                    "team_invite_already_member",
-                    team_id=_short_id(team.id),
-                    team_name=team.name,
-                    role=_team_role_label(lang, role),
-                ),
-                reply_markup=await _main_menu_for(store, user_id),
-            )
-            return
-
-        key = {
-            "expired": "team_invite_expired",
-            "used": "team_invite_used",
-        }.get(result.status, "team_invite_missing")
-        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, user_id))
+    router.include_router(teams.build_router(store))
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -147,7 +109,7 @@ def build_router(store: StateStore) -> Router:
         parts = (message.text or "").split(maxsplit=1)
         start_arg = parts[1].strip() if len(parts) == 2 else ""
         if start_arg.startswith("ti_") and len(start_arg) > 3:
-            await _handle_team_invite_start(message, state, user_id=message.from_user.id, token=start_arg[3:])
+            await _handle_team_invite_start(store, message, state, user_id=message.from_user.id, token=start_arg[3:])
             return
 
         lang = await _user_lang(store, message.from_user.id)
@@ -155,148 +117,6 @@ def build_router(store: StateStore) -> Router:
         await message.answer(
             tr(lang, "start_message"),
             reply_markup=_main_menu_kb(lang),
-        )
-
-    @router.message(Command("team_create"))
-    async def cmd_team_create(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.clear()
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) != 2 or not parts[1].strip():
-            await message.answer(tr(lang, "team_create_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        team_name = parts[1].strip()
-        team_id = await store.create_team(message.from_user.id, team_name)
-        await message.answer(
-            tr(
-                lang,
-                "team_create_ok",
-                team_id=_short_id(team_id),
-                team_name=team_name,
-                role=_team_role_label(lang, "owner"),
-            ),
-            reply_markup=await _main_menu_for(store, message.from_user.id),
-        )
-
-    @router.message(Command("team_invite"))
-    async def cmd_team_invite(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.clear()
-        parts = (message.text or "").split(maxsplit=2)
-        if len(parts) < 2 or not parts[1].strip():
-            await message.answer(tr(lang, "team_invite_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        team_ref = parts[1].strip().lower()
-        role = parts[2].strip().lower() if len(parts) == 3 and parts[2].strip() else "viewer"
-        if role not in {"viewer", "editor"}:
-            await message.answer(tr(lang, "team_invite_role_invalid"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        owned_teams = await store.list_owned_teams(message.from_user.id, limit=200)
-        team_id = _resolve_team_id(owned_teams, team_ref)
-        if team_id is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        try:
-            invite = await store.create_team_invite(team_id, message.from_user.id, role)
-        except ValueError:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        team = next((item for item in owned_teams if item.id == team_id), None)
-        if team is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        bot_user = await message.bot.me()
-        start_payload = f"ti_{invite.token}"
-        bot_username = getattr(bot_user, "username", None)
-        invite_link = f"https://t.me/{bot_username}?start={start_payload}" if bot_username else f"/start {start_payload}"
-        tz_name = await store.get_user_timezone(message.from_user.id) or "UTC"
-        await message.answer(
-            tr(
-                lang,
-                "team_invite_created",
-                team_id=_short_id(team.id),
-                team_name=team.name,
-                role=_team_role_label(lang, role),
-                expires_at=_format_local(invite.expires_at, tz_name),
-                tz_name=tz_name,
-                link=invite_link,
-            ),
-            reply_markup=await _main_menu_for(store, message.from_user.id),
-        )
-
-    @router.message(Command("team_members"))
-    async def cmd_team_members(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        await state.clear()
-        teams = await store.list_user_teams(message.from_user.id, limit=200)
-        if not teams:
-            await message.answer(tr(lang, "team_members_none"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) == 2 and parts[1].strip():
-            team_id = _resolve_team_id(teams, parts[1].strip().lower())
-            if team_id is None:
-                await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
-                return
-        elif len(teams) == 1:
-            team_id = teams[0].id
-        else:
-            lines: list[str] = []
-            for team in teams:
-                role = await store.get_team_member_role(team.id, message.from_user.id)
-                if role is None:
-                    continue
-                lines.append(
-                    tr(
-                        lang,
-                        "team_members_choose_item",
-                        team_id=_short_id(team.id),
-                        team_name=team.name,
-                        role=_team_role_label(lang, role),
-                    )
-                )
-            await message.answer(
-                tr(lang, "team_members_choose", lines="\n".join(lines)),
-                reply_markup=await _main_menu_for(store, message.from_user.id),
-            )
-            return
-
-        team = next((item for item in teams if item.id == team_id), None)
-        role = await store.get_team_member_role(team_id, message.from_user.id)
-        if team is None or role is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        members = await store.list_team_members(team_id)
-        lines = "\n".join(
-            tr(
-                lang,
-                "team_members_item",
-                role=_team_role_label(lang, member.role),
-                user_id=member.user_id,
-            )
-            for member in members
-        )
-        await message.answer(
-            tr(
-                lang,
-                "team_members_header",
-                team_id=_short_id(team.id),
-                team_name=team.name,
-                role=_team_role_label(lang, role),
-                lines=lines,
-            ),
-            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("cancel"))
