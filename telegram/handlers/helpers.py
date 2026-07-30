@@ -7,11 +7,11 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup
 
-from core.state import DraftRow, RecurringPattern, ScheduledPostRow, Team
+from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.utils import validate_schedule_time
-from telegram.i18n import DEFAULT_LANGUAGE, resolve_timezone_choice, tr
+from telegram.i18n import DEFAULT_LANGUAGE, normalize_language, resolve_timezone_choice, tr
 from telegram.handlers.states import (
     BroadcastStates,
     DraftStates,
@@ -20,9 +20,13 @@ from telegram.handlers.states import (
     ScheduleStates,
 )
 from telegram.handlers.keyboards import (
+    _draft_preview_text,
+    _format_local,
     _format_selected_date,
+    _main_menu_kb,
     _media_collect_kb,
     _schedule_datetime_markup,
+    _short_id,
 )
 
 
@@ -232,3 +236,109 @@ async def _check_bot_admin_and_post(bot: Bot, chat_id: int, *, lang: str = DEFAU
     if can_post is False:
         return False, tr(lang, "rights_bot_can_post_required")
     return True, ""
+
+
+async def _user_lang(store: StateStore, user_id: int) -> str:
+    saved = await store.get_user_language(user_id)
+    return normalize_language(saved)
+
+
+async def _main_menu_for(store: StateStore, user_id: int) -> ReplyKeyboardMarkup:
+    return _main_menu_kb(await _user_lang(store, user_id))
+
+
+async def _build_scheduled_post_summary(store: StateStore, post: ScheduledPostRow, *, lang: str) -> dict[str, str]:
+    where = await store.get_destination_title(post.chat_id) or str(post.chat_id)
+    if post.kind == "text":
+        kind = tr(lang, "kind_text")
+        preview = _draft_preview_text(
+            post.text,
+            fallback=tr(lang, "draft_preview_empty"),
+            limit=80,
+        )
+    else:
+        media_count = len(await store.get_post_media(post.id))
+        kind = tr(lang, "kind_media", count=media_count)
+        preview = _draft_preview_text(
+            post.caption,
+            fallback=tr(lang, "draft_preview_media_no_caption"),
+            limit=80,
+        )
+    return {
+        "where": where,
+        "kind": kind,
+        "preview": preview,
+    }
+
+
+async def _clear_live_preview(bot: Bot, state: FSMContext | None) -> None:
+    """Delete the previously-sent preview messages, if any (best-effort)."""
+    if state is None:
+        return
+    data = await state.get_data()
+    chat_id = data.get("preview_chat_id")
+    msg_ids = data.get("preview_msg_ids") or []
+    if chat_id is not None and msg_ids:
+        for msg_id in msg_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                # Already deleted, too old (>48h), or otherwise gone — ignore.
+                pass
+    if "preview_msg_ids" in data or "preview_chat_id" in data:
+        await state.update_data(preview_msg_ids=[], preview_chat_id=None)
+
+
+async def _send_post_preview(
+    store: StateStore, message: Message, *, user_id: int, post_id: str, state: FSMContext | None = None
+) -> None:
+    lang = await _user_lang(store, user_id)
+    post = await store.get_scheduled_post(post_id)
+    if post is None or post.user_id != user_id:
+        await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(store, user_id))
+        return
+
+    # Replace any previous live preview instead of stacking a new one.
+    await _clear_live_preview(message.bot, state)
+
+    sent_ids: list[int] = []
+
+    tz_name = await store.get_user_timezone(user_id) or "UTC"
+    summary = await _build_scheduled_post_summary(store, post, lang=lang)
+    info_msg = await message.answer(
+        tr(
+            lang,
+            "view_post_info",
+            post_id=_short_id(post.id),
+            where=summary["where"],
+            local_time=_format_local(post.scheduled_at_utc, tz_name),
+            tz_name=tz_name,
+            kind=summary["kind"],
+        )
+    )
+    if info_msg is not None:
+        sent_ids.append(info_msg.message_id)
+
+    if post.kind == "text" and post.text:
+        import json as _json
+        from aiogram.types import MessageEntity as _ME
+        entities = [_ME.model_validate(e) for e in _json.loads(post.entities_json)] if post.entities_json else None
+        body_msg = await message.answer(post.text, entities=entities)
+        if body_msg is not None:
+            sent_ids.append(body_msg.message_id)
+    elif post.kind == "media":
+        media_items = await store.get_post_media(post.id)
+        if media_items:
+            from core.notifier import send_media_post
+            stats = await send_media_post(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                media_items=media_items,
+                caption=post.caption,
+                caption_entities_json=post.caption_entities_json,
+                caption_above=post.caption_above,
+            )
+            sent_ids.extend(stats.message_ids)
+
+    if state is not None:
+        await state.update_data(preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)

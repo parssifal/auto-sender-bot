@@ -50,6 +50,7 @@ from telegram.handlers.keyboards import (
     _is_time_selection_state,
 )
 from telegram.handlers.helpers import (
+    _build_scheduled_post_summary,
     _check_bot_admin_and_post,
     _check_user_admin,
     _clear_inline_markup,
@@ -58,6 +59,7 @@ from telegram.handlers.helpers import (
     _format_rights_check_error,
     _is_datetime_entry_state,
     _is_valid_tz_name,
+    _main_menu_for,
     _move_to_post_collection,
     _prompt_for_datetime,
     _resolve_caption_above,
@@ -68,6 +70,8 @@ from telegram.handlers.helpers import (
     _resolve_timezone_input,
     _schedule_time_prompt,
     _schedule_validation_text,
+    _send_post_preview,
+    _user_lang,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,13 +88,6 @@ _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 def build_router(store: StateStore) -> Router:
     router = Router()
 
-    async def _user_lang(user_id: int) -> str:
-        saved = await store.get_user_language(user_id)
-        return normalize_language(saved)
-
-    async def _main_menu_for(user_id: int) -> ReplyKeyboardMarkup:
-        return _main_menu_kb(await _user_lang(user_id))
-
     async def _render_destinations(
         message: Message,
         page: int,
@@ -99,7 +96,7 @@ def build_router(store: StateStore) -> Router:
         select_prefix: str = "sdsel",
         page_prefix: str = "sdpage",
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         page_size = 5
         offset = page * page_size
         items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
@@ -108,7 +105,7 @@ def build_router(store: StateStore) -> Router:
         if not items:
             await message.answer(
                 tr(lang, "no_destinations"),
-                reply_markup=await _main_menu_for(user_id),
+                reply_markup=await _main_menu_for(store, user_id),
             )
             return
         await message.answer(
@@ -136,7 +133,7 @@ def build_router(store: StateStore) -> Router:
         page: int,
         edit: bool,
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         page_size = 5
         current_page = max(page, 0)
 
@@ -155,7 +152,7 @@ def build_router(store: StateStore) -> Router:
                 await _clear_inline_markup(message)
             await message.answer(
                 tr(lang, "no_destinations"),
-                reply_markup=await _main_menu_for(user_id),
+                reply_markup=await _main_menu_for(store, user_id),
             )
             return
 
@@ -225,7 +222,7 @@ def build_router(store: StateStore) -> Router:
         await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
 
     async def _render_repeats(message: Message, *, user_id: int, page: int, edit: bool) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         page_size = 5
         while True:
             offset = page * page_size
@@ -241,7 +238,7 @@ def build_router(store: StateStore) -> Router:
             if edit:
                 await message.edit_text(text, reply_markup=None)
             else:
-                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+                await message.answer(text, reply_markup=await _main_menu_for(store, user_id))
             return
 
         display_tz = await store.get_user_timezone(user_id)
@@ -300,29 +297,6 @@ def build_router(store: StateStore) -> Router:
             "preview": preview,
         }
 
-    async def _build_scheduled_post_summary(post: ScheduledPostRow, *, lang: str) -> dict[str, str]:
-        where = await store.get_destination_title(post.chat_id) or str(post.chat_id)
-        if post.kind == "text":
-            kind = tr(lang, "kind_text")
-            preview = _draft_preview_text(
-                post.text,
-                fallback=tr(lang, "draft_preview_empty"),
-                limit=80,
-            )
-        else:
-            media_count = len(await store.get_post_media(post.id))
-            kind = tr(lang, "kind_media", count=media_count)
-            preview = _draft_preview_text(
-                post.caption,
-                fallback=tr(lang, "draft_preview_media_no_caption"),
-                limit=80,
-            )
-        return {
-            "where": where,
-            "kind": kind,
-            "preview": preview,
-        }
-
     async def _load_pending_post_for_edit(user_id: int, post_id: str) -> tuple[ScheduledPostRow | None, str | None]:
         post = await store.get_scheduled_post(post_id)
         if post is None or post.user_id != user_id:
@@ -334,7 +308,7 @@ def build_router(store: StateStore) -> Router:
         return post, None
 
     async def _render_edit_posts(message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         page_size = 8
         while True:
@@ -352,13 +326,13 @@ def build_router(store: StateStore) -> Router:
             if edit:
                 await message.edit_text(text, reply_markup=None)
             else:
-                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+                await message.answer(text, reply_markup=await _main_menu_for(store, user_id))
             return
 
         lines: list[str] = []
         edit_buttons: list[dict[str, str]] = []
         for post in posts:
-            summary = await _build_scheduled_post_summary(post, lang=lang)
+            summary = await _build_scheduled_post_summary(store, post, lang=lang)
             lines.append(
                 tr(
                     lang,
@@ -380,7 +354,7 @@ def build_router(store: StateStore) -> Router:
             await message.answer(text, reply_markup=reply_markup)
 
     async def _render_delete_posts(message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         page_size = 8
         while True:
@@ -398,13 +372,13 @@ def build_router(store: StateStore) -> Router:
             if edit:
                 await message.edit_text(text, reply_markup=None)
             else:
-                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+                await message.answer(text, reply_markup=await _main_menu_for(store, user_id))
             return
 
         lines: list[str] = []
         delete_buttons: list[dict[str, str]] = []
         for post in posts:
-            summary = await _build_scheduled_post_summary(post, lang=lang)
+            summary = await _build_scheduled_post_summary(store, post, lang=lang)
             lines.append(
                 tr(
                     lang,
@@ -426,7 +400,7 @@ def build_router(store: StateStore) -> Router:
             await message.answer(text, reply_markup=reply_markup)
 
     async def _render_queue_page(message: Message, page: int, user_id: int, *, edit: bool = False) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         page_size = 8
         while True:
@@ -444,7 +418,7 @@ def build_router(store: StateStore) -> Router:
             if edit:
                 await message.edit_text(text, reply_markup=None)
             else:
-                await message.answer(text, reply_markup=await _main_menu_for(user_id))
+                await message.answer(text, reply_markup=await _main_menu_for(store, user_id))
             return
 
         lines: list[str] = []
@@ -468,81 +442,10 @@ def build_router(store: StateStore) -> Router:
         else:
             await message.answer(text, reply_markup=reply_markup)
 
-    async def _clear_live_preview(bot: Bot, state: FSMContext | None) -> None:
-        """Delete the previously-sent preview messages, if any (best-effort)."""
-        if state is None:
-            return
-        data = await state.get_data()
-        chat_id = data.get("preview_chat_id")
-        msg_ids = data.get("preview_msg_ids") or []
-        if chat_id is not None and msg_ids:
-            for msg_id in msg_ids:
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                except Exception:
-                    # Already deleted, too old (>48h), or otherwise gone — ignore.
-                    pass
-        if "preview_msg_ids" in data or "preview_chat_id" in data:
-            await state.update_data(preview_msg_ids=[], preview_chat_id=None)
-
-    async def _send_post_preview(
-        message: Message, *, user_id: int, post_id: str, state: FSMContext | None = None
-    ) -> None:
-        lang = await _user_lang(user_id)
-        post = await store.get_scheduled_post(post_id)
-        if post is None or post.user_id != user_id:
-            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(user_id))
-            return
-
-        # Replace any previous live preview instead of stacking a new one.
-        await _clear_live_preview(message.bot, state)
-
-        sent_ids: list[int] = []
-
-        tz_name = await store.get_user_timezone(user_id) or "UTC"
-        summary = await _build_scheduled_post_summary(post, lang=lang)
-        info_msg = await message.answer(
-            tr(
-                lang,
-                "view_post_info",
-                post_id=_short_id(post.id),
-                where=summary["where"],
-                local_time=_format_local(post.scheduled_at_utc, tz_name),
-                tz_name=tz_name,
-                kind=summary["kind"],
-            )
-        )
-        if info_msg is not None:
-            sent_ids.append(info_msg.message_id)
-
-        if post.kind == "text" and post.text:
-            import json as _json
-            from aiogram.types import MessageEntity as _ME
-            entities = [_ME.model_validate(e) for e in _json.loads(post.entities_json)] if post.entities_json else None
-            body_msg = await message.answer(post.text, entities=entities)
-            if body_msg is not None:
-                sent_ids.append(body_msg.message_id)
-        elif post.kind == "media":
-            media_items = await store.get_post_media(post.id)
-            if media_items:
-                from core.notifier import send_media_post
-                stats = await send_media_post(
-                    bot=message.bot,
-                    chat_id=message.chat.id,
-                    media_items=media_items,
-                    caption=post.caption,
-                    caption_entities_json=post.caption_entities_json,
-                    caption_above=post.caption_above,
-                )
-                sent_ids.extend(stats.message_ids)
-
-        if state is not None:
-            await state.update_data(preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)
-
     async def _start_scheduled_post_edit(message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        summary = await _build_scheduled_post_summary(post, lang=lang)
+        summary = await _build_scheduled_post_summary(store, post, lang=lang)
         await state.clear()
         await state.update_data(
             edit_post_id=post.id,
@@ -570,8 +473,8 @@ def build_router(store: StateStore) -> Router:
         user_id: int,
         post: ScheduledPostRow,
     ) -> None:
-        lang = await _user_lang(user_id)
-        summary = await _build_scheduled_post_summary(post, lang=lang)
+        lang = await _user_lang(store, user_id)
+        summary = await _build_scheduled_post_summary(store, post, lang=lang)
         await state.clear()
         await state.update_data(
             edit_post_id=post.id,
@@ -598,13 +501,13 @@ def build_router(store: StateStore) -> Router:
         user_id: int,
         post: ScheduledPostRow,
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(user_id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, user_id))
             return
 
-        summary = await _build_scheduled_post_summary(post, lang=lang)
+        summary = await _build_scheduled_post_summary(store, post, lang=lang)
         local_dt = datetime.fromtimestamp(post.scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
         await state.clear()
         await state.update_data(
@@ -638,8 +541,8 @@ def build_router(store: StateStore) -> Router:
         user_id: int,
         post: ScheduledPostRow,
     ) -> None:
-        lang = await _user_lang(user_id)
-        summary = await _build_scheduled_post_summary(post, lang=lang)
+        lang = await _user_lang(store, user_id)
+        summary = await _build_scheduled_post_summary(store, post, lang=lang)
         existing_text = post.caption if post.kind == "media" else post.text
         existing_entities = post.caption_entities_json if post.kind == "media" else post.entities_json
         existing_caption_above = None if post.caption_above is None else bool(post.caption_above)
@@ -671,19 +574,19 @@ def build_router(store: StateStore) -> Router:
         )
 
     async def _send_edit_unavailable(message: Message, *, user_id: int, reason: str) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
-        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, user_id))
 
     async def _send_delete_unavailable(message: Message, *, user_id: int, reason: str) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         key = "delete_post_recurring_blocked" if reason == "recurring" else "delete_post_missing"
-        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, user_id))
 
     async def _render_delete_confirm(message: Message, *, user_id: int, post: ScheduledPostRow) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        summary = await _build_scheduled_post_summary(post, lang=lang)
+        summary = await _build_scheduled_post_summary(store, post, lang=lang)
         await message.answer(
             tr(
                 lang,
@@ -705,10 +608,10 @@ def build_router(store: StateStore) -> Router:
             await _send_delete_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
             return False
 
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         await message.answer(
             tr(lang, "delete_post_ok", post_id=_short_id(post_id)),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
@@ -735,7 +638,7 @@ def build_router(store: StateStore) -> Router:
             await _send_edit_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
             return False
 
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         await state.clear()
         await message.answer(
@@ -746,7 +649,7 @@ def build_router(store: StateStore) -> Router:
                 local_time=_format_local(scheduled_at_utc, tz_name),
                 tz_name=tz_name,
             ),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
@@ -769,7 +672,7 @@ def build_router(store: StateStore) -> Router:
             await _send_edit_unavailable(message, user_id=user_id, reason=str(reason or "missing"))
             return False
 
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         if not str(text).strip():
             await message.answer(tr(lang, "text_required"))
             return False
@@ -799,7 +702,7 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await message.answer(
             tr(lang, "edit_text_updated_ok", post_id=_short_id(post_id)),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
@@ -831,7 +734,7 @@ def build_router(store: StateStore) -> Router:
             await _send_edit_unavailable(message, user_id=user_id, reason="missing")
             return False
 
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         await state.clear()
         await message.answer(
             tr(
@@ -840,12 +743,12 @@ def build_router(store: StateStore) -> Router:
                 post_id=_short_id(post_id),
                 kind=tr(lang, "kind_media", count=len(media_items)),
             ),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
     async def _render_drafts(message: Message, *, user_id: int, scope: str, page: int, edit: bool) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         current_scope = _normalize_draft_scope(scope)
         page_size = 5
         while True:
@@ -898,7 +801,7 @@ def build_router(store: StateStore) -> Router:
         permissions: DraftPermissions,
         edit: bool,
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         summary = await _build_draft_summary(draft, lang=lang)
         text = tr(
@@ -933,7 +836,7 @@ def build_router(store: StateStore) -> Router:
         page: int | None,
         edit: bool,
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         summary = await _build_draft_summary(draft, lang=lang)
         text = tr(
             lang,
@@ -967,7 +870,7 @@ def build_router(store: StateStore) -> Router:
         data = await state.get_data()
         chat_id = data.get("chat_id")
         kind = data.get("kind")
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         if not isinstance(chat_id, int) or kind not in {"text", "media"}:
             return False
 
@@ -1014,12 +917,12 @@ def build_router(store: StateStore) -> Router:
                 where=where,
                 kind=kind_label,
             ),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
     async def _prompt_draft_scope(message: Message, state: FSMContext, *, user_id: int) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         writable_teams = await store.list_writable_teams(user_id)
         if not writable_teams:
             await _save_draft_from_state(message, state, user_id=user_id, team_id=None)
@@ -1032,7 +935,7 @@ def build_router(store: StateStore) -> Router:
         )
 
     async def _start_draft_edit(message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         summary = await _build_draft_summary(draft, lang=lang)
         await state.clear()
         await state.update_data(
@@ -1069,7 +972,7 @@ def build_router(store: StateStore) -> Router:
         chat_id = data.get("chat_id")
         team_id = data.get("team_id")
         kind = data.get("kind")
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         if not isinstance(draft_id, str) or not isinstance(chat_id, int) or kind not in {"text", "media"}:
             return False
 
@@ -1119,15 +1022,15 @@ def build_router(store: StateStore) -> Router:
                 where=where,
                 kind=kind_label,
             ),
-            reply_markup=await _main_menu_for(user_id),
+            reply_markup=await _main_menu_for(store, user_id),
         )
         return True
 
     async def _start_draft_publish(message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         tz_name = await store.get_user_timezone(user_id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(user_id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, user_id))
             return
 
         where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
@@ -1157,18 +1060,18 @@ def build_router(store: StateStore) -> Router:
         scheduled_at_utc: int,
         scheduled_local: str,
     ) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         draft_id = (await state.get_data()).get("draft_publish_id")
         if not isinstance(draft_id, str):
             await state.clear()
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(user_id))
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, user_id))
             return
 
         permissions = await store.get_draft_permissions(draft_id, user_id)
         draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
         if draft is None or permissions is None or not permissions.can_publish:
             await state.clear()
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(user_id))
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, user_id))
             return
 
         await state.update_data(
@@ -1185,7 +1088,7 @@ def build_router(store: StateStore) -> Router:
         await message.answer(text, reply_markup=_confirm_kb(lang))
 
     async def _handle_team_invite_start(message: Message, state: FSMContext, *, user_id: int, token: str) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         await state.clear()
         result = await store.accept_team_invite(token, user_id)
         team = result.team
@@ -1200,7 +1103,7 @@ def build_router(store: StateStore) -> Router:
                     team_name=team.name,
                     role=_team_role_label(lang, role),
                 ),
-                reply_markup=await _main_menu_for(user_id),
+                reply_markup=await _main_menu_for(store, user_id),
             )
             return
 
@@ -1213,7 +1116,7 @@ def build_router(store: StateStore) -> Router:
                     team_name=team.name,
                     role=_team_role_label(lang, role),
                 ),
-                reply_markup=await _main_menu_for(user_id),
+                reply_markup=await _main_menu_for(store, user_id),
             )
             return
 
@@ -1221,7 +1124,7 @@ def build_router(store: StateStore) -> Router:
             "expired": "team_invite_expired",
             "used": "team_invite_used",
         }.get(result.status, "team_invite_missing")
-        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(user_id))
+        await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, user_id))
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -1236,7 +1139,7 @@ def build_router(store: StateStore) -> Router:
             await _handle_team_invite_start(message, state, user_id=message.from_user.id, token=start_arg[3:])
             return
 
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         await message.answer(
             tr(lang, "start_message"),
@@ -1246,11 +1149,11 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("team_create"))
     async def cmd_team_create(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) != 2 or not parts[1].strip():
-            await message.answer(tr(lang, "team_create_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_create_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         team_name = parts[1].strip()
@@ -1263,40 +1166,40 @@ def build_router(store: StateStore) -> Router:
                 team_name=team_name,
                 role=_team_role_label(lang, "owner"),
             ),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("team_invite"))
     async def cmd_team_invite(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         parts = (message.text or "").split(maxsplit=2)
         if len(parts) < 2 or not parts[1].strip():
-            await message.answer(tr(lang, "team_invite_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_invite_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         team_ref = parts[1].strip().lower()
         role = parts[2].strip().lower() if len(parts) == 3 and parts[2].strip() else "viewer"
         if role not in {"viewer", "editor"}:
-            await message.answer(tr(lang, "team_invite_role_invalid"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_invite_role_invalid"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         owned_teams = await store.list_owned_teams(message.from_user.id, limit=200)
         team_id = _resolve_team_id(owned_teams, team_ref)
         if team_id is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         try:
             invite = await store.create_team_invite(team_id, message.from_user.id, role)
         except ValueError:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         team = next((item for item in owned_teams if item.id == team_id), None)
         if team is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         bot_user = await message.bot.me()
@@ -1315,24 +1218,24 @@ def build_router(store: StateStore) -> Router:
                 tz_name=tz_name,
                 link=invite_link,
             ),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("team_members"))
     async def cmd_team_members(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         teams = await store.list_user_teams(message.from_user.id, limit=200)
         if not teams:
-            await message.answer(tr(lang, "team_members_none"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_members_none"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) == 2 and parts[1].strip():
             team_id = _resolve_team_id(teams, parts[1].strip().lower())
             if team_id is None:
-                await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+                await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
                 return
         elif len(teams) == 1:
             team_id = teams[0].id
@@ -1353,14 +1256,14 @@ def build_router(store: StateStore) -> Router:
                 )
             await message.answer(
                 tr(lang, "team_members_choose", lines="\n".join(lines)),
-                reply_markup=await _main_menu_for(message.from_user.id),
+                reply_markup=await _main_menu_for(store, message.from_user.id),
             )
             return
 
         team = next((item for item in teams if item.id == team_id), None)
         role = await store.get_team_member_role(team_id, message.from_user.id)
         if team is None or role is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "team_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         members = await store.list_team_members(team_id)
@@ -1382,23 +1285,23 @@ def build_router(store: StateStore) -> Router:
                 role=_team_role_label(lang, role),
                 lines=lines,
             ),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.clear()
-        await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(message.from_user.id))
+        await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, message.from_user.id))
 
     @router.message(F.text.in_(_MENU_SCHEDULE_TEXTS))
     @router.message(Command("schedule"))
     async def cmd_schedule(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await state.clear()
@@ -1409,10 +1312,10 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("broadcast"))
     async def cmd_broadcast(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await state.clear()
@@ -1423,10 +1326,10 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("repeat"))
     async def cmd_repeat(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await state.clear()
@@ -1464,15 +1367,15 @@ def build_router(store: StateStore) -> Router:
         drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
         draft_id = _resolve_draft_id(drafts, draft_ref)
         if draft_id is None:
-            lang = await _user_lang(message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            lang = await _user_lang(store, message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         draft = await store.get_draft(draft_id)
         permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
         if draft is None or permissions is None or not permissions.can_edit:
-            lang = await _user_lang(message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            lang = await _user_lang(store, message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await _start_draft_edit(message, state, user_id=message.from_user.id, draft=draft)
@@ -1481,23 +1384,23 @@ def build_router(store: StateStore) -> Router:
     async def cmd_draft_delete(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         await state.clear()
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) != 2 or not parts[1].strip():
-            await message.answer(tr(lang, "draft_delete_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "draft_delete_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         draft_ref = parts[1].strip().lower()
         drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
         draft_id = _resolve_draft_id(drafts, draft_ref)
         if draft_id is None:
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         draft = await store.get_draft(draft_id)
         permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
         if draft is None or permissions is None or not permissions.can_delete:
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await _render_draft_delete_confirm(
@@ -1522,15 +1425,15 @@ def build_router(store: StateStore) -> Router:
         drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
         draft_id = _resolve_draft_id(drafts, draft_ref)
         if draft_id is None:
-            lang = await _user_lang(message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            lang = await _user_lang(store, message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         draft = await store.get_draft(draft_id)
         permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
         if draft is None or permissions is None or not permissions.can_publish:
-            lang = await _user_lang(message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            lang = await _user_lang(store, message.from_user.id)
+            await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await _start_draft_publish(message, state, user_id=message.from_user.id, draft=draft)
@@ -1538,27 +1441,27 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) != 2 or not parts[1].strip():
-            await message.answer(tr(lang, "repeat_cancel_usage"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "repeat_cancel_usage"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         pattern_ref = parts[1].strip().lower()
         patterns = await store.list_user_recurring(message.from_user.id, include_inactive=True)
         pattern_id = _resolve_recurring_pattern_id(patterns, pattern_ref)
         if pattern_id is None:
-            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         ok = await store.cancel_recurring_pattern(user_id=message.from_user.id, pattern_id=pattern_id)
         if not ok:
-            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         await message.answer(
             tr(lang, "repeat_cancel_ok", pattern_id=_short_id(pattern_id)),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("edit"))
@@ -1572,10 +1475,10 @@ def build_router(store: StateStore) -> Router:
 
         posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
         post_id, ambiguous = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         if post_id is None:
             key = "edit_post_ambiguous" if ambiguous else "edit_post_missing"
-            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         post, reason = await _load_pending_post_for_edit(message.from_user.id, post_id)
@@ -1596,10 +1499,10 @@ def build_router(store: StateStore) -> Router:
 
         posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
         post_id, ambiguous = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         if post_id is None:
             key = "delete_post_ambiguous" if ambiguous else "delete_post_missing"
-            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         post, reason = await _load_pending_post_for_edit(message.from_user.id, post_id)
@@ -1613,18 +1516,18 @@ def build_router(store: StateStore) -> Router:
     async def cmd_view(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         if len(parts) != 2 or not parts[1].strip():
-            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
         posts = await store.list_pending_posts(user_id=message.from_user.id, limit=200)
         post_id, _ = _resolve_scheduled_post_id(posts, parts[1].strip().lower())
         if post_id is None:
-            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "view_not_found"), reply_markup=await _main_menu_for(store, message.from_user.id))
             return
 
-        await _send_post_preview(message, user_id=message.from_user.id, post_id=post_id, state=state)
+        await _send_post_preview(store, message, user_id=message.from_user.id, post_id=post_id, state=state)
 
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
@@ -1648,7 +1551,7 @@ def build_router(store: StateStore) -> Router:
     async def cb_queue_edit(query: CallbackQuery, state: FSMContext) -> None:
         post_id = query.data.split(":", 1)[1]
         post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         if post is None:
             key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
             await query.answer(tr(lang, key), show_alert=True)
@@ -1661,7 +1564,7 @@ def build_router(store: StateStore) -> Router:
     async def cb_queue_delete_prompt(query: CallbackQuery) -> None:
         post_id = query.data.split(":", 1)[1]
         post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         if post is None:
             key = "delete_post_recurring_blocked" if reason == "recurring" else "delete_post_missing"
             await query.answer(tr(lang, key), show_alert=True)
@@ -1687,7 +1590,7 @@ def build_router(store: StateStore) -> Router:
         action = parts[1]
         post_id = parts[2]
         post, reason = await _load_pending_post_for_edit(query.from_user.id, post_id)
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         if post is None:
             key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
             await query.answer(tr(lang, key), show_alert=True)
@@ -1704,11 +1607,11 @@ def build_router(store: StateStore) -> Router:
             await _start_scheduled_post_media_edit(query.message, state, user_id=query.from_user.id, post=post)
             return
 
-        await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+        await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
 
     @router.callback_query(F.data.startswith("rstop:"))
     async def cb_repeats_stop(query: CallbackQuery) -> None:
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         parts = query.data.split(":", 2)
         if len(parts) != 3:
             await query.answer()
@@ -1777,7 +1680,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_id = parts[3]
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
         draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_view else None
         if draft is None or permissions is None or not permissions.can_view:
@@ -1812,7 +1715,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_id = parts[3]
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
         draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_delete else None
         if draft is None or permissions is None or not permissions.can_delete:
@@ -1845,7 +1748,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_id = parts[3]
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         ok = await store.delete_draft(draft_id, query.from_user.id)
         await query.answer(
             tr(lang, "draft_delete_ok", draft_id=_short_id(draft_id)) if ok else tr(lang, "draft_missing"),
@@ -1856,7 +1759,7 @@ def build_router(store: StateStore) -> Router:
     @router.callback_query(F.data.startswith("ddelcmd:"))
     async def cb_draft_delete_command_confirm(query: CallbackQuery) -> None:
         draft_id = query.data.split(":", 1)[1]
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         ok = await store.delete_draft(draft_id, query.from_user.id)
         await query.answer(
             tr(lang, "draft_delete_ok", draft_id=_short_id(draft_id)) if ok else tr(lang, "draft_missing"),
@@ -1877,7 +1780,7 @@ def build_router(store: StateStore) -> Router:
         action = parts[1]
         draft_id = parts[2]
         permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         if action == "edit":
             draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_edit else None
             if draft is None or permissions is None or not permissions.can_edit:
@@ -1930,7 +1833,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         chat_id = int(query.data.split(":")[1])
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         await state.update_data(chat_id=chat_id)
         await query.answer()
         await _move_to_draft_collection(query.message, state, chat_id=chat_id, lang=lang)
@@ -1941,7 +1844,7 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         parts = query.data.split(":", 2)
         if len(parts) < 2:
             await query.answer()
@@ -2011,7 +1914,7 @@ def build_router(store: StateStore) -> Router:
 
         all_destinations = await _list_all_user_destinations(query.from_user.id)
         if chat_id not in {destination.chat_id for destination in all_destinations}:
-            await query.answer(tr(await _user_lang(query.from_user.id), "broadcast_destination_missing"), show_alert=True)
+            await query.answer(tr(await _user_lang(store, query.from_user.id), "broadcast_destination_missing"), show_alert=True)
             return
 
         data = await state.get_data()
@@ -2034,11 +1937,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2100,11 +2003,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2135,11 +2038,11 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data.startswith("sdsel:"))
     async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2167,7 +2070,7 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         data = await state.get_data()
         scheduled_at_utc = data.get("scheduled_at_utc")
         scheduled_local = data.get("scheduled_local")
@@ -2199,11 +2102,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2242,11 +2145,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2290,11 +2193,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2364,11 +2267,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2414,11 +2317,11 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:
             await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -2520,7 +2423,7 @@ def build_router(store: StateStore) -> Router:
     @router.message(EditStates.entering_text)
     async def edit_enter_text(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         if not message.text:
             await message.answer(tr(lang, "text_required"))
             return
@@ -2544,10 +2447,10 @@ def build_router(store: StateStore) -> Router:
     @router.message(ScheduleStates.entering_datetime)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         tz_name = await store.get_user_timezone(message.from_user.id)
         if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(message.from_user.id))
+            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
             await state.clear()
             return
 
@@ -2634,7 +2537,7 @@ def build_router(store: StateStore) -> Router:
     @router.message(RepeatStates.collecting_post)
     @router.message(ScheduleStates.collecting_post)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         current_state = await state.get_state()
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
@@ -2715,7 +2618,7 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data == "smedia:clear")
     async def cb_media_clear(query: CallbackQuery, state: FSMContext) -> None:
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         current_state = await state.get_state()
         if current_state not in {
             BroadcastStates.collecting_post.state,
@@ -2770,7 +2673,7 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         await query.answer()
         data = await state.get_data()
         media: list[dict[str, str]] = list(data.get("media_items", []))
@@ -2804,7 +2707,7 @@ def build_router(store: StateStore) -> Router:
                 if await _update_draft_from_state(query.message, state, user_id=query.from_user.id):
                     return
                 await state.clear()
-                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
             if current_state == DraftStates.collecting_post.state:
                 await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
@@ -2825,7 +2728,7 @@ def build_router(store: StateStore) -> Router:
                 if await _update_draft_from_state(query.message, state, user_id=query.from_user.id):
                     return
                 await state.clear()
-                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
             if current_state == DraftStates.collecting_post.state:
                 await _prompt_draft_scope(query.message, state, user_id=query.from_user.id)
@@ -2837,7 +2740,7 @@ def build_router(store: StateStore) -> Router:
 
     @router.message(DraftStates.choosing_scope)
     async def draft_choose_scope(message: Message) -> None:
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         writable_teams = await store.list_writable_teams(message.from_user.id)
         await message.answer(
             tr(lang, "draft_create_scope_prompt"),
@@ -2845,7 +2748,7 @@ def build_router(store: StateStore) -> Router:
         )
 
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore, *, user_id: int) -> None:
-        lang = await _user_lang(user_id)
+        lang = await _user_lang(store, user_id)
         data = await state.get_data()
         current_state = await state.get_state()
         is_repeat = current_state == RepeatStates.collecting_post.state
@@ -2919,7 +2822,7 @@ def build_router(store: StateStore) -> Router:
             await query.answer()
             return
 
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         await query.answer()
         data = await state.get_data()
         user_id = query.from_user.id
@@ -2987,7 +2890,7 @@ def build_router(store: StateStore) -> Router:
                     tz_name=tz_name,
                     lines=lines,
                 ),
-                reply_markup=await _main_menu_for(query.from_user.id),
+                reply_markup=await _main_menu_for(store, query.from_user.id),
             )
             return
 
@@ -2995,12 +2898,12 @@ def build_router(store: StateStore) -> Router:
             chat_id = int(data["chat_id"])
             ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
             if not ok:
-                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
                 await state.clear()
                 return
             ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
             if not ok:
-                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
                 await state.clear()
                 return
 
@@ -3034,7 +2937,7 @@ def build_router(store: StateStore) -> Router:
                     tz_name=tz_name,
                     pattern_id=_short_id(pattern_id),
                 ),
-                reply_markup=await _main_menu_for(query.from_user.id),
+                reply_markup=await _main_menu_for(store, query.from_user.id),
             )
             return
 
@@ -3042,24 +2945,24 @@ def build_router(store: StateStore) -> Router:
             draft_id = data.get("draft_publish_id")
             if not isinstance(draft_id, str):
                 await state.clear()
-                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
 
             permissions = await store.get_draft_permissions(draft_id, user_id)
             draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
             if draft is None or permissions is None or not permissions.can_publish:
                 await state.clear()
-                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
 
             ok, err = await _check_user_admin(query.bot, chat_id=draft.chat_id, user_id=user_id, lang=lang)
             if not ok:
-                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
                 await state.clear()
                 return
             ok, err = await _check_bot_admin_and_post(query.bot, chat_id=draft.chat_id, lang=lang)
             if not ok:
-                await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+                await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
                 await state.clear()
                 return
 
@@ -3094,19 +2997,19 @@ def build_router(store: StateStore) -> Router:
                     tz_name=tz_name,
                     post_id=_short_id(post_id),
                 ),
-                reply_markup=await _main_menu_for(query.from_user.id),
+                reply_markup=await _main_menu_for(store, query.from_user.id),
             )
             return
 
         chat_id = int(data["chat_id"])
         ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
         if not ok:
-            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
         ok, err = await _check_bot_admin_and_post(query.bot, chat_id=chat_id, lang=lang)
         if not ok:
-            await query.message.answer(err, reply_markup=await _main_menu_for(query.from_user.id))
+            await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
             await state.clear()
             return
 
@@ -3149,10 +3052,10 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data == "scancel")
     async def cb_cancel(query: CallbackQuery, state: FSMContext) -> None:
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         await query.answer()
         await state.clear()
-        await query.message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(query.from_user.id))
+        await query.message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, query.from_user.id))
 
     @router.message(F.text.in_(_MENU_QUEUE_TEXTS))
     @router.message(Command("queue"))
@@ -3170,27 +3073,27 @@ def build_router(store: StateStore) -> Router:
     async def cb_queue_view(query: CallbackQuery, state: FSMContext) -> None:
         post_id = query.data.split(":", 1)[1]
         await query.answer()
-        await _send_post_preview(query.message, user_id=query.from_user.id, post_id=post_id, state=state)
+        await _send_post_preview(store, query.message, user_id=query.from_user.id, post_id=post_id, state=state)
 
     @router.callback_query(F.data.startswith("qcancel:"))
     async def cb_queue_cancel(query: CallbackQuery) -> None:
-        lang = await _user_lang(query.from_user.id)
+        lang = await _user_lang(store, query.from_user.id)
         post_id = query.data.split(":")[1]
         ok = await store.cancel_post(user_id=query.from_user.id, post_id=post_id)
         await query.answer(tr(lang, "queue_cancel_ok") if ok else tr(lang, "queue_cancel_missing"), show_alert=False)
-        await query.message.answer(tr(lang, "done"), reply_markup=await _main_menu_for(query.from_user.id))
+        await query.message.answer(tr(lang, "done"), reply_markup=await _main_menu_for(store, query.from_user.id))
 
     @router.message(F.text.in_(_MENU_TIMEZONE_TEXTS))
     @router.message(Command("timezone"))
     async def cmd_timezone(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.set_state(TimezoneStates.waiting_tz)
         if message.chat.type != "private":
             await message.answer(
                 tr(lang, "timezone_private_only"),
                 parse_mode="Markdown",
-                reply_markup=await _main_menu_for(message.from_user.id),
+                reply_markup=await _main_menu_for(store, message.from_user.id),
             )
             return
         await message.answer(
@@ -3201,7 +3104,7 @@ def build_router(store: StateStore) -> Router:
 
     @router.message(TimezoneStates.waiting_tz)
     async def set_timezone(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         location = message.location
         if location is not None:
             tz_name = timezone_from_coordinates(latitude=location.latitude, longitude=location.longitude)
@@ -3215,7 +3118,7 @@ def build_router(store: StateStore) -> Router:
             await state.clear()
             await message.answer(
                 tr(lang, "timezone_auto_saved", tz_name=tz_name),
-                reply_markup=await _main_menu_for(message.from_user.id),
+                reply_markup=await _main_menu_for(store, message.from_user.id),
             )
             return
 
@@ -3236,7 +3139,7 @@ def build_router(store: StateStore) -> Router:
             await state.clear()
             await message.answer(
                 tr(lang, "timezone_saved", tz_name=resolved_tz),
-                reply_markup=await _main_menu_for(message.from_user.id),
+                reply_markup=await _main_menu_for(store, message.from_user.id),
             )
             return
 
@@ -3250,14 +3153,14 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("language"))
     async def cmd_language(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.set_state(LanguageStates.waiting_lang)
         await message.answer(tr(lang, "language_prompt"), reply_markup=_language_kb())
 
     @router.message(LanguageStates.waiting_lang)
     async def set_language(message: Message, state: FSMContext) -> None:
         chosen = resolve_language_choice((message.text or "").strip())
-        current_lang = await _user_lang(message.from_user.id)
+        current_lang = await _user_lang(store, message.from_user.id)
         if not chosen:
             await message.answer(tr(current_lang, "language_invalid"), reply_markup=_language_kb())
             return
@@ -3272,17 +3175,17 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("destinations"))
     async def cmd_destinations(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         total = await store.count_user_destinations(message.from_user.id)
         await message.answer(
             tr(lang, "destinations_info", total=total),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("link"))
     async def cmd_link(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) != 2:
             await message.answer(tr(lang, "link_usage"))
@@ -3318,19 +3221,19 @@ def build_router(store: StateStore) -> Router:
         await store.link_user_destination(message.from_user.id, chat.id, linked_via="username")
         await message.answer(
             tr(lang, "link_ok", title=chat.title or username),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.message(Command("link_forward"))
     async def cmd_link_forward(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         await state.set_state(DestinationsStates.waiting_forward)
         await message.answer(tr(lang, "link_forward_prompt"))
 
     @router.message(DestinationsStates.waiting_forward)
     async def handle_link_forward(message: Message, state: FSMContext) -> None:
-        lang = await _user_lang(message.from_user.id)
+        lang = await _user_lang(store, message.from_user.id)
         # Support both legacy forward_from_chat and new forward_origin structures.
         forward_chat = getattr(message, "forward_from_chat", None)
         if forward_chat is None:
@@ -3362,7 +3265,7 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await message.answer(
             tr(lang, "link_ok", title=forward_chat.title),
-            reply_markup=await _main_menu_for(message.from_user.id),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
         )
 
     @router.my_chat_member()
