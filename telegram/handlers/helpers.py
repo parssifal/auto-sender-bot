@@ -680,3 +680,102 @@ async def _move_draft_publish_to_confirmation(
     summary = await _build_draft_summary(store, draft, lang=lang)
     text = tr(lang, "confirm_template", where=summary["where"], local_time=local_time, tz_name=tz_name, kind=summary["kind"])
     await message.answer(text, reply_markup=_confirm_kb(lang))
+
+
+async def _load_pending_post_for_edit(store: StateStore, user_id: int, post_id: str) -> tuple[ScheduledPostRow | None, str | None]:
+    post = await store.get_scheduled_post(post_id)
+    if post is None or post.user_id != user_id:
+        return None, "missing"
+    if post.status != "pending":
+        return None, "unavailable"
+    if await store.get_recurring_instance_by_post_id(post_id) is not None:
+        return None, "recurring"
+    return post, None
+
+
+async def _send_edit_unavailable(store: StateStore, message: Message, *, user_id: int, reason: str) -> None:
+    lang = await _user_lang(store, user_id)
+    key = "edit_post_recurring_blocked" if reason == "recurring" else "edit_post_missing"
+    await message.answer(tr(lang, key), reply_markup=await _main_menu_for(store, user_id))
+
+
+async def _save_scheduled_post_time(
+    store: StateStore,
+    message: Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    scheduled_at_utc: int,
+) -> bool:
+    data = await state.get_data()
+    post_id = data.get("edit_post_id")
+    if not isinstance(post_id, str):
+        return False
+
+    updated = await store.update_scheduled_post(
+        post_id,
+        user_id,
+        {"scheduled_at_utc": scheduled_at_utc},
+    )
+    if not updated:
+        await state.clear()
+        _, reason = await _load_pending_post_for_edit(store, user_id, post_id)
+        await _send_edit_unavailable(store, message, user_id=user_id, reason=str(reason or "missing"))
+        return False
+
+    lang = await _user_lang(store, user_id)
+    tz_name = await store.get_user_timezone(user_id) or "UTC"
+    await state.clear()
+    await message.answer(
+        tr(
+            lang,
+            "edit_time_updated_ok",
+            post_id=_short_id(post_id),
+            local_time=_format_local(scheduled_at_utc, tz_name),
+            tz_name=tz_name,
+        ),
+        reply_markup=await _main_menu_for(store, user_id),
+    )
+    return True
+
+
+async def _save_scheduled_post_media(store: StateStore, message: Message, state: FSMContext, *, user_id: int) -> bool:
+    data = await state.get_data()
+    post_id = data.get("edit_post_id")
+    if not isinstance(post_id, str):
+        return False
+
+    media_items = list(data.get("media_items", []))
+    if not media_items:
+        return False
+
+    draft_text = data.get("draft_text")
+    draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
+    updated = await store.update_scheduled_post(
+        post_id,
+        user_id,
+        {
+            "kind": "media",
+            "caption": draft_text if draft_text_valid else None,
+            "caption_entities_json": data.get("draft_entities_json") if draft_text_valid else None,
+            "caption_above": bool(data.get("caption_above", False)) if draft_text_valid else None,
+            "media_items": media_items,
+        },
+    )
+    if not updated:
+        await state.clear()
+        await _send_edit_unavailable(store, message, user_id=user_id, reason="missing")
+        return False
+
+    lang = await _user_lang(store, user_id)
+    await state.clear()
+    await message.answer(
+        tr(
+            lang,
+            "edit_media_updated_ok",
+            post_id=_short_id(post_id),
+            kind=tr(lang, "kind_media", count=len(media_items)),
+        ),
+        reply_markup=await _main_menu_for(store, user_id),
+    )
+    return True
