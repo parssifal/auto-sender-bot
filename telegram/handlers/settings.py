@@ -13,11 +13,23 @@ from telegram.handlers import states, keyboards as kb, helpers as h
 
 _MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
 _MENU_LANGUAGE_TEXTS = key_values("menu_language")
+_MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
 _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 
 
 def build_router(store: StateStore) -> Router:
     router = Router(name="settings")
+
+    @router.message(F.text.in_(_MENU_DESTINATIONS_TEXTS))
+    @router.message(Command("destinations"))
+    async def cmd_destinations(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await h._user_lang(store, message.from_user.id)
+        total = await store.count_user_destinations(message.from_user.id)
+        await message.answer(
+            tr(lang, "destinations_info", total=total),
+            reply_markup=await h._main_menu_for(store, message.from_user.id),
+        )
 
     @router.message(F.text.in_(_MENU_TIMEZONE_TEXTS))
     @router.message(Command("timezone"))

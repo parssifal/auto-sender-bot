@@ -78,6 +78,32 @@ def build_router(store: StateStore) -> Router:
         await store.ensure_user(message.from_user.id)
         await _render_repeats(store, message, user_id=message.from_user.id, page=0, edit=False)
 
+    @router.message(Command("repeat_cancel"))
+    async def cmd_repeat_cancel(message: Message) -> None:
+        await store.ensure_user(message.from_user.id)
+        lang = await h._user_lang(store, message.from_user.id)
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip():
+            await message.answer(tr(lang, "repeat_cancel_usage"), reply_markup=await h._main_menu_for(store, message.from_user.id))
+            return
+
+        pattern_ref = parts[1].strip().lower()
+        patterns = await store.list_user_recurring(message.from_user.id, include_inactive=True)
+        pattern_id = h._resolve_recurring_pattern_id(patterns, pattern_ref)
+        if pattern_id is None:
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
+            return
+
+        ok = await store.cancel_recurring_pattern(user_id=message.from_user.id, pattern_id=pattern_id)
+        if not ok:
+            await message.answer(tr(lang, "repeat_cancel_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
+            return
+
+        await message.answer(
+            tr(lang, "repeat_cancel_ok", pattern_id=kb._short_id(pattern_id)),
+            reply_markup=await h._main_menu_for(store, message.from_user.id),
+        )
+
     @router.callback_query(F.data.startswith("rlpage:"))
     async def cb_repeats_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
