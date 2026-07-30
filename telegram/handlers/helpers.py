@@ -214,6 +214,25 @@ async def _move_to_post_collection(
     await message.answer(tr(lang, "schedule_post_prompt"), reply_markup=_media_collect_kb(lang))
 
 
+async def _move_repeat_to_destination_selection(
+    store: StateStore,
+    message: Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    scheduled_at_utc: int,
+    scheduled_local: str,
+) -> None:
+    await state.update_data(
+        scheduled_at_utc=scheduled_at_utc,
+        scheduled_local=scheduled_local,
+        chat_id=None,
+        dest_page=0,
+    )
+    await state.set_state(RepeatStates.choosing_destination)
+    await _render_destinations(store, message, page=0, user_id=user_id, select_prefix="rdsel", page_prefix="rdpage")
+
+
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
