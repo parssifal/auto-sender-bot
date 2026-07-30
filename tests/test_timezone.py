@@ -1,5 +1,6 @@
 from core.timezone_resolver import timezone_from_coordinates
-from telegram.router import _is_valid_tz_name, _resolve_timezone_input, _timezone_setup_kb
+from telegram.handlers.helpers import _is_valid_tz_name, _resolve_timezone_input
+from telegram.handlers.keyboards import _timezone_setup_kb
 
 
 def test_timezone_from_coordinates_moscow() -> None:

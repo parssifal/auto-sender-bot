@@ -1,7 +1,7 @@
 import pytest
 from aiogram.exceptions import TelegramForbiddenError
 
-from telegram.router import _check_bot_admin_and_post, _check_user_admin
+from telegram.handlers.helpers import _check_bot_admin_and_post, _check_user_admin
 
 
 class _ForbiddenUserCheckBot:
