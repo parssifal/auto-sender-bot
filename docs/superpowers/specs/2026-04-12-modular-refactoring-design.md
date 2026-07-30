@@ -1,110 +1,124 @@
 # Design: Modular Refactoring of auto-sender-bot
 
-**Date:** 2026-04-12  
-**Status:** Approved  
-**Scope:** Maintainability refactoring — no new user-facing features  
+**Date:** 2026-04-12 (deepened 2026-07-30)
+**Status:** Approved — implementation-ready per phase
+**Scope:** Maintainability refactoring — no new user-facing features
 **Scale:** 1–10 users (personal/team), SQLite, single-process
 
 ---
 
 ## Problem
 
-- `telegram/router.py` — 4,200 lines, all FSM handlers in one file inside `build_router(store)` closure; hard to navigate and extend
-- `core/state.py` — 2,165 lines mixing SQL DAL with business logic
-- No versioned DB migrations — all in a single `migrate()` method
-- FSM contexts are untyped string dicts prone to key-name bugs
+- `telegram/router.py` — **4,235 lines**, all FSM handlers inside a `build_router(store)` closure (~65 nested `async def`, ~50 module-level helpers, 91 handler decorators); hard to navigate and extend.
+- `core/state.py` — **2,347 lines** (73 public methods) mixing SQL DAL with business orchestration.
+- No versioned DB migrations — schema lives in one `migrate()` method (`state.py:145–380`).
+- FSM contexts are untyped string dicts (~26 distinct keys) prone to key-name bugs.
 
 ---
 
 ## Goals
 
-1. Split `router.py` into feature-domain modules without changing any behavior
-2. Extract service layer from `state.py` (business logic → services, SQL → DAL)
-3. Introduce versioned DB migrations with `schema_migrations` table
-4. Add typed FSM context dataclasses per flow
+1. Split `router.py` into feature-domain modules without changing any behavior (Phase 1).
+2. Introduce versioned DB migrations with a `schema_migrations` table + baseline for the live DB (Phase 2).
+3. Extract a thin service layer of pure orchestration from handlers (Phase 3).
+4. Add typed FSM context dataclasses per flow (Phase 4).
 
 ---
 
 ## Non-Goals
 
-- No new user features
-- No database engine change (SQLite stays)
-- No scheduler changes (in-process polling stays)
-- No webhook support (long polling stays)
+- No new user features.
+- No database engine change (SQLite stays).
+- No scheduler changes (in-process polling stays).
+- No webhook support (long polling stays).
+- **No changes to `telegram/admin.py` / `core/webapp.py`** — the admin Mini App already ships its own `build_admin_router` and is the reference pattern for this refactor.
+
+---
+
+## Current-State Audit (2026-07-30)
+
+Grounding facts that this spec is built on (re-verified against `main`, since the original April sketch predates the July admin work):
+
+- **8 `StatesGroup` classes** in `router.py`, not 5: `TimezoneStates`, `LanguageStates`, `DestinationsStates` (settings-ish flows) in addition to `ScheduleStates`, `RepeatStates`, `DraftStates`, `BroadcastStates`, `EditStates`.
+- **91 handler decorators**: 50 `@router.message`, 40 `@router.callback_query`, 1 `@router.my_chat_member`.
+- `telegram/admin.py` already exposes an independent `build_admin_router(...)` — proof the "feature = its own router" target already works in production.
+- `core/state.py` gained ~20 read-only admin/stats aggregates in July (`count_users`, `list_users`, `get_user_profile`, `daily_new_users`, `daily_posts_sent`, `language_distribution`, `top_active_users`, …).
+- `core/rbac.py` is **already a clean pure module**: `DraftPermissions` dataclass + `resolve_draft_permissions` + `can_view/edit/delete/publish_draft` + `can_create_team_draft` — no SQL, no Telegram API.
+- `create_broadcast_posts` and `accept_team_invite` are **transactional DAL methods** (`BEGIN IMMEDIATE` + multi-statement).
+- `migrate()` creates **11 tables + ~12 indexes + 3 guarded `ALTER TABLE users`** (`language`, `username`, `first_name`).
 
 ---
 
 ## Architecture
 
-### Handler Modules (Phase 1)
+### Phase 1 — Handler Modules
+
+Dissolve the `build_router(store)` closure. Every helper and handler becomes module-level and takes `store` as an explicit parameter (mirrors how `admin.py` already works).
 
 ```
 telegram/
   handlers/
-    states.py      ← all StatesGroup classes (ScheduleStates, RepeatStates, DraftStates, etc.)
-    keyboards.py   ← all InlineKeyboardMarkup builders (_main_menu_kb, _destinations_kb, etc.)
-    helpers.py     ← _user_lang(), _check_*admin*(), _render_destinations(), store-dependent helpers,
-                      Telegram-API helpers (_check_user_admin, _check_bot_admin_and_post)
-    shared.py      ← cross-flow handlers: smedia:done, sconf:yes, scancel,
-                      all TimePicker callbacks (tp:nav:, tp:date:, tp:quick:, tp:time:, tp:back:calendar),
-                      schedule_enter_datetime (registered for all entering_datetime/selecting_time states),
-                      on_my_chat_member (my_chat_member event)
-    schedule.py    ← /schedule + ScheduleStates-specific handlers (~700 lines)
-    queue.py       ← /queue, /edit, /delete + EditStates-specific handlers (~600 lines)
-    recurring.py   ← /repeat + RepeatStates-specific handlers (~500 lines)
-    drafts.py      ← /drafts/* + DraftStates-specific handlers (~600 lines)
-    broadcast.py   ← /broadcast + BroadcastStates-specific handlers (~400 lines)
-    settings.py    ← /timezone, /language, /link, /link_forward (~300 lines)
-    teams.py       ← /team_* + invite flow (~300 lines)
-  router.py        ← only include_router() calls (~30 lines)
+    __init__.py
+    states.py      ← all 8 StatesGroup: Timezone, Language, Destinations,
+                     Schedule, Repeat, Draft, Broadcast, Edit
+    keyboards.py   ← ~35 *_kb() builders (pure: no store, no Telegram I/O)
+                     + token parsers (_parse_calendar_*, _parse_time_token,
+                       _short_id, _format_local, _destination_label)
+    helpers.py     ← store-dependent helpers (_user_lang, _render_destinations,
+                     _load_pending_post_for_edit, _build_*_summary,
+                     _check_user_admin, _check_bot_admin_and_post) — store passed explicitly
+    shared.py      ← cross-flow handlers (see below) + on_my_chat_member
+    schedule.py    ← cmd_schedule + ScheduleStates handlers
+    queue.py       ← /queue /edit /delete /view + EditStates + pagination
+                     (qpage/epage/delpage/qview)
+    recurring.py   ← cmd_repeat / cmd_repeats + RepeatStates handlers
+    drafts.py      ← /drafts* + DraftStates + team-draft rbac gating
+    broadcast.py   ← cmd_broadcast + BroadcastStates handlers
+    settings.py    ← /timezone /language /link /link_forward
+                     + Timezone/Language/Destinations states
+    teams.py       ← /team_* + invite flow (cmd_start invite branch delegates here)
+  router.py        ← build_router(store): assembles sub-routers only (~40 lines)
+  admin.py         ← UNCHANGED (already an independent build_admin_router)
 ```
 
-#### Boundary rule (replaces old I2 rule)
+#### Boundary rule
 
-- **`state.py` (DAL):** Only SQL — INSERT/SELECT/UPDATE/DELETE. No Telegram API calls, no business logic.
-- **`core/services/`:** Business orchestration with no Telegram API calls and no raw SQL.
-- **`telegram/handlers/helpers.py`:** Shared handler utilities. May contain Telegram API calls (admin checks, render helpers that call `message.answer()` etc.) — this is deliberate, since handlers must coordinate with the Telegram API.
-- **`telegram/handlers/shared.py` + feature modules:** FSM-aware handlers. Call helpers, services, and DAL as needed.
+- **`state.py` (DAL):** Only SQL — INSERT/SELECT/UPDATE/DELETE, including transactional methods and read-only aggregates. No Telegram API, no business orchestration.
+- **`core/services/`:** Business orchestration — no Telegram API, no raw SQL (Phase 3).
+- **`telegram/handlers/keyboards.py`:** Pure functions — no `store`, no Telegram I/O.
+- **`telegram/handlers/helpers.py`:** Shared handler utilities. May call the Telegram API (admin checks, render helpers) — deliberate, since handlers coordinate with Telegram.
+- **`telegram/handlers/shared.py` + feature modules:** FSM-aware handlers. Call helpers, services, DAL, rbac.
 
 #### Cross-flow handler strategy
 
-The following handlers dispatch across multiple FSM flows. They live in **`shared.py`**:
+These handlers dispatch across multiple FSM flows; they live in **`shared.py`**, inspect `await state.get_state()` internally, and are NOT duplicated across feature modules:
 
-- `smedia:done` / `smedia:clear` — fires in `ScheduleStates.collecting_post`, `RepeatStates.collecting_post`, `BroadcastStates.collecting_post`, `DraftStates.collecting_post`, `DraftStates.editing_post`, `EditStates.collecting_media`
-- `sconf:yes` — fires in `ScheduleStates.confirming`, `RepeatStates.confirming`, `BroadcastStates.confirming`, `DraftStates.confirming`
-- `scancel` — cross-flow cancellation (fires in multiple states across flows)
-- All TimePicker callbacks (`tp:nav:`, `tp:date:`, `tp:quick:`, `tp:time:`, `tp:back:calendar`) — fire in all `entering_datetime`/`selecting_time` states across all flows
-- `schedule_enter_datetime` message handler — registered for all `entering_datetime`/`selecting_time` states
-- `on_my_chat_member` (`router.my_chat_member`) — standalone
-
-These handlers inspect `await state.get_state()` internally and are NOT duplicated across feature modules.
+- `smedia:done` / `smedia:clear` — fires in `ScheduleStates.collecting_post`, `RepeatStates.collecting_post`, `BroadcastStates.collecting_post`, `DraftStates.collecting_post`, `DraftStates.editing_post`, `EditStates.collecting_media`.
+- `sconf:yes` — fires in `ScheduleStates.confirming`, `RepeatStates.confirming`, `BroadcastStates.confirming`, `DraftStates.confirming`.
+- `scancel` — cross-flow cancellation.
+- All TimePicker callbacks (`tp:nav:`, `tp:date:`, `tp:quick:`, `tp:time:`, `tp:back:calendar`) — fire in all `entering_datetime`/`selecting_time` states across flows.
+- `schedule_enter_datetime` (message handler) — registered for all `entering_datetime`/`selecting_time` states.
+- `on_my_chat_member` (`router.my_chat_member`) — standalone.
 
 #### Router include order
 
-In aiogram 3.x, earlier-registered routers take priority. `shared_router` must be included first because its state filters cover all domains:
+aiogram 3.x gives earlier-registered routers priority. `shared_router` is included FIRST because its state filters span every domain:
 
 ```python
 def build_router(store):
     router = Router()
-    # shared first: cross-flow callbacks must resolve before feature-specific fallbacks
-    router.include_router(shared.build_router(store))
-    # feature routers: most specific first
-    for module in [schedule, recurring, drafts, broadcast, queue, settings, teams]:
+    router.include_router(shared.build_router(store))   # first: cross-flow filters cover all domains
+    for module in (schedule, recurring, drafts, broadcast, queue, settings, teams):
         router.include_router(module.build_router(store))
     return router
 ```
 
 #### Closure dissolution
 
-All helper functions inside `build_router(store)` are currently closures capturing `store`. Migration:
-
-1. Promote all helpers to module-level functions accepting `store` as explicit parameter.  
-   Before: `def _user_lang(user_id)` (closure)  
-   After: `def _user_lang(store, user_id)` in `helpers.py`
-
-2. Update all call sites accordingly.
-
-3. **Update all test files that import from `telegram.router`** as part of Phase 1:
+1. Promote each helper inside `build_router(store)` to a module-level function with an explicit `store` param.
+   Before: `def _user_lang(user_id)` (closure) → After: `def _user_lang(store, user_id)` in `helpers.py`.
+2. Update all call sites.
+3. Update the 8 test files that import from `telegram.router`:
 
 | Test file | Currently imports | New import path |
 |-----------|------------------|-----------------|
@@ -117,42 +131,52 @@ All helper functions inside `build_router(store)` are currently closures capturi
 | `tests/test_router_edit_posts.py` | `EditStates`, `build_router` | `telegram.handlers.states`, `telegram.router` |
 | `tests/test_router_broadcast.py` | `BroadcastStates`, `build_router` | `telegram.handlers.states`, `telegram.router` |
 
-   Note: `telegram/router.py` does NOT re-export StatesGroup classes. Tests import directly from `telegram.handlers.states`.
+`telegram/router.py` does NOT re-export StatesGroup classes; tests import directly from `telegram.handlers.states`.
 
-### DB Migrations (Phase 2)
+**Execution:** extract one feature domain at a time (not big-bang). `pytest -q` green after each extracted module.
+
+**Risk/mitigation:** aiogram handler registration order affects routing — extract incrementally, domain by domain, each step under tests and a manual command walk-through.
+
+### Phase 2 — Versioned Migrations + Baseline
+
+Replace the monolithic `migrate()` (`state.py:145–380`) with numbered `.sql` files + a runner backed by `schema_migrations`. Independent of Phase 1 — can run in parallel.
 
 ```
 core/
   migrations/
-    001_initial.sql       ← users, destinations, user_destinations, scheduled_posts, scheduled_post_media
-    002_teams.sql         ← teams, team_members, team_invites
-    003_recurring.sql     ← recurring_patterns, recurring_instances
-    004_drafts.sql        ← drafts, draft_media
-  migrate.py              ← run_migrations(conn)
+    001_users_destinations.sql   ← users (incl. language/username/first_name inline),
+                                    destinations, user_destinations
+    002_teams.sql                ← teams, team_members, team_invites + indexes
+    003_posts.sql                ← scheduled_posts, scheduled_post_media + idx_scheduled_due
+    004_recurring.sql            ← recurring_patterns, recurring_instances + indexes
+    005_drafts.sql               ← drafts, draft_media + indexes
+  migrate.py                     ← run_migrations(conn)
 ```
 
-All `.sql` files use `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` — idempotent on existing databases. First run on an already-deployed database is safe: DDL is a no-op, version is recorded.
+File order follows FK dependencies: users/destinations → teams → posts → recurring → drafts. Because these become the NEW baseline, the 3 guarded `ALTER TABLE users ADD COLUMN` are folded directly into the `users` `CREATE TABLE` in `001`. All statements are `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` (idempotent).
 
-#### Migration runner with proper transaction safety
+#### Runner with baseline (B1) and correct transactions
 
-`executescript` issues an implicit `COMMIT` before executing, so it cannot be used inside a manually managed transaction. Use individual `conn.execute()` calls instead, following the existing pattern in `core/state.py`:
+`executescript` issues an implicit COMMIT, so it cannot run inside a managed transaction — use individual `conn.execute()` calls (matching the existing `state.py` pattern):
 
 ```python
 async def run_migrations(conn):
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at TEXT NOT NULL
-        )
-    """)
+    await conn.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)""")
     await conn.commit()
 
-    applied = {row[0] for row in await conn.execute_fetchall(
-        "SELECT version FROM schema_migrations"
-    )}
+    applied = {r[0] for r in await conn.execute_fetchall(
+        "SELECT version FROM schema_migrations")}
 
-    migrations_dir = Path(__file__).parent / "migrations"
-    for path in sorted(migrations_dir.glob("*.sql")):
+    # --- BASELINE (B1): live pre-migration DB ---
+    if not applied and await _schema_already_present(conn):
+        for version in _all_migration_versions():          # 1..5
+            await conn.execute(
+                "INSERT INTO schema_migrations VALUES (?, datetime('now'))", (version,))
+        await conn.commit()
+        return
+
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
         version = int(path.stem.split("_")[0])
         if version in applied:
             continue
@@ -162,121 +186,167 @@ async def run_migrations(conn):
             for stmt in statements:
                 await conn.execute(stmt)
             await conn.execute(
-                "INSERT INTO schema_migrations VALUES (?, datetime('now'))",
-                (version,)
-            )
+                "INSERT INTO schema_migrations VALUES (?, datetime('now'))", (version,))
             await conn.commit()
         except Exception:
             await conn.rollback()
             raise
 ```
 
-### Service Layer (Phase 3)
+`_schema_already_present(conn)` probes a marker table:
+`SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_posts'`.
+Tables present + empty `schema_migrations` ⇒ deployed pre-migration DB ⇒ record versions 1..5 as applied without touching DDL.
+
+**Integration:** `StateStore.migrate()` becomes a thin wrapper delegating to `run_migrations(self._conn)`. `StateStore`'s public interface is unchanged; callers and tests don't notice.
+
+**Risk/mitigation:** naive `split(";")` breaks on triggers/CTEs containing semicolons. Our migrations are simple CREATE TABLE/INDEX only; if complex DDL is ever needed, switch that file to an explicit statement list.
+
+### Phase 3 — Service Layer (light, orchestration-only)
+
+A service here is pure business orchestration: no Telegram I/O, no raw SQL. It reads via the DAL, makes decisions, returns a result — extracted from handlers so it is unit-testable without aiogram mocks. Depends on Phase 1 (services are lifted out of the already-split feature modules).
 
 ```
 core/
   services/
-    schedule_svc.py   ← create_broadcast_posts()
-    draft_svc.py      ← publish_draft(), DraftPermissions (moved from rbac.py), get_draft_permissions()
-    team_svc.py       ← create_team_invite(), accept_invite()
-  state.py            ← dataclasses + pure SQL methods only
+    __init__.py
+    broadcast_svc.py  ← resolve selected chat_ids → valid destinations,
+                        assemble media_items, call store.create_broadcast_posts()
+    draft_svc.py      ← personal/team scope decision, gate via rbac.can_publish_draft,
+                        publish orchestration: draft → create_scheduled_*_post
+    team_svc.py       ← invite preparation (role validation via rbac.can_create_team_draft),
+                        handle accept result
+  rbac.py             ← UNCHANGED (already pure permission predicates)
+  state.py            ← essentially UNCHANGED: transactional methods AND all read-only
+                        stats aggregates stay in the DAL (decision A1)
 ```
 
-Services contain no Telegram API calls. Admin checks remain in handlers.
+**What moves vs what stays:**
 
-### Typed FSM Contexts (Phase 4)
+| Logic | Now | After Phase 3 |
+|---|---|---|
+| Resolve destinations + build posts for broadcast | handler | `broadcast_svc` (calls DAL) |
+| Personal/team scope + draft publish orchestration | handler (`_start_draft_publish`) | `draft_svc` |
+| Invite role validation + accept handling | handler | `team_svc` (via `rbac`) |
+| `create_broadcast_posts`, `accept_team_invite` (transactions) | DAL | **stay in DAL** |
+| `DraftPermissions`, `can_*` | `rbac.py` | **stay in `rbac.py`** |
+| stats/admin aggregates (~20 methods) | DAL | **stay in DAL (A1)** |
 
-The dataclasses below are **illustrative starting points**. Before implementing Phase 4, the implementor must audit all `state.update_data()` and `state.get_data()` call sites in the entire handler codebase to produce a complete field list. Known missing fields include (non-exhaustive): `entities_json`, `caption_entities_json`, `text_before_media`, `calendar_month`, `calendar_year`, `selected_date`, `scheduled_local`, `dest_page`, `interval_type`, `draft_publish_id`, `edit_draft_id`, `team_id`.
+**Decision A1 rationale:** read-only aggregates are pure SQL with no side effects — by the boundary rule they ARE the DAL. Wrapping ~20 of them in a `stats_svc` is grouping for grouping's sake (YAGNI at this scale). Transactional methods stay in the DAL because extracting them would break a single `BEGIN IMMEDIATE` boundary for cosmetic gain.
+
+**Verification:** `pytest -q`; new service unit tests without aiogram (pass a real/fake store); manual broadcast + team-draft publish with RBAC checks.
+
+### Phase 4 — Typed FSM Contexts
+
+Replace untyped `dict[str, Any]` FSM data (~26 keys) with dataclasses. Depends on Phase 1 (needs split modules + `shared.py`); orthogonal to Phase 3.
+
+**Audit-driven insight:** content fields (`kind`, `text`, `media_items`, `caption`, `caption_above`, `entities_json`, `caption_entities_json`, `text_before_media`) are identical across schedule/repeat/broadcast/draft/edit — exactly what cross-flow `smedia:done`/`sconf:yes` touch. Datetime fields are what the shared datetime handler touches. So: **compose from mixins**, not 5 independent classes.
 
 ```python
+# telegram/handlers/contexts.py
+
 @dataclass
-class ScheduleContext:
-    # NOTE: actual key may be selected_chat_ids (list) — verify against audit
-    selected_chat_id: int | None = None
-    scheduled_at_utc: int | None = None
-    kind: str | None = None        # "text" | "media"
+class PostContent:                      # collected by cross-flow media/confirm handlers
+    kind: str | None = None             # "text" | "media"
     text: str | None = None
+    entities_json: str | None = None
     media_items: list[dict] = field(default_factory=list)
     caption: str | None = None
+    caption_entities_json: str | None = None
     caption_above: bool = False
-    # ... complete after audit
+    text_before_media: str | None = None
 
 @dataclass
-class DraftContext:
-    selected_chat_id: int | None = None
-    kind: str | None = None
-    text: str | None = None
-    media_items: list[dict] = field(default_factory=list)
-    scope: str | None = None       # "personal" | "team"
-    # ... complete after audit
+class DateTimePick:                     # touched by the shared datetime handler
+    calendar_year: int | None = None
+    calendar_month: int | None = None
+    selected_date: str | None = None
+    scheduled_at_utc: int | None = None
+    scheduled_local: str | None = None
 
 @dataclass
-class EditContext:
-    edit_post_id: int | None = None
+class PreviewRef:                       # cross-flow; set by _send_post_preview
+    preview_msg_ids: list[int] = field(default_factory=list)
+    preview_chat_id: int | None = None
+
+@dataclass
+class ScheduleContext(PostContent, DateTimePick):
+    selected_chat_ids: list[int] = field(default_factory=list)
+    dest_page: int = 0
+
+@dataclass
+class RepeatContext(PostContent, DateTimePick):
+    selected_chat_ids: list[int] = field(default_factory=list)
+    interval_type: str | None = None
+
+@dataclass
+class BroadcastContext(PostContent, DateTimePick):
+    selected_chat_ids: list[int] = field(default_factory=list)
+    dest_page: int = 0
+
+@dataclass
+class DraftContext(PostContent, DateTimePick):
     chat_id: int | None = None
-    field: str | None = None       # "text" | "time" | "media"
-    text: str | None = None
-    media_items: list[dict] = field(default_factory=list)
-    # ... complete after audit
+    team_id: int | None = None
+    draft_text: str | None = None
+    draft_entities_json: str | None = None
+    draft_publish_id: str | None = None
+
+@dataclass
+class EditContext(PostContent):
+    edit_post_id: str | None = None
+    edit_draft_id: str | None = None
+    edit_preserve_caption_above: bool = False
 ```
 
-Helpers in `helpers.py`:
+**Serialization — deploy safety (critical).** FSM storage (Redis/memory) serializes to JSON and sessions can survive a restart mid-flow. Keep storing **flat keys exactly as today** (not a nested object); the wrappers only add typed access:
+
 ```python
-async def get_schedule_ctx(state: FSMContext) -> ScheduleContext: ...
-async def set_schedule_ctx(state: FSMContext, ctx: ScheduleContext): ...
-# etc. per context type
+# helpers.py
+async def get_schedule_ctx(state) -> ScheduleContext:
+    d = await state.get_data()
+    return ScheduleContext(**{k: d[k] for k in _fields(ScheduleContext) if k in d})
+
+async def patch_schedule_ctx(state, **changes):
+    await state.update_data(**changes)     # flat keys — backward compatible
 ```
 
-Cross-flow handlers in `shared.py` dispatch per state branch using typed context helpers:
+Partially migrated flows and Redis-persisted in-flight sessions keep working across a rollout: the keys are unchanged, only typed access is layered on top.
+
+Cross-flow dispatch in `shared.py` uses the typed getters:
 
 ```python
 async def cb_media_done(callback, state, store):
-    current = await state.get_state()
-    if current in ScheduleStates:
-        ctx = await get_schedule_ctx(state)
-        ...
-    elif current in DraftStates:
-        ctx = await get_draft_ctx(state)
-        ...
+    cur = await state.get_state()
+    if cur in ScheduleStates:  ctx = await get_schedule_ctx(state)
+    elif cur in DraftStates:   ctx = await get_draft_ctx(state)
+    ...  # ctx.media_items, ctx.caption_above — autocompleted, typo-proof
 ```
+
+**Risk/mitigation:** dataclass mixin inheritance requires default-valued fields after non-default ones — all fields here have defaults, so no MRO conflict. Migrate one flow at a time, each under `pytest -q` + a manual `/schedule` and `/drafts` walk-through, including reading an old flat-key Redis session with the new getter.
 
 ---
 
-## Phase 0: Close Uncommitted Work
+## Phase 0: Close Uncommitted Work — DONE
 
-Files with uncommitted changes: `telegram/router.py`, `core/state.py`, `telegram/i18n.py`
-
-1. Register pagination callbacks: `qpage:{n}`, `epage:{n}`, `delpage:{n}`
-2. Implement `qview:{post_id}` using existing i18n keys: `btn_view_post`, `view_not_found`, `view_post_info`
-3. Verify `list_pending_posts(offset=...)` and `list_editable_pending_posts(offset=...)` work
-4. **Create** `tests/test_router_queue.py` with pagination and preview tests
-5. Commit
+Pagination (`qpage`/`epage`/`delpage`), `qview:{post_id}` preview, `tests/test_router_queue.py`, `_QUEUE_PAGE_SIZE`, `_render_post_edit_list` — landed and merged.
 
 ---
 
 ## Implementation Order & Dependencies
 
 ```
-Phase 0  →  Phase 1  →  Phase 3
-                     ↘  Phase 4
-Phase 2  (independent, can run in parallel with Phase 1)
+Phase 0 (done) → Phase 1 → Phase 3
+                        ↘ Phase 4
+Phase 2 (independent, can run in parallel with Phase 1)
 ```
 
 ---
 
 ## Files NOT Changed
 
-- `core/notifier.py`
-- `core/scheduler.py`
-- `core/time_picker.py`
-- `core/utils.py`
-- `core/config.py`
-- `core/fsm_storage.py`
-- `core/timezone_resolver.py`
-- `core/healthcheck.py`
-- `core/logging_setup.py`
+`core/notifier.py`, `core/scheduler.py`, `core/time_picker.py`, `core/utils.py`, `core/config.py`, `core/fsm_storage.py`, `core/timezone_resolver.py`, `core/healthcheck.py`, `core/logging_setup.py`, `telegram/admin.py`, `core/webapp.py`, `core/webapp_static/admin.html`.
 
-Eight test files (listed in Closure Dissolution table) **will have import paths updated** in Phase 1. All tests must pass after each phase.
+The eight test files listed in Phase 1 will have import paths updated. All tests must pass after each phase.
 
 ---
 
@@ -284,8 +354,8 @@ Eight test files (listed in Closure Dissolution table) **will have import paths 
 
 | Phase | Check |
 |-------|-------|
-| 0 | `pytest tests/test_router_queue.py -q` (new file) |
-| 1 | `pytest -q` (all green, including 8 updated test import paths); manually verify all commands respond |
-| 2 | Fresh DB run → check tables; re-run → `schema_migrations` unchanged; simulate partial failure (corrupt SQL) → version absent from `schema_migrations` |
-| 3 | `pytest -q`; manually test broadcast post + draft RBAC |
-| 4 | `pytest -q`; manually walk through `/schedule` and `/drafts` full flow |
+| 0 | `pytest tests/test_router_queue.py -q` (done) |
+| 1 | `pytest -q` green (incl. 8 updated test import paths); manually verify every command responds; extract domain-by-domain |
+| 2 | Fresh DB → tables + `schema_migrations`={1..5}; re-run → unchanged; **live prod → baseline records versions, data intact**; corrupt SQL in file N → rollback, version N absent, N-1 applied |
+| 3 | `pytest -q`; new service unit tests without aiogram; manual broadcast + draft RBAC |
+| 4 | `pytest -q`; full walk of `/schedule` `/repeat` `/broadcast` `/drafts`; old flat-key Redis session reads correctly via new getter |
