@@ -140,11 +140,17 @@ Move the module-level helper functions that are NOT pure keyboards — the ones 
 
 ## Tasks 4–11: Extract feature modules (one per task)
 
-**Every feature-module task follows the identical shape below.** Do them in this order (shared FIRST, because at the top level it is included first and its cross-flow state filters must resolve before feature fallbacks):
+**Every feature-module task follows the identical shape below.**
+
+> **EXECUTION ORDER (revised during implementation — Option B):** `shared.py` is extracted **LAST among the modules**, not first. Discovered in the Task 4 attempt: the cross-flow handlers (`cb_media_done`, `cb_confirm_yes`, `schedule_enter_datetime`, `cb_schedule_quick/time`) dispatch by state INTO each flow's continuation helpers (`_save_scheduled_post_time`, `_move_repeat_to_destination_selection`, `_move_draft_publish_to_confirmation`, `_resolve_broadcast_destinations`, …). Extracting `shared` first would force prematurely dragging ~15 single-feature helpers into the shared layer. Instead: extract the feature modules first so each continuation helper gets its proper home, then extract `shared.py`, which **imports those continuation helpers from the feature modules**. Dependency direction stays acyclic: `shared → {schedule, recurring, drafts, broadcast, queue} → {helpers, keyboards, states}` (feature modules do NOT import `shared`).
+>
+> **So run: Task 5 → 6 → 7 → 8 → 9 → 10 → 11 → 4 → 12.** Until `shared` is extracted (Task 4, near the end), the cross-flow handlers remain inline closures in `router.py`'s `build_router`; after each feature extraction, update those still-inline cross-flow handlers to call the now-module-level continuation helpers via `<feature>._helper(store, …)`.
+>
+> **Already done (commit `6b3d910`) as the safe part of the original Task 4:** promoted the genuinely cross-cutting helpers `_user_lang(store, user_id)`, `_main_menu_for(store, user_id)`, `_clear_live_preview`, `_send_post_preview(store, …)`, `_build_scheduled_post_summary(store, …)` into `helpers.py`. These are correct regardless of ordering.
 
 | Task | Module | Owns |
 |------|--------|------|
-| 4 | `shared.py` | cross-flow: `smedia:done`/`smedia:clear`, `sconf:yes`, `scancel`, all `tp:*`, `schedule_enter_datetime`, `on_my_chat_member` + their closure helpers (`_clear_live_preview`, `_send_post_preview`, `_move_to_draft_collection` if cross-flow) |
+| 4 (run 2nd-to-last) | `shared.py` | cross-flow: `smedia:done`/`smedia:clear`, `sconf:yes`, `scancel`, all `tp:*` **including `tp:noop`**, `schedule_enter_datetime`, `schedule_collect_post`, `on_my_chat_member`; imports continuation helpers from feature modules. Include shared FIRST in `build_router` (Task 12 finalizes order) |
 | 5 | `schedule.py` | `ScheduleStates.*` handlers + `cmd_schedule`, `cmd_cancel` |
 | 6 | `recurring.py` | `RepeatStates.*` handlers + `cmd_repeat`, `cmd_repeats` + list callbacks `rlpage:`, `rstop:` (`cb_repeats_page`, `cb_repeats_stop`) + `_render_repeats`, `_move_repeat_to_destination_selection` |
 | 7 | `drafts.py` | `DraftStates.*` + `cmd_drafts`, `cmd_draft_create/edit/delete` + `_render_drafts`, `_render_draft_detail`, `_save_draft_from_state`, `_start_draft_*`, `_update_draft_from_state`, `_build_draft_summary`, `_prompt_draft_scope` |
