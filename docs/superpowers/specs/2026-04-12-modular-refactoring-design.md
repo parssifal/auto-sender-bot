@@ -45,7 +45,7 @@ Grounding facts that this spec is built on (re-verified against `main`, since th
 - `core/state.py` gained ~20 read-only admin/stats aggregates in July (`count_users`, `list_users`, `get_user_profile`, `daily_new_users`, `daily_posts_sent`, `language_distribution`, `top_active_users`, …).
 - `core/rbac.py` is **already a clean pure module**: `DraftPermissions` dataclass + `resolve_draft_permissions` + `can_view/edit/delete/publish_draft` + `can_create_team_draft` — no SQL, no Telegram API.
 - `create_broadcast_posts` and `accept_team_invite` are **transactional DAL methods** (`BEGIN IMMEDIATE` + multi-statement).
-- `migrate()` creates **11 tables + ~12 indexes + 3 guarded `ALTER TABLE users`** (`language`, `username`, `first_name`).
+- `migrate()` creates **12 tables + ~12 indexes + 3 guarded `ALTER TABLE users`** (`language`, `username`, `first_name`). Tables: users, destinations, user_destinations, teams, team_members, team_invites, drafts, draft_media, scheduled_posts, scheduled_post_media, recurring_patterns, recurring_instances.
 
 ---
 
@@ -199,7 +199,7 @@ Tables present + empty `schema_migrations` ⇒ deployed pre-migration DB ⇒ rec
 
 **Integration:** `StateStore.migrate()` becomes a thin wrapper delegating to `run_migrations(self._conn)`. `StateStore`'s public interface is unchanged; callers and tests don't notice.
 
-**Risk/mitigation:** naive `split(";")` breaks on triggers/CTEs containing semicolons. Our migrations are simple CREATE TABLE/INDEX only; if complex DDL is ever needed, switch that file to an explicit statement list.
+**Risk/mitigation:** naive `split(";")` breaks on triggers/CTEs containing semicolons, and does not strip SQL comments. Our migrations are simple CREATE TABLE/INDEX only — keep `.sql` files free of inline `--` / `/* */` comments that contain semicolons; if complex DDL is ever needed, switch that file to an explicit statement list.
 
 ### Phase 3 — Service Layer (light, orchestration-only)
 
@@ -292,11 +292,13 @@ class DraftContext(PostContent, DateTimePick):
     draft_publish_id: str | None = None
 
 @dataclass
-class EditContext(PostContent):
-    edit_post_id: str | None = None
+class EditContext(PostContent, DateTimePick):    # DateTimePick required: EditStates has
+    edit_post_id: str | None = None              # entering_datetime/selecting_time (reschedule)
     edit_draft_id: str | None = None
     edit_preserve_caption_above: bool = False
 ```
+
+> **Settings flows** (`TimezoneStates`, `LanguageStates`, `DestinationsStates`) are trivial single-field flows and intentionally keep untyped dict access — a dataclass isn't worth it (YAGNI). Phase 4 typed contexts cover only the 5 content-heavy flows above.
 
 **Serialization — deploy safety (critical).** FSM storage (Redis/memory) serializes to JSON and sessions can survive a restart mid-flow. Keep storing **flat keys exactly as today** (not a nested object); the wrappers only add typed access:
 
