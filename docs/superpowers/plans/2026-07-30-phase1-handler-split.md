@@ -28,7 +28,7 @@ Additional invariants:
 Handlers and helpers currently live inside `def build_router(store):` as closures capturing `store`. To move one out:
 
 1. Cut the function to the target module at **module level** (dedent one level).
-2. Add `store: StateStore` as the **last** parameter of helpers (e.g. `_user_lang(user_id)` → `_user_lang(user_id, store)`); handlers keep aiogram's expected signature and receive `store` via a partial (below).
+2. Add `store: StateStore` as the **first** parameter of helpers (matching the spec: `_user_lang(user_id)` → `_user_lang(store, user_id)`); handlers keep aiogram's expected signature and receive `store` via a partial (below). Be consistent — store-first everywhere.
 3. In the module's `build_router(store)`, register each handler with `store` bound. Two acceptable patterns — pick one and stay consistent:
    - **Nested registration (lowest risk):** keep a thin `def build_router(store)` in the feature module whose body defines the aiogram-decorated wrappers that delegate to the module-level `_impl(..., store)` functions. Verbatim-friendly.
    - **functools.partial:** `router.callback_query(F...)(partial(cb_media_done, store=store))`.
@@ -58,7 +58,7 @@ telegram/
   admin.py          ← UNCHANGED
 ```
 
-**Handler-to-module assignment rule:** a handler goes to the feature module whose `StatesGroup` appears in its state filter (`ScheduleStates.*` → `schedule.py`, etc.). Command handlers (`/schedule`, `/queue`, …) go with their flow. **Cross-flow handlers go to `shared.py`** (exhaustive list in the spec: `smedia:done`/`smedia:clear`, `sconf:yes`, `scancel`, all `tp:*` TimePicker callbacks, the `schedule_enter_datetime` message handler registered across all `entering_datetime`/`selecting_time` states, and `on_my_chat_member`). When unsure, grep: `grep -n "SomeStates\." telegram/router.py`.
+**Handler-to-module assignment rule:** a handler goes to the feature module whose `StatesGroup` appears in its state filter (`ScheduleStates.*` → `schedule.py`, etc.). Command handlers (`/schedule`, `/queue`, …) go with their flow. **Cross-flow handlers go to `shared.py`** (list: `smedia:done`/`smedia:clear`, `sconf:yes`, `scancel`, all `tp:*` TimePicker callbacks, **two** cross-flow message handlers — `schedule_enter_datetime` (registered across all `entering_datetime`/`selecting_time` states) and `schedule_collect_post` (`router.py:3481`, registered across `ScheduleStates`/`RepeatStates`/`BroadcastStates`/`DraftStates`/`EditStates` `collecting_post`/`collecting_media`/`editing_post`) — and `on_my_chat_member`). When unsure, grep: `grep -n "SomeStates\." telegram/router.py`. A message/callback handler stacked across ≥2 flows' states has no single owning module ⇒ it is cross-flow ⇒ `shared.py`. Never duplicate it into feature modules.
 
 ---
 
@@ -132,6 +132,7 @@ Move the module-level helper functions that are NOT pure keyboards — the ones 
   - `tests/test_timezone.py`: `_is_valid_tz_name`, `_resolve_timezone_input` → `telegram.handlers.helpers`; `_timezone_setup_kb` → `telegram.handlers.keyboards`.
   - `tests/test_router_permissions.py`: `_check_bot_admin_and_post`, `_check_user_admin` → `telegram.handlers.helpers`.
   - `tests/test_router_schedule_logic.py`: repoint each imported name to `helpers` or `keyboards` (whichever now owns it). Grep the file's import block and match names against Tasks 2/3 lists.
+  - `tests/test_router_queue.py`: `_queue_paged_kb`, `_edit_paged_kb`, `_delete_paged_kb` → `telegram.handlers.keyboards` (these moved in Task 2; repoint here so the suite stays green regardless of whether router.py still re-exports them). Note: `tests/test_router_preview.py` imports only `build_router` (stays in `telegram.router`) — intentionally **no change**.
 - [ ] **Step 4:** Run `python3 -m pytest -q` → `227 passed`.
 - [ ] **Step 5:** Commit: `refactor(handlers): extract shared helpers to handlers/helpers.py; update 3 test imports`
 
@@ -145,7 +146,7 @@ Move the module-level helper functions that are NOT pure keyboards — the ones 
 |------|--------|------|
 | 4 | `shared.py` | cross-flow: `smedia:done`/`smedia:clear`, `sconf:yes`, `scancel`, all `tp:*`, `schedule_enter_datetime`, `on_my_chat_member` + their closure helpers (`_clear_live_preview`, `_send_post_preview`, `_move_to_draft_collection` if cross-flow) |
 | 5 | `schedule.py` | `ScheduleStates.*` handlers + `cmd_schedule`, `cmd_cancel` |
-| 6 | `recurring.py` | `RepeatStates.*` handlers + `cmd_repeat`, `cmd_repeats`, `_render_repeats`, `_move_repeat_to_destination_selection` |
+| 6 | `recurring.py` | `RepeatStates.*` handlers + `cmd_repeat`, `cmd_repeats` + list callbacks `rlpage:`, `rstop:` (`cb_repeats_page`, `cb_repeats_stop`) + `_render_repeats`, `_move_repeat_to_destination_selection` |
 | 7 | `drafts.py` | `DraftStates.*` + `cmd_drafts`, `cmd_draft_create/edit/delete` + `_render_drafts`, `_render_draft_detail`, `_save_draft_from_state`, `_start_draft_*`, `_update_draft_from_state`, `_build_draft_summary`, `_prompt_draft_scope` |
 | 8 | `broadcast.py` | `BroadcastStates.*` + `cmd_broadcast` + `_render_broadcast_destinations`, `_resolve_broadcast_destination*` |
 | 9 | `queue.py` | `EditStates.*` + `/queue /edit /delete /view` + pagination (`qpage/epage/delpage/qview`) + `_render_queue_page`, `_render_edit_posts`, `_render_delete_posts`, `_start_scheduled_post_*_edit`, `_save_scheduled_post_*`, `_render_delete_confirm`, `_confirm_delete_post`, `_load_pending_post_for_edit`, `_build_scheduled_post_summary` |
@@ -160,7 +161,7 @@ Move the module-level helper functions that are NOT pure keyboards — the ones 
 - Create: `telegram/handlers/<module>.py`
 - Modify: `telegram/router.py` (remove the moved closures; wire `include_router`)
 
-- [ ] **Step 1: Identify the handlers.** `grep -n "<StatesGroup>\." telegram/router.py` for the flow states; add the module's command handlers. Confirm none are in the shared cross-flow list.
+- [ ] **Step 1: Identify the handlers.** Three sources, union them: (a) `grep -n "<StatesGroup>\." telegram/router.py` for state-filtered handlers; (b) the module's command handlers (`Command(...)`); (c) **stateless callbacks by data-prefix domain** — callbacks filtered only on `F.data.startswith("<prefix>")` with no state (e.g. `rlpage:`/`rstop:` for recurring, `qpage:`/`qview:` for queue, draft/broadcast list-page prefixes). Grep candidate prefixes: `grep -nE "startswith\(\"[a-z]+" telegram/router.py` and assign each prefix to the owning domain. Confirm none are in the shared cross-flow list (a handler stacked across ≥2 flows' states is shared, not yours). At Task 12, `router.py` must contain **zero** leftover handlers — if a callback has no obvious home, it is cross-flow → shared.
 - [ ] **Step 2: Create `<module>.py` with `def build_router(store) -> Router:`.** Move the identified handlers and their private closure helpers into it, applying the Closure Dissolution Procedure (nested registration pattern). Move helpers verbatim, adding `store` param where they used the captured `store`. Import `states`, `keyboards as kb`, `helpers as h`, services/rbac/notifier as the originals did.
 - [ ] **Step 3: Delete the moved closures from `build_router` in `router.py`.**
 - [ ] **Step 4: Wire it up.** In `router.py`'s `build_router`, add `router.include_router(<module>.build_router(store))` in the correct order (see Task 12 for the final order; add incrementally as you go).
@@ -208,7 +209,7 @@ Keep module imports at top. Remove any now-dead helper imports that were only re
 - `telegram/router.py` ≲ 60 lines (only imports + `build_router` assembly).
 - `telegram/handlers/` holds `states`, `keyboards`, `helpers`, `shared`, and 7 feature modules.
 - `python3 -m pytest -q` → `227 passed` (unchanged count).
-- All 8 previously-`telegram.router`-importing test files repointed.
+- All 9 previously-`telegram.router`-importing test files repointed (3 helper/kb in Tasks 2–3, `test_router_queue.py` in Task 2, 5 flow files in Task 12; `test_router_preview.py` unchanged by design).
 - No feature module imports another feature module or `telegram.router`.
 - Manual command walk-through green (or explicitly recorded as deferred-to-pre-merge).
 
