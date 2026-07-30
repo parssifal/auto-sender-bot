@@ -20,7 +20,10 @@ from telegram.handlers.states import (
     ScheduleStates,
 )
 from telegram.handlers.keyboards import (
+    _confirm_kb,
     _destinations_kb,
+    _draft_create_scope_kb,
+    _draft_location_label,
     _draft_preview_text,
     _format_local,
     _format_selected_date,
@@ -395,3 +398,209 @@ async def _send_post_preview(
 
     if state is not None:
         await state.update_data(preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)
+
+
+async def _build_draft_summary(store: StateStore, draft: DraftRow, *, lang: str) -> dict[str, str]:
+    where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
+    team_name: str | None = None
+    if draft.team_id is not None:
+        team = await store.get_team(draft.team_id)
+        team_name = team.name if team is not None else _short_id(draft.team_id)
+
+    if draft.kind == "text":
+        kind = tr(lang, "kind_text")
+        preview = _draft_preview_text(
+            draft.text,
+            fallback=tr(lang, "draft_preview_empty"),
+            limit=80,
+        )
+    else:
+        media_count = len(await store.get_draft_media(draft.id))
+        kind = tr(lang, "kind_media", count=media_count)
+        preview = _draft_preview_text(
+            draft.caption,
+            fallback=tr(lang, "draft_preview_media_no_caption"),
+            limit=80,
+        )
+
+    return {
+        "where": where,
+        "location": _draft_location_label(lang, team_name),
+        "kind": kind,
+        "preview": preview,
+    }
+
+
+async def _save_draft_from_state(
+    store: StateStore,
+    message: Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    team_id: str | None,
+) -> bool:
+    data = await state.get_data()
+    chat_id = data.get("chat_id")
+    kind = data.get("kind")
+    lang = await _user_lang(store, user_id)
+    if not isinstance(chat_id, int) or kind not in {"text", "media"}:
+        return False
+
+    try:
+        if kind == "text":
+            draft_id = await store.create_draft(
+                author_user_id=user_id,
+                team_id=team_id,
+                chat_id=chat_id,
+                kind="text",
+                text=data.get("text"),
+                entities_json=data.get("entities_json"),
+            )
+            kind_label = tr(lang, "kind_text")
+        else:
+            media_items: list[dict[str, str]] = list(data.get("media_items", []))
+            draft_id = await store.create_draft(
+                author_user_id=user_id,
+                team_id=team_id,
+                chat_id=chat_id,
+                kind="media",
+                caption=data.get("caption"),
+                caption_entities_json=data.get("caption_entities_json"),
+                caption_above=bool(data.get("caption_above", False)),
+                media_items=media_items,
+            )
+            kind_label = tr(lang, "kind_media", count=len(media_items))
+    except ValueError:
+        return False
+
+    team_name: str | None = None
+    if team_id is not None:
+        team = await store.get_team(team_id)
+        team_name = team.name if team is not None else _short_id(team_id)
+    where = await store.get_destination_title(chat_id) or str(chat_id)
+
+    await state.clear()
+    await message.answer(
+        tr(
+            lang,
+            "draft_created_ok",
+            draft_id=_short_id(draft_id),
+            location=_draft_location_label(lang, team_name),
+            where=where,
+            kind=kind_label,
+        ),
+        reply_markup=await _main_menu_for(store, user_id),
+    )
+    return True
+
+
+async def _prompt_draft_scope(store: StateStore, message: Message, state: FSMContext, *, user_id: int) -> None:
+    lang = await _user_lang(store, user_id)
+    writable_teams = await store.list_writable_teams(user_id)
+    if not writable_teams:
+        await _save_draft_from_state(store, message, state, user_id=user_id, team_id=None)
+        return
+
+    await state.set_state(DraftStates.choosing_scope)
+    await message.answer(
+        tr(lang, "draft_create_scope_prompt"),
+        reply_markup=_draft_create_scope_kb(writable_teams, lang),
+    )
+
+
+async def _update_draft_from_state(store: StateStore, message: Message, state: FSMContext, *, user_id: int) -> bool:
+    data = await state.get_data()
+    draft_id = data.get("edit_draft_id")
+    chat_id = data.get("chat_id")
+    team_id = data.get("team_id")
+    kind = data.get("kind")
+    lang = await _user_lang(store, user_id)
+    if not isinstance(draft_id, str) or not isinstance(chat_id, int) or kind not in {"text", "media"}:
+        return False
+
+    try:
+        if kind == "text":
+            updated = await store.update_draft(
+                draft_id,
+                user_id,
+                chat_id=chat_id,
+                kind="text",
+                text=data.get("text"),
+                entities_json=data.get("entities_json"),
+            )
+            kind_label = tr(lang, "kind_text")
+        else:
+            media_items: list[dict[str, str]] = list(data.get("media_items", []))
+            updated = await store.update_draft(
+                draft_id,
+                user_id,
+                chat_id=chat_id,
+                kind="media",
+                caption=data.get("caption"),
+                caption_entities_json=data.get("caption_entities_json"),
+                caption_above=bool(data.get("caption_above", False)),
+                media_items=media_items,
+            )
+            kind_label = tr(lang, "kind_media", count=len(media_items))
+    except ValueError:
+        return False
+
+    if not updated:
+        return False
+
+    team_name: str | None = None
+    if isinstance(team_id, str):
+        team = await store.get_team(team_id)
+        team_name = team.name if team is not None else _short_id(team_id)
+    where = await store.get_destination_title(chat_id) or str(chat_id)
+
+    await state.clear()
+    await message.answer(
+        tr(
+            lang,
+            "draft_updated_ok",
+            draft_id=_short_id(draft_id),
+            location=_draft_location_label(lang, team_name),
+            where=where,
+            kind=kind_label,
+        ),
+        reply_markup=await _main_menu_for(store, user_id),
+    )
+    return True
+
+
+async def _move_draft_publish_to_confirmation(
+    store: StateStore,
+    message: Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    scheduled_at_utc: int,
+    scheduled_local: str,
+) -> None:
+    lang = await _user_lang(store, user_id)
+    draft_id = (await state.get_data()).get("draft_publish_id")
+    if not isinstance(draft_id, str):
+        await state.clear()
+        await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, user_id))
+        return
+
+    permissions = await store.get_draft_permissions(draft_id, user_id)
+    draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
+    if draft is None or permissions is None or not permissions.can_publish:
+        await state.clear()
+        await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, user_id))
+        return
+
+    await state.update_data(
+        scheduled_at_utc=scheduled_at_utc,
+        scheduled_local=scheduled_local,
+        chat_id=draft.chat_id,
+    )
+    await state.set_state(DraftStates.confirming)
+
+    tz_name = await store.get_user_timezone(user_id) or "UTC"
+    local_time = _format_local(scheduled_at_utc, tz_name)
+    summary = await _build_draft_summary(store, draft, lang=lang)
+    text = tr(lang, "confirm_template", where=summary["where"], local_time=local_time, tz_name=tz_name, kind=summary["kind"])
+    await message.answer(text, reply_markup=_confirm_kb(lang))
