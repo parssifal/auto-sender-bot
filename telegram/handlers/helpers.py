@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
-from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
+from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, normalize_language, resolve_timezone_choice, tr
 from telegram.handlers.states import (
@@ -20,7 +20,9 @@ from telegram.handlers.states import (
     ScheduleStates,
 )
 from telegram.handlers.keyboards import (
+    _broadcast_destinations_kb,
     _confirm_kb,
+    _destination_label,
     _destinations_kb,
     _draft_create_scope_kb,
     _draft_location_label,
@@ -29,6 +31,7 @@ from telegram.handlers.keyboards import (
     _format_selected_date,
     _main_menu_kb,
     _media_collect_kb,
+    _normalize_selected_chat_ids,
     _schedule_datetime_markup,
     _short_id,
 )
@@ -301,6 +304,79 @@ async def _render_destinations(
             page_prefix=page_prefix,
         ),
     )
+
+
+async def _list_all_user_destinations(store: StateStore, user_id: int) -> list[Destination]:
+    total = await store.count_user_destinations(user_id)
+    if total <= 0:
+        return []
+    return await store.list_user_destinations(user_id=user_id, offset=0, limit=total)
+
+
+async def _render_broadcast_destinations(
+    store: StateStore,
+    message: Message,
+    state: FSMContext,
+    *,
+    user_id: int,
+    page: int,
+    edit: bool,
+) -> None:
+    lang = await _user_lang(store, user_id)
+    page_size = 5
+    current_page = max(page, 0)
+
+    while True:
+        offset = current_page * page_size
+        items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
+        if items or current_page == 0:
+            break
+        current_page -= 1
+
+    has_more = len(items) > page_size
+    items = items[:page_size]
+    await state.update_data(dest_page=current_page)
+    if not items:
+        if edit:
+            await _clear_inline_markup(message)
+        await message.answer(
+            tr(lang, "no_destinations"),
+            reply_markup=await _main_menu_for(store, user_id),
+        )
+        return
+
+    data = await state.get_data()
+    selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
+    text = tr(lang, "broadcast_choose_destinations", count=len(selected_chat_ids))
+    reply_markup = _broadcast_destinations_kb(
+        items,
+        page=current_page,
+        has_more=has_more,
+        selected_chat_ids=selected_chat_ids,
+        lang=lang,
+    )
+    if edit:
+        await message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await message.answer(text, reply_markup=reply_markup)
+
+
+async def _resolve_broadcast_destinations(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
+    destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(store, user_id)}
+    resolved: list[tuple[int, str]] = []
+    for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
+        destination = destination_map.get(chat_id)
+        if destination is None:
+            continue
+        resolved.append((chat_id, _destination_label(destination.title, destination.username)))
+    return resolved
+
+
+async def _resolve_broadcast_destination_lines(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
+    resolved_destinations = await _resolve_broadcast_destinations(store, user_id, selected_chat_ids)
+    valid_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
+    labels = [f"- {label}" for _, label in resolved_destinations]
+    return valid_chat_ids, "\n".join(labels)
 
 
 async def _build_scheduled_post_summary(store: StateStore, post: ScheduledPostRow, *, lang: str) -> dict[str, str]:

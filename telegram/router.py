@@ -18,7 +18,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
-from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
+from core.state import DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.timezone_resolver import timezone_from_coordinates
 from core.utils import ParsedScheduleTime, parse_local_datetime, validate_schedule_time
@@ -36,17 +36,17 @@ from telegram.handlers.states import (
     RepeatStates, DraftStates, BroadcastStates, EditStates,
 )
 from telegram.handlers.keyboards import (
-    _main_menu_kb, _timezone_setup_kb, _language_kb, _destinations_kb, _broadcast_destinations_kb,
+    _main_menu_kb, _timezone_setup_kb, _language_kb, _destinations_kb,
     _media_collect_kb, _confirm_kb, _queue_cancel_kb, _queue_edit_kb,
     _queue_delete_kb, _queue_paged_kb, _edit_paged_kb, _delete_paged_kb, _edit_field_kb,
     _delete_confirm_kb, _drafts_manage_kb, _draft_detail_kb, _draft_delete_confirm_kb,
     _draft_delete_command_kb, _draft_create_scope_kb, _schedule_calendar_kb, _schedule_time_kb,
-    _schedule_datetime_markup, _normalize_selected_chat_ids, _toggle_selected_chat_ids, _normalize_draft_scope,
+    _schedule_datetime_markup, _normalize_selected_chat_ids, _normalize_draft_scope,
     _draft_scope_label, _draft_location_label, _draft_preview_text, _draft_action_labels,
     _draft_post_prompt_text, _team_role_label, _repeat_interval_label, _repeat_weekdays_mask,
     _schedule_quick_labels, _schedule_weekday_labels, _format_selected_date,
     _parse_calendar_date_token, _parse_calendar_month_token, _parse_time_token, _short_id,
-    _format_local, _destination_label, _selected_date_from_state, _calendar_month_from_state,
+    _format_local, _selected_date_from_state, _calendar_month_from_state,
     _is_time_selection_state,
 )
 from telegram.handlers.helpers import (
@@ -65,7 +65,10 @@ from telegram.handlers.helpers import (
     _move_to_post_collection,
     _prompt_draft_scope,
     _prompt_for_datetime,
+    _render_broadcast_destinations,
     _render_destinations,
+    _resolve_broadcast_destinations,
+    _resolve_broadcast_destination_lines,
     _resolve_caption_above,
     _resolve_draft_id,
     _resolve_recurring_pattern_id,
@@ -78,7 +81,7 @@ from telegram.handlers.helpers import (
     _update_draft_from_state,
     _user_lang,
 )
-from telegram.handlers import drafts, recurring, schedule
+from telegram.handlers import broadcast, drafts, recurring, schedule
 
 logger = logging.getLogger(__name__)
 
@@ -96,74 +99,7 @@ def build_router(store: StateStore) -> Router:
     router.include_router(schedule.build_router(store))
     router.include_router(recurring.build_router(store))
     router.include_router(drafts.build_router(store))
-
-    async def _list_all_user_destinations(user_id: int) -> list[Destination]:
-        total = await store.count_user_destinations(user_id)
-        if total <= 0:
-            return []
-        return await store.list_user_destinations(user_id=user_id, offset=0, limit=total)
-
-    async def _render_broadcast_destinations(
-        message: Message,
-        state: FSMContext,
-        *,
-        user_id: int,
-        page: int,
-        edit: bool,
-    ) -> None:
-        lang = await _user_lang(store, user_id)
-        page_size = 5
-        current_page = max(page, 0)
-
-        while True:
-            offset = current_page * page_size
-            items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
-            if items or current_page == 0:
-                break
-            current_page -= 1
-
-        has_more = len(items) > page_size
-        items = items[:page_size]
-        await state.update_data(dest_page=current_page)
-        if not items:
-            if edit:
-                await _clear_inline_markup(message)
-            await message.answer(
-                tr(lang, "no_destinations"),
-                reply_markup=await _main_menu_for(store, user_id),
-            )
-            return
-
-        data = await state.get_data()
-        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
-        text = tr(lang, "broadcast_choose_destinations", count=len(selected_chat_ids))
-        reply_markup = _broadcast_destinations_kb(
-            items,
-            page=current_page,
-            has_more=has_more,
-            selected_chat_ids=selected_chat_ids,
-            lang=lang,
-        )
-        if edit:
-            await message.edit_text(text, reply_markup=reply_markup)
-        else:
-            await message.answer(text, reply_markup=reply_markup)
-
-    async def _resolve_broadcast_destinations(user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
-        destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(user_id)}
-        resolved: list[tuple[int, str]] = []
-        for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
-            destination = destination_map.get(chat_id)
-            if destination is None:
-                continue
-            resolved.append((chat_id, _destination_label(destination.title, destination.username)))
-        return resolved
-
-    async def _resolve_broadcast_destination_lines(user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
-        resolved_destinations = await _resolve_broadcast_destinations(user_id, selected_chat_ids)
-        valid_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
-        labels = [f"- {label}" for _, label in resolved_destinations]
-        return valid_chat_ids, "\n".join(labels)
+    router.include_router(broadcast.build_router(store))
 
     async def _load_pending_post_for_edit(user_id: int, post_id: str) -> tuple[ScheduledPostRow | None, str | None]:
         post = await store.get_scheduled_post(post_id)
@@ -822,20 +758,6 @@ def build_router(store: StateStore) -> Router:
         await state.clear()
         await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, message.from_user.id))
 
-    @router.message(Command("broadcast"))
-    async def cmd_broadcast(message: Message, state: FSMContext) -> None:
-        await store.ensure_user(message.from_user.id)
-        lang = await _user_lang(store, message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id)
-        if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            return
-
-        await state.clear()
-        await state.set_state(BroadcastStates.choosing_destinations)
-        await state.update_data(selected_chat_ids=[], dest_page=0)
-        await _render_broadcast_destinations(message, state, user_id=message.from_user.id, page=0, edit=False)
-
     @router.message(Command("repeat_cancel"))
     async def cmd_repeat_cancel(message: Message) -> None:
         await store.ensure_user(message.from_user.id)
@@ -1000,110 +922,6 @@ def build_router(store: StateStore) -> Router:
             return
 
         await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
-
-    @router.callback_query(F.data.startswith("bcpage:"))
-    async def cb_broadcast_dest_page(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != BroadcastStates.choosing_destinations.state:
-            await query.answer()
-            return
-
-        try:
-            page = int(query.data.split(":", 1)[1])
-        except ValueError:
-            await query.answer()
-            return
-
-        await query.answer()
-        await _render_broadcast_destinations(
-            query.message,
-            state,
-            user_id=query.from_user.id,
-            page=page,
-            edit=True,
-        )
-
-    @router.callback_query(F.data.startswith("bc:"))
-    async def cb_broadcast_dest_toggle(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != BroadcastStates.choosing_destinations.state:
-            await query.answer()
-            return
-
-        parts = query.data.split(":", 2)
-        if len(parts) != 3:
-            await query.answer()
-            return
-
-        try:
-            chat_id = int(parts[1])
-        except ValueError:
-            await query.answer()
-            return
-
-        enabled_token = parts[2]
-        if enabled_token not in {"on", "off"}:
-            await query.answer()
-            return
-
-        all_destinations = await _list_all_user_destinations(query.from_user.id)
-        if chat_id not in {destination.chat_id for destination in all_destinations}:
-            await query.answer(tr(await _user_lang(store, query.from_user.id), "broadcast_destination_missing"), show_alert=True)
-            return
-
-        data = await state.get_data()
-        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
-        next_selected_chat_ids = _toggle_selected_chat_ids(selected_chat_ids, chat_id, enabled_token == "on")
-        page = int(data.get("dest_page", 0) or 0)
-        await state.update_data(selected_chat_ids=next_selected_chat_ids)
-        await query.answer()
-        await _render_broadcast_destinations(
-            query.message,
-            state,
-            user_id=query.from_user.id,
-            page=page,
-            edit=True,
-        )
-
-    @router.callback_query(F.data == "bcdone")
-    async def cb_broadcast_dest_done(query: CallbackQuery, state: FSMContext) -> None:
-        if await state.get_state() != BroadcastStates.choosing_destinations.state:
-            await query.answer()
-            return
-
-        lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
-            return
-
-        data = await state.get_data()
-        selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
-        valid_chat_ids = {destination.chat_id for destination in await _list_all_user_destinations(query.from_user.id)}
-        selected_chat_ids = [chat_id for chat_id in selected_chat_ids if chat_id in valid_chat_ids]
-        await state.update_data(selected_chat_ids=selected_chat_ids)
-        if not selected_chat_ids:
-            await query.answer(tr(lang, "broadcast_choose_one"), show_alert=True)
-            return
-
-        await state.update_data(
-            selected_date=None,
-            calendar_year=None,
-            calendar_month=None,
-            scheduled_at_utc=None,
-            scheduled_local=None,
-        )
-        await state.set_state(BroadcastStates.entering_datetime)
-        await query.answer()
-        await _clear_inline_markup(query.message)
-        await _prompt_for_datetime(
-            query.message,
-            lang=lang,
-            tz_name=tz_name,
-            text=tr(lang, "enter_datetime"),
-            data=await state.get_data(),
-            state_name=BroadcastStates.entering_datetime.state,
-        )
 
     @router.callback_query(F.data == TimePicker.NOOP_CALLBACK)
     async def cb_time_picker_noop(query: CallbackQuery) -> None:
@@ -1794,13 +1612,14 @@ def build_router(store: StateStore) -> Router:
             )
         elif is_broadcast:
             selected_chat_ids, where_lines = await _resolve_broadcast_destination_lines(
+                store,
                 user_id,
                 _normalize_selected_chat_ids(data.get("selected_chat_ids")),
             )
             if not selected_chat_ids:
                 await state.update_data(selected_chat_ids=[], dest_page=0)
                 await state.set_state(BroadcastStates.choosing_destinations)
-                await _render_broadcast_destinations(message, state, user_id=user_id, page=0, edit=False)
+                await _render_broadcast_destinations(store, message, state, user_id=user_id, page=0, edit=False)
                 return
             await state.update_data(selected_chat_ids=selected_chat_ids)
             await state.set_state(BroadcastStates.confirming)
@@ -1843,13 +1662,14 @@ def build_router(store: StateStore) -> Router:
 
         if current_state == BroadcastStates.confirming.state:
             resolved_destinations = await _resolve_broadcast_destinations(
+                store,
                 user_id,
                 _normalize_selected_chat_ids(data.get("selected_chat_ids")),
             )
             if not resolved_destinations:
                 await state.update_data(selected_chat_ids=[], dest_page=0)
                 await state.set_state(BroadcastStates.choosing_destinations)
-                await _render_broadcast_destinations(query.message, state, user_id=user_id, page=0, edit=False)
+                await _render_broadcast_destinations(store, query.message, state, user_id=user_id, page=0, edit=False)
                 return
 
             selected_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
