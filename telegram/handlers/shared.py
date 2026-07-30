@@ -20,29 +20,22 @@ from telegram.handlers.states import (
     RepeatStates, DraftStates, BroadcastStates, EditStates,
 )
 from telegram.handlers.keyboards import (
-    _main_menu_kb, _destinations_kb,
-    _media_collect_kb, _confirm_kb, _queue_cancel_kb, _queue_edit_kb,
-    _queue_delete_kb, _queue_paged_kb, _edit_paged_kb, _delete_paged_kb, _edit_field_kb,
-    _delete_confirm_kb, _drafts_manage_kb, _draft_detail_kb, _draft_delete_confirm_kb,
-    _draft_delete_command_kb, _draft_create_scope_kb, _schedule_calendar_kb, _schedule_time_kb,
-    _schedule_datetime_markup, _normalize_selected_chat_ids, _normalize_draft_scope,
-    _draft_scope_label, _draft_location_label, _draft_preview_text, _draft_action_labels,
+    _main_menu_kb,
+    _media_collect_kb, _confirm_kb,
+    _normalize_selected_chat_ids,
+    _draft_preview_text,
     _draft_post_prompt_text, _repeat_interval_label, _repeat_weekdays_mask,
-    _schedule_quick_labels, _schedule_weekday_labels, _format_selected_date,
     _parse_calendar_date_token, _parse_calendar_month_token, _parse_time_token, _short_id,
-    _format_local, _selected_date_from_state, _calendar_month_from_state,
+    _format_local, _selected_date_from_state,
     _is_time_selection_state,
 )
 from telegram.handlers.helpers import (
-    _build_scheduled_post_summary,
     _check_bot_admin_and_post,
     _check_user_admin,
     _clear_inline_markup,
     _edit_datetime_prompt,
     _extract_media_item,
-    _format_rights_check_error,
     _is_datetime_entry_state,
-    _is_valid_tz_name,
     _main_menu_for,
     _move_draft_publish_to_confirmation,
     _move_repeat_to_destination_selection,
@@ -50,22 +43,34 @@ from telegram.handlers.helpers import (
     _prompt_draft_scope,
     _prompt_for_datetime,
     _render_broadcast_destinations,
-    _render_destinations,
     _resolve_broadcast_destinations,
     _resolve_broadcast_destination_lines,
     _resolve_caption_above,
-    _resolve_draft_id,
-    _resolve_recurring_pattern_id,
-    _resolve_scheduled_post_id,
     _save_scheduled_post_media,
     _save_scheduled_post_time,
     _schedule_time_prompt,
     _schedule_validation_text,
-    _send_post_preview,
     _update_draft_from_state,
     _user_lang,
+    menu_button_texts,
 )
 from telegram.handlers.teams import _handle_team_invite_start
+
+
+# Labels of the reply-keyboard main-menu buttons, in every supported language.
+_MENU_BUTTON_TEXTS = menu_button_texts()
+
+
+def _not_command_or_menu(message: Message) -> bool:
+    """Filter: match only messages that are NOT a bot command or a menu-button label.
+
+    Commands (text starting with "/") and menu-button labels must fall through to
+    the feature routers' stateless command/menu handlers so they interrupt the
+    compose/datetime flow. Media messages have ``text=None`` (caption is separate)
+    and must still be collected, so an empty/None text returns True.
+    """
+    text = message.text or ""
+    return not text.startswith("/") and text not in _MENU_BUTTON_TEXTS
 
 
 def build_router(store: StateStore) -> Router:
@@ -432,16 +437,16 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
-    @router.message(BroadcastStates.selecting_time)
-    @router.message(BroadcastStates.entering_datetime)
-    @router.message(EditStates.selecting_time)
-    @router.message(EditStates.entering_datetime)
-    @router.message(DraftStates.selecting_time)
-    @router.message(DraftStates.entering_datetime)
-    @router.message(RepeatStates.selecting_time)
-    @router.message(RepeatStates.entering_datetime)
-    @router.message(ScheduleStates.selecting_time)
-    @router.message(ScheduleStates.entering_datetime)
+    @router.message(BroadcastStates.selecting_time, _not_command_or_menu)
+    @router.message(BroadcastStates.entering_datetime, _not_command_or_menu)
+    @router.message(EditStates.selecting_time, _not_command_or_menu)
+    @router.message(EditStates.entering_datetime, _not_command_or_menu)
+    @router.message(DraftStates.selecting_time, _not_command_or_menu)
+    @router.message(DraftStates.entering_datetime, _not_command_or_menu)
+    @router.message(RepeatStates.selecting_time, _not_command_or_menu)
+    @router.message(RepeatStates.entering_datetime, _not_command_or_menu)
+    @router.message(ScheduleStates.selecting_time, _not_command_or_menu)
+    @router.message(ScheduleStates.entering_datetime, _not_command_or_menu)
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await _user_lang(store, message.from_user.id)
@@ -530,12 +535,12 @@ def build_router(store: StateStore) -> Router:
             lang=lang,
         )
 
-    @router.message(EditStates.collecting_media)
-    @router.message(BroadcastStates.collecting_post)
-    @router.message(DraftStates.editing_post)
-    @router.message(DraftStates.collecting_post)
-    @router.message(RepeatStates.collecting_post)
-    @router.message(ScheduleStates.collecting_post)
+    @router.message(EditStates.collecting_media, _not_command_or_menu)
+    @router.message(BroadcastStates.collecting_post, _not_command_or_menu)
+    @router.message(DraftStates.editing_post, _not_command_or_menu)
+    @router.message(DraftStates.collecting_post, _not_command_or_menu)
+    @router.message(RepeatStates.collecting_post, _not_command_or_menu)
+    @router.message(ScheduleStates.collecting_post, _not_command_or_menu)
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
         lang = await _user_lang(store, message.from_user.id)
         current_state = await state.get_state()

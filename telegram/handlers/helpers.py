@@ -11,7 +11,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup
 
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.utils import validate_schedule_time
-from telegram.i18n import DEFAULT_LANGUAGE, normalize_language, resolve_timezone_choice, tr
+from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
 from telegram.handlers.states import (
     BroadcastStates,
     DraftStates,
@@ -35,6 +35,26 @@ from telegram.handlers.keyboards import (
     _schedule_datetime_markup,
     _short_id,
 )
+
+
+# Keys of the reply-keyboard main-menu buttons (see keyboards._main_menu_kb).
+# Single source of truth for the labels that must interrupt the compose/datetime
+# flow so command/menu handlers in the feature routers can run instead.
+_MENU_TEXT_KEYS = (
+    "menu_schedule",
+    "menu_queue",
+    "menu_destinations",
+    "menu_timezone",
+    "menu_language",
+)
+
+
+def menu_button_texts() -> frozenset[str]:
+    """Union of all reply-keyboard menu-button labels across every language."""
+    texts: set[str] = set()
+    for key in _MENU_TEXT_KEYS:
+        texts.update(key_values(key))
+    return frozenset(texts)
 
 
 def _is_datetime_entry_state(state_name: str | None) -> bool:
