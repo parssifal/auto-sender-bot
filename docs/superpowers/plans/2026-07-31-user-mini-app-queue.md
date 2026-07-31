@@ -164,7 +164,7 @@ In `core/webapp.py`, add a module-level helper above `start_webapp_server`:
 
 ```python
 async def _post_to_json(store: StateStore, row, tz_name: str) -> dict:
-    from core.webapp_fmt import format_local  # or inline; see note
+    # No telegram/formatter import — return the raw epoch; the browser formats local time.
     title = await store.get_destination_title(row.chat_id) or str(row.chat_id)
     media = await store.get_post_media(row.id) if row.kind != "text" else []
     preview = (row.text or row.caption or "")[:120]
@@ -178,7 +178,7 @@ async def _post_to_json(store: StateStore, row, tz_name: str) -> dict:
     }
 ```
 
-> Do NOT import a telegram formatter. Return the raw `scheduled_at_utc` epoch; the browser formats local time from it using the envelope `tz`. (No `webapp_fmt` module is needed — drop that import line; it is only a marker that formatting is client-side.)
+> Do NOT import a telegram formatter. Return the raw `scheduled_at_utc` epoch; the browser formats local time from it using the envelope `tz`.
 
 Inside `start_webapp_server`, next to `_require_admin`:
 
@@ -732,7 +732,9 @@ if webapp_url and reply_markup is not None:
     ])
 ```
 
-> Note: `web_app` inline buttons require an HTTPS url (satisfied by `WEBAPP_URL`). In local/HTTP dev the button may not open — acceptable; `/queue` text list remains the fallback.
+> **Empty-queue branch:** `_render_queue_page` returns early in the no-posts branch (queue.py ~132–138) *before* the append point above, so an empty `/queue` would otherwise show no button. Add the same `web_app` button to that branch's `reply_markup` too (build a one-row `InlineKeyboardMarkup` when `webapp_url` is set, else keep `h._main_menu_for(...)`), so the entry point is present even when the queue is empty. `_queue_paged_kb` returns a freshly-built markup each call, so appending to it mutates nothing shared.
+>
+> Note: `web_app` inline buttons require an HTTPS url (satisfied by `WEBAPP_URL`); aiogram does not validate at construction, Telegram rejects only at send-time. In local/HTTP dev the button may not open — acceptable; `/queue` text list remains the fallback.
 
 - [ ] **Step 3c: Wire `main.py`**
 
