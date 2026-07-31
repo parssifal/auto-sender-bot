@@ -76,10 +76,10 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(await h._user_lang(store, query.from_user.id), "broadcast_destination_missing"), show_alert=True)
             return
 
-        data = await state.get_data()
-        selected_chat_ids = kb._normalize_selected_chat_ids(data.get("selected_chat_ids"))
+        ctx = await h.get_broadcast_ctx(state)
+        selected_chat_ids = kb._normalize_selected_chat_ids(ctx.selected_chat_ids)
         next_selected_chat_ids = kb._toggle_selected_chat_ids(selected_chat_ids, chat_id, enabled_token == "on")
-        page = int(data.get("dest_page", 0) or 0)
+        page = int(ctx.dest_page or 0)
         await state.update_data(selected_chat_ids=next_selected_chat_ids)
         await query.answer()
         await h._render_broadcast_destinations(
@@ -105,8 +105,8 @@ def build_router(store: StateStore) -> Router:
             await state.clear()
             return
 
-        data = await state.get_data()
-        selected_chat_ids = kb._normalize_selected_chat_ids(data.get("selected_chat_ids"))
+        ctx = await h.get_broadcast_ctx(state)
+        selected_chat_ids = kb._normalize_selected_chat_ids(ctx.selected_chat_ids)
         valid_chat_ids = {destination.chat_id for destination in await h._list_all_user_destinations(store, query.from_user.id)}
         selected_chat_ids = [chat_id for chat_id in selected_chat_ids if chat_id in valid_chat_ids]
         await state.update_data(selected_chat_ids=selected_chat_ids)

@@ -13,6 +13,14 @@ from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
+from telegram.handlers.contexts import (
+    BroadcastContext,
+    DraftContext,
+    EditContext,
+    RepeatContext,
+    ScheduleContext,
+    field_names,
+)
 from telegram.handlers.states import (
     BroadcastStates,
     DraftStates,
@@ -35,6 +43,39 @@ from telegram.handlers.keyboards import (
     _schedule_datetime_markup,
     _short_id,
 )
+
+
+# --- Typed FSM context getters (Phase 4) ---------------------------------
+# Read-only typed access over flat FSM storage. Each getter hydrates its
+# dataclass from ONLY the keys present in state, so a partially-populated or
+# pre-deploy flat-key session reads back cleanly (absent keys → defaults).
+# Writes stay as `state.update_data(**flat_keys)` at the call sites.
+
+
+async def _get_ctx(state, cls):
+    data = await state.get_data()
+    keys = field_names(cls)
+    return cls(**{k: v for k, v in data.items() if k in keys})
+
+
+async def get_schedule_ctx(state) -> ScheduleContext:
+    return await _get_ctx(state, ScheduleContext)
+
+
+async def get_repeat_ctx(state) -> RepeatContext:
+    return await _get_ctx(state, RepeatContext)
+
+
+async def get_broadcast_ctx(state) -> BroadcastContext:
+    return await _get_ctx(state, BroadcastContext)
+
+
+async def get_draft_ctx(state) -> DraftContext:
+    return await _get_ctx(state, DraftContext)
+
+
+async def get_edit_ctx(state) -> EditContext:
+    return await _get_ctx(state, EditContext)
 
 
 # Keys of the reply-keyboard main-menu buttons (see keyboards._main_menu_kb).
@@ -335,8 +376,8 @@ async def _render_broadcast_destinations(
         )
         return
 
-    data = await state.get_data()
-    selected_chat_ids = _normalize_selected_chat_ids(data.get("selected_chat_ids"))
+    ctx = await get_broadcast_ctx(state)
+    selected_chat_ids = _normalize_selected_chat_ids(ctx.selected_chat_ids)
     text = tr(lang, "broadcast_choose_destinations", count=len(selected_chat_ids))
     reply_markup = _broadcast_destinations_kb(
         items,
@@ -500,9 +541,9 @@ async def _save_draft_from_state(
     user_id: int,
     team_id: str | None,
 ) -> bool:
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    kind = data.get("kind")
+    ctx = await get_draft_ctx(state)
+    chat_id = ctx.chat_id
+    kind = ctx.kind
     lang = await _user_lang(store, user_id)
     if not isinstance(chat_id, int) or kind not in {"text", "media"}:
         return False
@@ -514,20 +555,20 @@ async def _save_draft_from_state(
                 team_id=team_id,
                 chat_id=chat_id,
                 kind="text",
-                text=data.get("text"),
-                entities_json=data.get("entities_json"),
+                text=ctx.text,
+                entities_json=ctx.entities_json,
             )
             kind_label = tr(lang, "kind_text")
         else:
-            media_items: list[dict[str, str]] = list(data.get("media_items", []))
+            media_items: list[dict[str, str]] = list(ctx.media_items)
             draft_id = await store.create_draft(
                 author_user_id=user_id,
                 team_id=team_id,
                 chat_id=chat_id,
                 kind="media",
-                caption=data.get("caption"),
-                caption_entities_json=data.get("caption_entities_json"),
-                caption_above=bool(data.get("caption_above", False)),
+                caption=ctx.caption,
+                caption_entities_json=ctx.caption_entities_json,
+                caption_above=bool(ctx.caption_above),
                 media_items=media_items,
             )
             kind_label = tr(lang, "kind_media", count=len(media_items))
@@ -570,11 +611,11 @@ async def _prompt_draft_scope(store: StateStore, message: Message, state: FSMCon
 
 
 async def _update_draft_from_state(store: StateStore, message: Message, state: FSMContext, *, user_id: int) -> bool:
-    data = await state.get_data()
-    draft_id = data.get("edit_draft_id")
-    chat_id = data.get("chat_id")
-    team_id = data.get("team_id")
-    kind = data.get("kind")
+    ctx = await get_draft_ctx(state)
+    draft_id = ctx.edit_draft_id
+    chat_id = ctx.chat_id
+    team_id = ctx.team_id
+    kind = ctx.kind
     lang = await _user_lang(store, user_id)
     if not isinstance(draft_id, str) or not isinstance(chat_id, int) or kind not in {"text", "media"}:
         return False
@@ -586,20 +627,20 @@ async def _update_draft_from_state(store: StateStore, message: Message, state: F
                 user_id,
                 chat_id=chat_id,
                 kind="text",
-                text=data.get("text"),
-                entities_json=data.get("entities_json"),
+                text=ctx.text,
+                entities_json=ctx.entities_json,
             )
             kind_label = tr(lang, "kind_text")
         else:
-            media_items: list[dict[str, str]] = list(data.get("media_items", []))
+            media_items: list[dict[str, str]] = list(ctx.media_items)
             updated = await store.update_draft(
                 draft_id,
                 user_id,
                 chat_id=chat_id,
                 kind="media",
-                caption=data.get("caption"),
-                caption_entities_json=data.get("caption_entities_json"),
-                caption_above=bool(data.get("caption_above", False)),
+                caption=ctx.caption,
+                caption_entities_json=ctx.caption_entities_json,
+                caption_above=bool(ctx.caption_above),
                 media_items=media_items,
             )
             kind_label = tr(lang, "kind_media", count=len(media_items))
@@ -692,8 +733,8 @@ async def _save_scheduled_post_time(
     user_id: int,
     scheduled_at_utc: int,
 ) -> bool:
-    data = await state.get_data()
-    post_id = data.get("edit_post_id")
+    ctx = await get_edit_ctx(state)
+    post_id = ctx.edit_post_id
     if not isinstance(post_id, str):
         return False
 
@@ -725,16 +766,16 @@ async def _save_scheduled_post_time(
 
 
 async def _save_scheduled_post_media(store: StateStore, message: Message, state: FSMContext, *, user_id: int) -> bool:
-    data = await state.get_data()
-    post_id = data.get("edit_post_id")
+    ctx = await get_edit_ctx(state)
+    post_id = ctx.edit_post_id
     if not isinstance(post_id, str):
         return False
 
-    media_items = list(data.get("media_items", []))
+    media_items = list(ctx.media_items)
     if not media_items:
         return False
 
-    draft_text = data.get("draft_text")
+    draft_text = ctx.draft_text
     draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
     updated = await store.update_scheduled_post(
         post_id,
@@ -742,8 +783,8 @@ async def _save_scheduled_post_media(store: StateStore, message: Message, state:
         {
             "kind": "media",
             "caption": draft_text if draft_text_valid else None,
-            "caption_entities_json": data.get("draft_entities_json") if draft_text_valid else None,
-            "caption_above": bool(data.get("caption_above", False)) if draft_text_valid else None,
+            "caption_entities_json": ctx.draft_entities_json if draft_text_valid else None,
+            "caption_above": bool(ctx.caption_above) if draft_text_valid else None,
             "media_items": media_items,
         },
     )

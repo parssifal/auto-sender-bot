@@ -53,9 +53,32 @@ from telegram.handlers.helpers import (
     _schedule_validation_text,
     _update_draft_from_state,
     _user_lang,
+    get_broadcast_ctx,
+    get_draft_ctx,
+    get_edit_ctx,
+    get_repeat_ctx,
+    get_schedule_ctx,
     menu_button_texts,
 )
 from telegram.handlers.teams import _handle_team_invite_start
+
+
+async def _get_content_ctx(state, current_state):
+    """Return the flow-correct typed context for whichever flow owns ``current_state``.
+
+    The cross-flow media/confirm handlers share the ``PostContent`` fields but also
+    read flow-specific fields (interval_type, chat_id, draft_publish_id, edit_*);
+    returning the flow's own dataclass keeps those typed too.
+    """
+    if current_state in RepeatStates:
+        return await get_repeat_ctx(state)
+    if current_state in BroadcastStates:
+        return await get_broadcast_ctx(state)
+    if current_state in DraftStates:
+        return await get_draft_ctx(state)
+    if current_state in EditStates:
+        return await get_edit_ctx(state)
+    return await get_schedule_ctx(state)
 
 
 # Labels of the reply-keyboard main-menu buttons, in every supported language.
@@ -545,12 +568,12 @@ def build_router(store: StateStore) -> Router:
     async def schedule_collect_post(message: Message, state: FSMContext) -> None:
         lang = await _user_lang(store, message.from_user.id)
         current_state = await state.get_state()
-        data = await state.get_data()
-        media: list[dict[str, str]] = list(data.get("media_items", []))
-        draft_text: str | None = data.get("draft_text")
-        draft_entities_json: str | None = data.get("draft_entities_json")
-        caption_above = bool(data.get("caption_above", False))
-        text_before_media = bool(data.get("text_before_media", False))
+        ctx = await _get_content_ctx(state, current_state)
+        media: list[dict[str, str]] = list(ctx.media_items)
+        draft_text: str | None = ctx.draft_text
+        draft_entities_json: str | None = ctx.draft_entities_json
+        caption_above = bool(ctx.caption_above)
+        text_before_media = bool(ctx.text_before_media)
         media_item = _extract_media_item(message)
 
         if message.text and media_item is None:
@@ -599,11 +622,11 @@ def build_router(store: StateStore) -> Router:
 
         if (
             current_state == EditStates.collecting_media.state
-            and bool(data.get("edit_preserve_caption_above"))
+            and bool(ctx.edit_preserve_caption_above)
             and not had_media_before
             and not caption_from_message
         ):
-            caption_above = bool(data.get("caption_above", False))
+            caption_above = bool(ctx.caption_above)
         else:
             caption_above = _resolve_caption_above(
                 current=caption_above,
@@ -681,9 +704,9 @@ def build_router(store: StateStore) -> Router:
 
         lang = await _user_lang(store, query.from_user.id)
         await query.answer()
-        data = await state.get_data()
-        media: list[dict[str, str]] = list(data.get("media_items", []))
-        draft_text = data.get("draft_text")
+        ctx = await _get_content_ctx(state, current_state)
+        media: list[dict[str, str]] = list(ctx.media_items)
+        draft_text = ctx.draft_text
         draft_text_valid = bool(str(draft_text).strip()) if draft_text is not None else False
 
         if current_state == EditStates.collecting_media.state:
@@ -693,7 +716,7 @@ def build_router(store: StateStore) -> Router:
             await state.update_data(
                 kind="media",
                 caption=draft_text if draft_text_valid else None,
-                caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
+                caption_entities_json=ctx.draft_entities_json if draft_text_valid else None,
                 text=None,
                 entities_json=None,
             )
@@ -705,7 +728,7 @@ def build_router(store: StateStore) -> Router:
             await state.update_data(
                 kind="media",
                 caption=draft_text if draft_text_valid else None,
-                caption_entities_json=data.get("draft_entities_json") if draft_text_valid else None,
+                caption_entities_json=ctx.draft_entities_json if draft_text_valid else None,
                 text=None,
                 entities_json=None,
             )
@@ -725,7 +748,7 @@ def build_router(store: StateStore) -> Router:
             await state.update_data(
                 kind="text",
                 text=draft_text,
-                entities_json=data.get("draft_entities_json"),
+                entities_json=ctx.draft_entities_json,
                 caption=None,
                 caption_entities_json=None,
                 caption_above=False,
@@ -746,29 +769,29 @@ def build_router(store: StateStore) -> Router:
 
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore, *, user_id: int) -> None:
         lang = await _user_lang(store, user_id)
-        data = await state.get_data()
         current_state = await state.get_state()
+        ctx = await _get_content_ctx(state, current_state)
         is_repeat = current_state == RepeatStates.collecting_post.state
         is_broadcast = current_state == BroadcastStates.collecting_post.state
         tz_name = await store_.get_user_timezone(user_id) or "UTC"
-        local_time = _format_local(int(data["scheduled_at_utc"]), tz_name)
-        kind = data.get("kind")
+        local_time = _format_local(int(ctx.scheduled_at_utc), tz_name)
+        kind = ctx.kind
         if kind == "text":
             summary = tr(lang, "kind_text")
-            preview = _draft_preview_text(data.get("text"), fallback=tr(lang, "draft_preview_empty"), limit=240)
+            preview = _draft_preview_text(ctx.text, fallback=tr(lang, "draft_preview_empty"), limit=240)
         else:
-            media = list(data.get("media_items", []))
+            media = list(ctx.media_items)
             summary = tr(lang, "kind_media", count=len(media))
             preview = _draft_preview_text(
-                data.get("caption"),
+                ctx.caption,
                 fallback=tr(lang, "draft_preview_media_no_caption"),
                 limit=240,
             )
         if is_repeat:
             await state.set_state(RepeatStates.confirming)
-            chat_id = int(data["chat_id"])
+            chat_id = int(ctx.chat_id)
             title = await store_.get_destination_title(chat_id) or str(chat_id)
-            interval_label = _repeat_interval_label(lang, str(data.get("interval_type") or ""))
+            interval_label = _repeat_interval_label(lang, str(ctx.interval_type or ""))
             text = tr(
                 lang,
                 "repeat_confirm_template",
@@ -782,7 +805,7 @@ def build_router(store: StateStore) -> Router:
             selected_chat_ids, where_lines = await _resolve_broadcast_destination_lines(
                 store,
                 user_id,
-                _normalize_selected_chat_ids(data.get("selected_chat_ids")),
+                _normalize_selected_chat_ids(ctx.selected_chat_ids),
             )
             if not selected_chat_ids:
                 await state.update_data(selected_chat_ids=[], dest_page=0)
@@ -803,7 +826,7 @@ def build_router(store: StateStore) -> Router:
             )
         else:
             await state.set_state(ScheduleStates.confirming)
-            chat_id = int(data["chat_id"])
+            chat_id = int(ctx.chat_id)
             title = await store_.get_destination_title(chat_id) or str(chat_id)
             text = tr(lang, "confirm_template", where=title, local_time=local_time, tz_name=tz_name, kind=summary)
         await message.answer(text, reply_markup=_confirm_kb(lang))
@@ -822,17 +845,17 @@ def build_router(store: StateStore) -> Router:
 
         lang = await _user_lang(store, query.from_user.id)
         await query.answer()
-        data = await state.get_data()
+        ctx = await _get_content_ctx(state, current_state)
         user_id = query.from_user.id
-        scheduled_at_utc = int(data["scheduled_at_utc"])
-        kind = data.get("kind")
+        scheduled_at_utc = int(ctx.scheduled_at_utc)
+        kind = ctx.kind
         tz_name = await store.get_user_timezone(user_id) or "UTC"
 
         if current_state == BroadcastStates.confirming.state:
             resolved_destinations = await _resolve_broadcast_destinations(
                 store,
                 user_id,
-                _normalize_selected_chat_ids(data.get("selected_chat_ids")),
+                _normalize_selected_chat_ids(ctx.selected_chat_ids),
             )
             if not resolved_destinations:
                 await state.update_data(selected_chat_ids=[], dest_page=0)
@@ -853,14 +876,14 @@ def build_router(store: StateStore) -> Router:
                     return
 
             if kind == "text":
-                content = broadcast_svc.PostContent(kind="text", text=data.get("text"),
-                                                    entities_json=data.get("entities_json"))
+                content = broadcast_svc.PostContent(kind="text", text=ctx.text,
+                                                    entities_json=ctx.entities_json)
             else:
                 content = broadcast_svc.PostContent(
-                    kind="media", caption=data.get("caption"),
-                    caption_entities_json=data.get("caption_entities_json"),
-                    caption_above=bool(data.get("caption_above", False)),
-                    media_items=list(data.get("media_items", [])),
+                    kind="media", caption=ctx.caption,
+                    caption_entities_json=ctx.caption_entities_json,
+                    caption_above=bool(ctx.caption_above),
+                    media_items=list(ctx.media_items),
                 )
             post_ids = await broadcast_svc.create_broadcast(
                 store, user_id=user_id, chat_ids=selected_chat_ids,
@@ -887,7 +910,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         if current_state == RepeatStates.confirming.state:
-            chat_id = int(data["chat_id"])
+            chat_id = int(ctx.chat_id)
             ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
             if not ok:
                 await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
@@ -901,7 +924,7 @@ def build_router(store: StateStore) -> Router:
 
             local_dt = datetime.fromtimestamp(scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
             time_of_day_minutes = local_dt.hour * 60 + local_dt.minute
-            interval_type = str(data.get("interval_type") or "")
+            interval_type = str(ctx.interval_type or "")
             pattern_id, post_id = await store.create_recurring_series(
                 user_id=user_id,
                 chat_id=chat_id,
@@ -911,12 +934,12 @@ def build_router(store: StateStore) -> Router:
                 timezone=tz_name,
                 start_at_utc=scheduled_at_utc,
                 kind=str(kind or ""),
-                text=str(data.get("text") or "") if kind == "text" else None,
-                entities_json=data.get("entities_json") if kind == "text" else None,
-                caption=data.get("caption") if kind == "media" else None,
-                caption_entities_json=data.get("caption_entities_json") if kind == "media" else None,
-                caption_above=bool(data.get("caption_above", False)) if kind == "media" else None,
-                media_items=list(data.get("media_items", [])) if kind == "media" else None,
+                text=str(ctx.text or "") if kind == "text" else None,
+                entities_json=ctx.entities_json if kind == "text" else None,
+                caption=ctx.caption if kind == "media" else None,
+                caption_entities_json=ctx.caption_entities_json if kind == "media" else None,
+                caption_above=bool(ctx.caption_above) if kind == "media" else None,
+                media_items=list(ctx.media_items) if kind == "media" else None,
             )
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
@@ -934,7 +957,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         if current_state == DraftStates.confirming.state:
-            draft_id = data.get("draft_publish_id")
+            draft_id = ctx.draft_publish_id
             if not isinstance(draft_id, str):
                 await state.clear()
                 await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
@@ -976,7 +999,7 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
-        chat_id = int(data["chat_id"])
+        chat_id = int(ctx.chat_id)
         ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
         if not ok:
             await query.message.answer(err, reply_markup=await _main_menu_for(store, query.from_user.id))
@@ -993,18 +1016,18 @@ def build_router(store: StateStore) -> Router:
                 user_id=user_id,
                 chat_id=chat_id,
                 scheduled_at_utc=scheduled_at_utc,
-                text=str(data.get("text") or ""),
-                entities_json=data.get("entities_json"),
+                text=str(ctx.text or ""),
+                entities_json=ctx.entities_json,
             )
         else:
-            media_items: list[dict[str, str]] = list(data.get("media_items", []))
+            media_items: list[dict[str, str]] = list(ctx.media_items)
             post_id = await store.create_scheduled_media_post(
                 user_id=user_id,
                 chat_id=chat_id,
                 scheduled_at_utc=scheduled_at_utc,
-                caption=data.get("caption"),
-                caption_entities_json=data.get("caption_entities_json"),
-                caption_above=bool(data.get("caption_above", False)),
+                caption=ctx.caption,
+                caption_entities_json=ctx.caption_entities_json,
+                caption_above=bool(ctx.caption_above),
                 media_items=media_items,
             )
 

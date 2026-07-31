@@ -346,8 +346,8 @@ async def _save_scheduled_post_text(
     text: str,
     entities_json: str | None,
 ) -> bool:
-    data = await state.get_data()
-    post_id = data.get("edit_post_id")
+    ctx = await h.get_edit_ctx(state)
+    post_id = ctx.edit_post_id
     if not isinstance(post_id, str):
         return False
 
