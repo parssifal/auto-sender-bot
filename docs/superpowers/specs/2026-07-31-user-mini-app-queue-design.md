@@ -31,7 +31,7 @@ Users manage their queue only through bot commands (`/queue`, `/edit`, `/delete`
 
 - **Entry points:** BOTH — a new `/app` command AND a `web_app` button appended to `/queue` output. The existing `/queue` text list stays as a fallback. Both only enabled when `WEBAPP_URL` is set.
 - **v1 scope:** view + reschedule + cancel one-off posts; view + cancel recurring patterns.
-- **Reschedule input contract:** browser sends `{local_datetime: "DD.MM.YYYY HH:MM"}`; the timezone is authoritative **server-side** from `get_user_timezone(user_id)` (browser does NOT send tz). Server reuses `parse_local_datetime` + `validate_schedule_time` — no duplicated validation in JS.
+- **Reschedule input contract:** browser sends `{local_datetime: "DD.MM.YYYY HH:MM"}`; the timezone is authoritative **server-side** from `get_user_timezone(user_id) or "UTC"` (browser does NOT send tz). The `or "UTC"` fallback is mandatory — `get_user_timezone` returns `str | None` and the codebase convention is `... or "UTC"` (shared.py, helpers.py, drafts.py); passing `None` into `parse_local_datetime` → `ZoneInfo(None)` would 500. Server reuses `parse_local_datetime` + `validate_schedule_time` — no duplicated validation in JS.
 - **Post states actionable:** mirror `list_editable_pending_posts` exactly (only future, non-sending pending posts).
 - **HTML:** a new, separate `core/webapp_static/queue.html` (not a shared shell with admin).
 
@@ -56,9 +56,9 @@ Users manage their queue only through bot commands (`/queue`, `/edit`, `/delete`
 All return typed JSON; forbidden without valid initData (403).
 
 - `GET /app` → serve `queue.html`.
-- `GET /api/my/queue` → `list_editable_pending_posts(user_id, ...)` mapped to per-post `{id, destination_title, scheduled_at_utc, local_time, kind, media_count, preview}`. Pagination params (`limit`/`offset`).
-- `GET /api/my/recurring` → `list_user_recurring_summaries(user_id, ...)` mapped to `{id, destination_title, interval_description, next_scheduled_at_utc, next_local_time}`.
-- `POST /api/my/post/{id}/reschedule` → body `{local_datetime}`; tz from `get_user_timezone(user_id)`; `parse_local_datetime` → `validate_schedule_time`; on valid call `update_editable_post_time(id, user_id, scheduled_at_utc=...)`. 400 on unparseable/invalid/past time, 404 if not owned/editable.
+- `GET /api/my/queue` → `list_editable_pending_posts(user_id, ...)` mapped to per-post `{id, destination_title, scheduled_at_utc, local_time, kind, media_count, preview}`. Pagination params (`limit`/`offset`). **Note:** `list_editable_pending_posts` returns `ScheduledPostRow` (`SELECT sp.*`) which carries only `chat_id` — no destination title. The route resolves the title per post via `get_destination_title(chat_id)` (state.py:1593). `media_count`/`preview` derive from `get_post_media(post_id)` + the row's text/caption.
+- `GET /api/my/recurring` → `list_user_recurring_summaries(user_id, ...)` mapped to `{id, destination_title, interval_description, next_scheduled_at_utc, next_local_time}`. **Note:** `interval_description` is NOT a field on `RecurringPatternSummary` (it exposes nested `pattern.interval_type` / `weekdays_mask` / `time_of_day_minutes`); the route must build a human string. Reuse `telegram/handlers/keyboards.py::_repeat_interval_label(lang, interval_type)` as the base and decide in planning whether to append time-of-day / weekday detail and which `lang` to use (recipient's stored language).
+- `POST /api/my/post/{id}/reschedule` → body `{local_datetime}`; tz from `get_user_timezone(user_id) or "UTC"`; `parse_local_datetime` → `validate_schedule_time`; on valid call `update_editable_post_time(id, user_id, scheduled_at_utc=...)`. 400 on unparseable/invalid/past time, 404 if not owned/editable.
 - `POST /api/my/post/{id}/cancel` → `cancel_post(user_id, id)`; 404 if not owned/pending.
 - `POST /api/my/recurring/{id}/cancel` → `cancel_recurring_pattern(user_id, id)`; 404 if not owned.
 
