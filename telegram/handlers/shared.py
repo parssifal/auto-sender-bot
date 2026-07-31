@@ -81,6 +81,26 @@ async def _get_content_ctx(state, current_state):
     return await get_schedule_ctx(state)
 
 
+async def _datetime_entry_prompt_text(store, state, lang: str, state_name: str) -> str:
+    """Prompt text shown while a datetime-entry state is active.
+
+    Reads the flow-specific fields (destination / draft id / edited post id) via
+    the typed FSM contexts (Phase 4/4c) instead of raw ``data.get(...)``. Shared by
+    the three datetime-picker nav handlers (calendar-nav, back-to-calendar, time),
+    which otherwise duplicated this branch.
+    """
+    if state_name == DraftStates.entering_datetime.state:
+        ctx = await get_draft_ctx(state)
+        where = await store.get_destination_title(int(ctx.chat_id or 0)) or str(ctx.chat_id or "")
+        return _draft_post_prompt_text(lang, draft_id=ctx.draft_publish_id, where=where)
+    if state_name == RepeatStates.entering_datetime.state:
+        return tr(lang, "repeat_enter_datetime")
+    if state_name == EditStates.entering_datetime.state:
+        ctx = await get_edit_ctx(state)
+        return tr(lang, "edit_time_prompt", post_id=_short_id(str(ctx.edit_post_id or "")))
+    return tr(lang, "enter_datetime")
+
+
 # Labels of the reply-keyboard main-menu buttons, in every supported language.
 _MENU_BUTTON_TEXTS = menu_button_texts()
 
@@ -154,15 +174,7 @@ def build_router(store: StateStore) -> Router:
 
         await state.update_data(calendar_year=year, calendar_month=month)
         data = await state.get_data()
-        if current_state == DraftStates.entering_datetime.state:
-            where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
-            text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
-        elif current_state == RepeatStates.entering_datetime.state:
-            text = tr(lang, "repeat_enter_datetime")
-        elif current_state == EditStates.entering_datetime.state:
-            text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
-        else:
-            text = tr(lang, "enter_datetime")
+        text = await _datetime_entry_prompt_text(store, state, lang, current_state)
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
@@ -329,15 +341,7 @@ def build_router(store: StateStore) -> Router:
             previous_state = ScheduleStates.entering_datetime
         await state.set_state(previous_state)
         data = await state.get_data()
-        if previous_state == DraftStates.entering_datetime:
-            where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
-            text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
-        elif previous_state == RepeatStates.entering_datetime:
-            text = tr(lang, "repeat_enter_datetime")
-        elif previous_state == EditStates.entering_datetime:
-            text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
-        else:
-            text = tr(lang, "enter_datetime")
+        text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
         await query.answer()
         await _edit_datetime_prompt(
             query.message,
@@ -378,15 +382,7 @@ def build_router(store: StateStore) -> Router:
                 previous_state = ScheduleStates.entering_datetime
             await state.set_state(previous_state)
             data = await state.get_data()
-            if previous_state == DraftStates.entering_datetime:
-                where = await store.get_destination_title(int(data.get("chat_id") or 0)) or str(data.get("chat_id") or "")
-                text = _draft_post_prompt_text(lang, draft_id=data.get("draft_publish_id"), where=where)
-            elif previous_state == RepeatStates.entering_datetime:
-                text = tr(lang, "repeat_enter_datetime")
-            elif previous_state == EditStates.entering_datetime:
-                text = tr(lang, "edit_time_prompt", post_id=_short_id(str(data.get("edit_post_id") or "")))
-            else:
-                text = tr(lang, "enter_datetime")
+            text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             await _edit_datetime_prompt(
                 query.message,
