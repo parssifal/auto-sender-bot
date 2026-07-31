@@ -368,6 +368,10 @@ class StateStore:
         )
         return [(int(r["user_id"]), int(r["cnt"])) for r in rows]
 
+    async def all_user_ids(self) -> list[int]:
+        rows = await self._conn.execute_fetchall("SELECT user_id FROM users ORDER BY user_id")
+        return [int(r["user_id"]) for r in rows]
+
     async def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
         rows = await self._conn.execute_fetchall(
             """

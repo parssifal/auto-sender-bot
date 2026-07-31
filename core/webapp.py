@@ -9,6 +9,7 @@ from pathlib import Path
 from aiogram.utils.web_app import check_webapp_signature, parse_webapp_init_data
 from aiohttp import web
 
+from core.services import admin_broadcast_svc
 from core.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,7 @@ async def start_webapp_server(
     store: StateStore,
     bot_token: str,
     admin_ids: tuple[int, ...],
+    bot: object | None = None,
 ) -> WebappServer:
     admin_set = set(admin_ids)
 
@@ -159,11 +161,30 @@ async def start_webapp_server(
             return web.json_response({"error": "forbidden"}, status=403)
         return web.json_response({"users": await store.list_users()})
 
+    async def api_broadcast(request: web.Request) -> web.Response:
+        if _require_admin(request) is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        if bot is None:
+            return web.json_response({"error": "bot_unavailable"}, status=503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return web.json_response({"error": "empty_text"}, status=400)
+        entities_json = payload.get("entities_json")
+        summary = await admin_broadcast_svc.broadcast_to_all(
+            store, bot, text=text, entities_json=entities_json,
+        )
+        return web.json_response(summary)
+
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/api/stats", api_stats)
     app.router.add_get("/api/user/{id}", api_user)
     app.router.add_get("/api/users", api_users)
+    app.router.add_post("/api/broadcast", api_broadcast)
 
     runner = web.AppRunner(app)
     await runner.setup()

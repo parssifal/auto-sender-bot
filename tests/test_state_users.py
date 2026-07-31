@@ -76,3 +76,18 @@ async def test_get_user_profile_status_breakdown(store: StateStore) -> None:
         "pending", "sending", "sent", "failed", "cancelled",
     }
     assert sum(prof["posts_by_status"].values()) == prof["posts"]
+
+
+@pytest.mark.asyncio
+async def test_all_user_ids_returns_every_id(store: StateStore) -> None:
+    await store.ensure_user(1)
+    await store.ensure_user(2)
+    await store.ensure_user(3)
+    ids = await store.all_user_ids()
+    assert sorted(ids) == [1, 2, 3]
+    assert all(isinstance(i, int) for i in ids)
+
+
+@pytest.mark.asyncio
+async def test_all_user_ids_empty(store: StateStore) -> None:
+    assert await store.all_user_ids() == []

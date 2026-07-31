@@ -1,7 +1,9 @@
 # Design: Admin Broadcast to User DMs
 
 **Date:** 2026-07-31
-**Status:** Draft — ready for planning (open decisions marked ⚠)
+**Status:** ✅ Implemented (branch `feature/admin-broadcast`, 2026-07-31). Plan: `docs/superpowers/plans/2026-07-31-admin-broadcast.md`.
+
+**Resolved decisions:** text-only v1; **two** entry points (admin panel card **and** `/admin_broadcast` bot command); **no** history table (summary in response only); throttle = fixed `asyncio.sleep(0.05)`. Boundary note: the service does NOT import aiogram (guard `test_services_boundary.py`) — `bot` is typed `object`, blocked-user detected by exception class name; `entities_json` (not `entities`) is threaded through `notifier.send_text`; recipients come from new `StateStore.all_user_ids()` (PK column is `user_id`).
 **Scope:** New feature — admin sends one message to every registered user's private chat, with a delivery report.
 **Scale:** 1–10 users (personal/team), SQLite, single-process.
 **Roadmap:** Item 1 of `docs/superpowers/2026-07-31-roadmap-post-refactor.md`. Plan to be written in a later session.

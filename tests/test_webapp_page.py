@@ -25,3 +25,10 @@ def test_admin_page_is_self_contained_no_external_css_or_scripts() -> None:
 
     for src in re.findall(r'<script[^>]*src="([^"]+)"', html):
         assert "telegram-web-app.js" in src
+
+
+def test_admin_page_has_broadcast_card() -> None:
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    assert 'id="broadcast-card"' in html
+    assert "Отправить всем" in html
+    assert "/api/broadcast" in html

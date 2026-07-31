@@ -49,6 +49,11 @@ class BroadcastStates(StatesGroup):
     confirming = State()
 
 
+class AdminBroadcastStates(StatesGroup):
+    collecting = State()
+    confirming = State()
+
+
 class EditStates(StatesGroup):
     choosing_field = State()
     entering_text = State()

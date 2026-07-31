@@ -323,6 +323,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin_intro": "📊 Admin panel — open the dashboard to see bot stats.",
         "admin_open_btn": "Open dashboard",
         "admin_not_configured": "Admin panel is not configured. Set WEBAPP_URL to enable the mini app.",
+        "admin_broadcast_prompt": "Send the text to broadcast to ALL users. /cancel to abort.",
+        "admin_broadcast_empty": "Empty message. Send some text, or /cancel.",
+        "admin_broadcast_confirm": "Broadcast this to {count} user(s)?\n\n———\n{preview}",
+        "admin_broadcast_confirm_btn": "Send to all",
+        "admin_broadcast_cancel_btn": "Cancel",
+        "admin_broadcast_sending": "Sending…",
+        "admin_broadcast_report": "Done. Delivered: {delivered}, blocked: {blocked}, failed: {failed} (of {total}).",
+        "admin_broadcast_cancelled": "Broadcast cancelled.",
         "rights_not_member": (
             "Bot is not in this channel/chat. Add the bot as admin with posting rights "
             "and repeat linking via /link or /link_forward."
@@ -686,6 +694,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin_intro": "📊 Админ-панель — откройте дашборд со статистикой бота.",
         "admin_open_btn": "Открыть панель",
         "admin_not_configured": "Админ-панель не настроена. Задайте WEBAPP_URL, чтобы включить мини-приложение.",
+        "admin_broadcast_prompt": "Отправьте текст для рассылки ВСЕМ пользователям. /cancel — отмена.",
+        "admin_broadcast_empty": "Пустое сообщение. Пришлите текст или /cancel.",
+        "admin_broadcast_confirm": "Разослать это {count} пользователю(ям)?\n\n———\n{preview}",
+        "admin_broadcast_confirm_btn": "Отправить всем",
+        "admin_broadcast_cancel_btn": "Отмена",
+        "admin_broadcast_sending": "Отправляю…",
+        "admin_broadcast_report": "Готово. Доставлено: {delivered}, заблокировали: {blocked}, ошибок: {failed} (из {total}).",
+        "admin_broadcast_cancelled": "Рассылка отменена.",
         "rights_not_member": (
             "Бот не состоит в этом канале/чате. Добавьте бота администратором с правом "
             "публикации и повторите привязку через /link или /link_forward."

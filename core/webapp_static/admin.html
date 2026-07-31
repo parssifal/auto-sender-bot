@@ -133,6 +133,35 @@
   .banner{display:none; background:var(--c4); color:#fff; border-radius:12px; padding:10px 14px; font-size:13px; margin-bottom:var(--gap)}
   .banner.show{display:block}
 
+  /* Broadcast */
+  .bcast textarea{
+    width:100%; box-sizing:border-box; resize:vertical; min-height:96px; margin-top:12px;
+    appearance:none; border:1px solid var(--separator); background:var(--group-bg);
+    color:var(--text); border-radius:12px; padding:11px 13px; font-size:15px; font-family:inherit;
+  }
+  .bcast textarea:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:transparent}
+  .bcast .row{display:flex; gap:8px; align-items:center; margin-top:10px}
+  .bcast .counter{font-size:12px; color:var(--hint); font-variant-numeric:tabular-nums; margin-left:auto}
+  .bcast .send-btn{
+    appearance:none; border:0; background:var(--c4); color:#fff; font-weight:700; font-size:15px;
+    border-radius:12px; padding:11px 18px; cursor:pointer;
+  }
+  .bcast .send-btn:disabled{opacity:.5; cursor:default}
+  .bcast .send-btn:active{opacity:.85}
+  .bcast .result{margin-top:12px; font-size:13px; display:none; font-variant-numeric:tabular-nums}
+  .bcast .result.show{display:block}
+
+  /* Confirm modal */
+  .modal{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:20px; z-index:50}
+  .modal.show{display:flex}
+  .modal .box{background:var(--card); border-radius:var(--radius); padding:18px; max-width:420px; width:100%; box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  .modal .box h2{margin:0 0 8px; font-size:17px}
+  .modal .preview{background:var(--group-bg); border-radius:12px; padding:10px 12px; font-size:14px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; margin:10px 0 14px}
+  .modal .actions{display:flex; gap:8px}
+  .modal .actions button{flex:1; appearance:none; border:0; border-radius:12px; padding:11px 0; font-weight:700; font-size:15px; cursor:pointer}
+  .modal .cancel{background:var(--separator); color:var(--text)}
+  .modal .confirm{background:var(--c4); color:#fff}
+
   @media (prefers-reduced-motion: no-preference){
     .draw{stroke-dasharray:var(--len); stroke-dashoffset:var(--len); animation:draw 900ms ease forwards}
     @keyframes draw{to{stroke-dashoffset:0}}
@@ -209,6 +238,28 @@
     </div>
   </section>
 
+  <section class="card bcast" id="broadcast-card">
+    <div class="block-head"><div class="eyebrow">Рассылка в личку</div><div class="meta">всем пользователям</div></div>
+    <textarea id="broadcastText" placeholder="Текст сообщения для всех пользователей…" aria-label="Текст рассылки"></textarea>
+    <div class="row">
+      <button id="broadcast-send" class="send-btn">Отправить всем</button>
+      <span class="counter" id="broadcastCounter">0</span>
+    </div>
+    <div class="result" id="broadcastResult"></div>
+  </section>
+
+  <div class="modal" id="broadcastModal" role="dialog" aria-modal="true" aria-labelledby="broadcastModalTitle">
+    <div class="box">
+      <h2 id="broadcastModalTitle">Разослать всем?</h2>
+      <div class="eyebrow" id="broadcastModalCount">Получателей: —</div>
+      <div class="preview" id="broadcastModalPreview"></div>
+      <div class="actions">
+        <button class="cancel" id="broadcastCancel">Отмена</button>
+        <button class="confirm" id="broadcastConfirm">Отправить</button>
+      </div>
+    </div>
+  </div>
+
   <div class="foot" id="foot">&nbsp;</div>
 </div>
 
@@ -218,6 +269,7 @@
   "use strict";
   var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   var initData = tg && tg.initData ? tg.initData : "";
+  var lastStats = null;
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var nf = new Intl.NumberFormat("ru-RU");
   var PALETTE = ["--c1","--c2","--c3","--c4","--c5"];
@@ -386,6 +438,7 @@
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
 
   function render(d){
+    lastStats = d;
     countUp($("heroTotal"), sum(d.daily_posts_sent));
     var todayTxt = d.sent_today>0 ? '<b>+'+nf.format(d.sent_today)+'</b> сегодня' : 'сегодня без отправок';
     $("heroSub").innerHTML = todayTxt + ' · <span style="color:var(--hint)">'+nf.format(d.sent_7d)+' за неделю</span>';
@@ -415,6 +468,52 @@
   function api(path){
     return fetch(path, { headers: initData ? {Authorization: initData} : {} })
       .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); });
+  }
+
+  function apiPost(path, body){
+    var headers = {"Content-Type":"application/json"};
+    if(initData){ headers.Authorization = initData; }
+    return fetch(path, { method:"POST", headers:headers, body:JSON.stringify(body) })
+      .then(function(r){ return r.json().then(function(j){ if(!r.ok){ throw new Error(j.error||r.status); } return j; }); });
+  }
+
+  // ---- Broadcast to user DMs ----
+  function bcastCount(){
+    return lastStats && typeof lastStats.total_users==="number" ? lastStats.total_users : null;
+  }
+  function updateBroadcastCounter(){ $("broadcastCounter").textContent = ($("broadcastText").value||"").length; }
+  function openBroadcastModal(){
+    var text = ($("broadcastText").value||"").trim();
+    if(!text){ banner("Введите текст рассылки."); return; }
+    var c = bcastCount();
+    $("broadcastModalCount").textContent = "Получателей: " + (c===null ? "?" : c);
+    $("broadcastModalPreview").textContent = text;
+    $("broadcastModal").classList.add("show");
+  }
+  function closeBroadcastModal(){ $("broadcastModal").classList.remove("show"); }
+  function showBroadcastResult(s){
+    var el = $("broadcastResult");
+    el.textContent = "Готово. Доставлено: "+s.delivered+", заблокировали: "+s.blocked+", ошибок: "+s.failed+" (из "+s.total+").";
+    el.classList.add("show");
+  }
+  function sendBroadcast(){
+    var text = ($("broadcastText").value||"").trim();
+    closeBroadcastModal();
+    if(!text){ return; }
+    var btn = $("broadcast-send");
+    btn.disabled = true; btn.textContent = "Отправляю…";
+    var done = function(){ btn.disabled=false; btn.textContent="Отправить всем"; };
+    if(!initData){
+      var c = bcastCount()||0;
+      showBroadcastResult({total:c, delivered:c, blocked:0, failed:0});
+      $("broadcastText").value=""; updateBroadcastCounter(); done();
+      return;
+    }
+    apiPost("/api/broadcast", {text:text}).then(function(s){
+      showBroadcastResult(s); $("broadcastText").value=""; updateBroadcastCounter();
+    }).catch(function(e){
+      banner("Ошибка рассылки: "+e.message);
+    }).then(done);
   }
 
   // ---- Find user ----
@@ -496,6 +595,11 @@
   $("refresh").addEventListener("click", load);
   $("findBtn").addEventListener("click", findUser);
   $("findInput").addEventListener("keydown", function(e){ if(e.key==="Enter") findUser(); });
+  $("broadcastText").addEventListener("input", updateBroadcastCounter);
+  $("broadcast-send").addEventListener("click", openBroadcastModal);
+  $("broadcastConfirm").addEventListener("click", sendBroadcast);
+  $("broadcastCancel").addEventListener("click", closeBroadcastModal);
+  $("broadcastModal").addEventListener("click", function(e){ if(e.target===$("broadcastModal")) closeBroadcastModal(); });
   load();
 })();
 </script>
