@@ -40,6 +40,7 @@ from core.state.models import (
     TeamMember,
 )
 from core.state.row_mappers import RowMappersMixin
+from core.state.teams import TeamsMixin
 from core.state.users import UsersMixin
 
 __all__ = [
@@ -58,5 +59,5 @@ __all__ = [
 ]
 
 
-class StateStore(StateStoreBase, UsersMixin, DestinationsMixin, _LegacyMixin, RowMappersMixin):
+class StateStore(StateStoreBase, UsersMixin, DestinationsMixin, TeamsMixin, _LegacyMixin, RowMappersMixin):
     pass
