@@ -13,6 +13,14 @@ from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
+from telegram.handlers.contexts import (
+    BroadcastContext,
+    DraftContext,
+    EditContext,
+    RepeatContext,
+    ScheduleContext,
+    field_names,
+)
 from telegram.handlers.states import (
     BroadcastStates,
     DraftStates,
@@ -35,6 +43,39 @@ from telegram.handlers.keyboards import (
     _schedule_datetime_markup,
     _short_id,
 )
+
+
+# --- Typed FSM context getters (Phase 4) ---------------------------------
+# Read-only typed access over flat FSM storage. Each getter hydrates its
+# dataclass from ONLY the keys present in state, so a partially-populated or
+# pre-deploy flat-key session reads back cleanly (absent keys → defaults).
+# Writes stay as `state.update_data(**flat_keys)` at the call sites.
+
+
+async def _get_ctx(state, cls):
+    data = await state.get_data()
+    keys = field_names(cls)
+    return cls(**{k: v for k, v in data.items() if k in keys})
+
+
+async def get_schedule_ctx(state) -> ScheduleContext:
+    return await _get_ctx(state, ScheduleContext)
+
+
+async def get_repeat_ctx(state) -> RepeatContext:
+    return await _get_ctx(state, RepeatContext)
+
+
+async def get_broadcast_ctx(state) -> BroadcastContext:
+    return await _get_ctx(state, BroadcastContext)
+
+
+async def get_draft_ctx(state) -> DraftContext:
+    return await _get_ctx(state, DraftContext)
+
+
+async def get_edit_ctx(state) -> EditContext:
+    return await _get_ctx(state, EditContext)
 
 
 # Keys of the reply-keyboard main-menu buttons (see keyboards._main_menu_kb).

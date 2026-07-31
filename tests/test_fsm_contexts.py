@@ -49,3 +49,59 @@ def test_repeat_context_has_interval_and_dest_page():
 def test_all_contexts_have_preview_ref():
     for cls in (ScheduleContext, RepeatContext, BroadcastContext, DraftContext, EditContext):
         assert {"preview_msg_ids", "preview_chat_id"} <= field_names(cls)
+
+
+import pytest
+from telegram.handlers.helpers import (
+    get_schedule_ctx, get_draft_ctx, get_edit_ctx, get_repeat_ctx, get_broadcast_ctx,
+)
+
+
+class FakeState:
+    """Minimal stand-in for aiogram FSMContext.get_data()."""
+
+    def __init__(self, data):
+        self._data = dict(data)
+
+    async def get_data(self):
+        return dict(self._data)
+
+
+@pytest.mark.asyncio
+async def test_getter_hydrates_only_present_keys():
+    # simulates an OLD flat-key Redis session captured mid-flow before deploy
+    state = FakeState({
+        "media_items": [{"type": "photo", "file_id": "abc"}],
+        "caption_above": True,
+        "draft_text": "hi",
+        "selected_chat_ids": [111, 222],
+        "dest_page": 2,
+        "stray_legacy_key": "ignored",   # unknown keys must not crash hydration
+    })
+    ctx = await get_schedule_ctx(state)
+    assert ctx.media_items == [{"type": "photo", "file_id": "abc"}]
+    assert ctx.caption_above is True
+    assert ctx.draft_text == "hi"
+    assert ctx.selected_chat_ids == [111, 222]
+    assert ctx.dest_page == 2
+    # keys absent from storage fall back to dataclass defaults
+    assert ctx.kind is None
+    assert ctx.scheduled_at_utc is None
+
+
+@pytest.mark.asyncio
+async def test_getter_empty_state_all_defaults():
+    ctx = await get_draft_ctx(FakeState({}))
+    assert ctx.chat_id is None and ctx.team_id is None
+    assert ctx.media_items == [] and ctx.caption_above is False
+
+
+@pytest.mark.asyncio
+async def test_edit_getter_reads_edit_fields():
+    ctx = await get_edit_ctx(FakeState({
+        "edit_post_id": "p1", "edit_preserve_caption_above": True,
+        "scheduled_at_utc": 1700000000,
+    }))
+    assert ctx.edit_post_id == "p1"
+    assert ctx.edit_preserve_caption_above is True
+    assert ctx.scheduled_at_utc == 1700000000
