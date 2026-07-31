@@ -67,9 +67,17 @@ Two items below (Broadcast admin action, User-facing Mini App) are the **first w
 
 ---
 
-## 3. Admin dashboard auto-refresh
+## 3. Admin dashboard auto-refresh — ✅ SHIPPED 2026-07-31
 
 **Goal:** The admin panel refreshes its stats without the manual "↻" button.
+
+**Done (frontend-only, `admin.html`):** `refreshStats()` shared by the ↻ button and a
+`setInterval` timer (45s); `inFlight` overlap guard; polls only when
+`document.visibilityState === "visible"` and refreshes immediately on `visibilitychange`
+back to visible; "обновлено … назад" indicator (`#lastUpdated`) refreshed each fetch + a
+15s no-network label ticker. **Decisions:** interval 45s; user-detail card stays manual
+(stats-only in v1). No backend change. Guard-rail test: `test_admin_page_auto_refreshes_stats`
+in `tests/test_webapp_page.py`.
 
 **Already exists:** `GET /api/stats` returns the full aggregate bundle; the ↻ button already re-fetches it.
 

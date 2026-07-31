@@ -32,3 +32,17 @@ def test_admin_page_has_broadcast_card() -> None:
     assert 'id="broadcast-card"' in html
     assert "Отправить всем" in html
     assert "/api/broadcast" in html
+
+
+def test_admin_page_auto_refreshes_stats() -> None:
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    # Polling timer drives refreshStats(), the manual button shares the same fn.
+    assert "setInterval" in html
+    assert "refreshStats" in html
+    # Pauses when the tab is hidden and refreshes on return.
+    assert "visibilitychange" in html
+    assert "visibilityState" in html
+    # Overlap guard so ticks don't stack while a fetch is in flight.
+    assert "inFlight" in html
+    # "Last updated" indicator element.
+    assert 'id="lastUpdated"' in html
