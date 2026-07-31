@@ -1,7 +1,7 @@
 # Design: User-Facing Mini App (Queue / Reschedule / Cancel + Recurring)
 
 **Date:** 2026-07-31
-**Status:** Approved — ready for planning
+**Status:** Implemented (branch `feature/user-mini-app-queue`, 2026-07-31; plan `docs/superpowers/plans/2026-07-31-user-mini-app-queue.md`)
 **Scope:** New feature — any user opens a Telegram Mini App showing *their* scheduled posts and recurring patterns, and can reschedule/cancel one-off posts and cancel recurring series.
 **Scale:** 1–10 users, SQLite, single-process.
 **Roadmap:** Item 2 of `docs/superpowers/2026-07-31-roadmap-post-refactor.md`.
