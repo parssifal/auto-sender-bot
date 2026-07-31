@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.state import DraftRow
+from core.state import DraftRow, Team
 
 
 def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
@@ -13,6 +13,21 @@ def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
             return draft.id
 
     matches = [draft.id for draft in drafts if draft.id.startswith(ref)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _resolve_team_id(teams: list[Team], team_ref: str) -> str | None:
+    ref = team_ref.strip().lower()
+    if not ref:
+        return None
+
+    for team in teams:
+        if team.id == ref:
+            return team.id
+
+    matches = [team.id for team in teams if team.id.startswith(ref)]
     if len(matches) == 1:
         return matches[0]
     return None

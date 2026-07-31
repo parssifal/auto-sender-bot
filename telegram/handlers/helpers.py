@@ -9,8 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
-from core.services._shared import _resolve_draft_id  # re-export for existing callers
-from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
+from core.services._shared import _resolve_draft_id, _resolve_team_id  # re-export for existing callers
+from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
 from telegram.handlers.states import (
@@ -80,21 +80,6 @@ def _resolve_scheduled_post_id(posts: list[ScheduledPostRow], post_ref: str) -> 
     if len(matches) == 1:
         return matches[0], False
     return None, len(matches) > 1
-
-
-def _resolve_team_id(teams: list[Team], team_ref: str) -> str | None:
-    ref = team_ref.strip().lower()
-    if not ref:
-        return None
-
-    for team in teams:
-        if team.id == ref:
-            return team.id
-
-    matches = [team.id for team in teams if team.id.startswith(ref)]
-    if len(matches) == 1:
-        return matches[0]
-    return None
 
 
 async def _clear_inline_markup(message: Message) -> None:
