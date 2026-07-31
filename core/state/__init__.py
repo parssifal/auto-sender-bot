@@ -10,8 +10,7 @@ re-exported dataclasses) is preserved from the original monolithic
 Internally the implementation is split by domain into sibling modules
 (``users.py``, ``destinations.py``, ``posts.py``, ``recurring.py``,
 ``drafts.py``, ``teams.py``, ``stats.py``) plus shared infrastructure
-(``base.py``, ``row_mappers.py``, ``models.py``). Domains not yet split
-out of the monolith temporarily live in ``_legacy.py``.
+(``base.py``, ``row_mappers.py``, ``models.py``).
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from __future__ import annotations
 # patches it everywhere.
 import time
 
-from core.state._legacy import _LegacyMixin
 from core.state.base import StateStoreBase
 from core.state.destinations import DestinationsMixin
 from core.state.drafts import DraftsMixin
@@ -72,7 +70,6 @@ class StateStore(
     PostsMixin,
     RecurringMixin,
     StatsMixin,
-    _LegacyMixin,
     RowMappersMixin,
 ):
     pass
