@@ -167,6 +167,19 @@ Patchers are intentionally **not** separate functions — writes stay as the exi
 
 > Rationale for read-only: mismatched writes are caught at read time (a mistyped write key simply won't hydrate into the dataclass and will surface in tests/manual walk). Symmetric typed writes are a possible follow-up but out of scope for Phase 4 — note it in the memory update, don't build it.
 
+### CRITICAL: keep existing coercion around typed reads
+
+The getter hydrates the **raw stored value** with **no coercion**, and a *present* `None` key **overrides** the dataclass default (e.g. `ScheduleContext(selected_chat_ids=None).selected_chat_ids` is `None`, not `[]`). Several current reads coerce, and that coercion **must stay**:
+
+| Current read (coerced) | After swap — KEEP the wrapper |
+|---|---|
+| `kb._normalize_selected_chat_ids(data.get("selected_chat_ids"))` (broadcast.py:80/109, shared.py:785/835, helpers.py:339) | `kb._normalize_selected_chat_ids(ctx.selected_chat_ids)` |
+| `int(data.get("dest_page", 0) or 0)` (broadcast.py:82) | `int(ctx.dest_page or 0)` |
+| `list(data.get("media_items", []))` | `list(ctx.media_items)` |
+| `bool(data.get("caption_above", False))` | `bool(ctx.caption_above)` |
+
+**Do not drop these wrappers when swapping to `ctx.<field>`.** Dropping them silently changes behavior for a present-`None`/malformed session — and because well-formed sessions still pass the guard-rail tests, the regression would be **silent**. When in doubt, wrap the typed read exactly as the raw read was wrapped.
+
 ---
 
 ## Task 1: Context dataclasses
@@ -392,6 +405,8 @@ text_before_media = ctx.text_before_media
 ```
 Leave all `await state.update_data(...)` writes exactly as they are.
 
+> **Two more content reads live in the edit branch below the snippet:** `data.get("edit_preserve_caption_above")` (`shared.py:602`) and a second `data.get("caption_above", False)` (`shared.py:606`). Either keep the local `data = await state.get_data()` binding for those, or convert them to `ctx.edit_preserve_caption_above` / `ctx.caption_above` (available because `_get_content_ctx` returns an `EditContext` for edit states). Do **not** delete the `data` binding without converting these two — that's a `NameError`.
+
 > Verify `StatesGroup.__all_states__` is the correct aiogram 3.x introspection attribute for "all states in this group"; if the installed aiogram exposes it differently, use `current_state in SomeStates` (aiogram supports `state_string in StatesGroup` membership) instead. Pick whichever the installed version supports — check with a one-liner before coding:
 > `.venv/bin/python -c "from telegram.handlers.states import ScheduleStates as S; print(hasattr(S,'__all_states__')); print(ScheduleStates.collecting_post.state in S)"`
 
@@ -491,6 +506,8 @@ git commit -m "refactor(fsm): shared cross-flow handlers read via typed contexts
 grep -rnE "data\.get\(['\"](kind|text|entities_json|caption|caption_entities_json|caption_above|text_before_media|draft_text|draft_entities_json|media_items|calendar_year|calendar_month|selected_date|scheduled_at_utc|scheduled_local|preview_msg_ids|preview_chat_id|selected_chat_ids|dest_page|interval_type|chat_id|team_id|draft_publish_id|edit_post_id|edit_draft_id|edit_preserve_caption_above)['\"]" telegram/handlers/*.py
 ```
 Expected: only intentional exceptions remain (document any). Writes via `update_data` are expected to remain.
+
+> **Known intended exception — do NOT migrate `_clear_live_preview` (`helpers.py:391–406`).** It reads `preview_chat_id`/`preview_msg_ids` via `data.get`, but its logic hinges on a key-**presence** check (`if "preview_msg_ids" in data or "preview_chat_id" in data`) that a dataclass cannot express (a hydrated `PreviewRef` always has both fields with defaults, losing the "was it ever set?" distinction). The Task 9 grep will flag this function — that flag is expected; leave it on raw-dict access and record it as the documented exception.
 - [ ] **Step 4:** `.venv/bin/python -m pytest -q` — PASS.
 - [ ] **Step 5:** Commit `refactor(fsm): shared summary/preview helpers read via typed contexts`.
 
