@@ -41,6 +41,7 @@ from core.state.models import (
     TeamMember,
 )
 from core.state.posts import PostsMixin
+from core.state.recurring import RecurringMixin
 from core.state.row_mappers import RowMappersMixin
 from core.state.teams import TeamsMixin
 from core.state.users import UsersMixin
@@ -61,5 +62,15 @@ __all__ = [
 ]
 
 
-class StateStore(StateStoreBase, UsersMixin, DestinationsMixin, TeamsMixin, DraftsMixin, PostsMixin, _LegacyMixin, RowMappersMixin):
+class StateStore(
+    StateStoreBase,
+    UsersMixin,
+    DestinationsMixin,
+    TeamsMixin,
+    DraftsMixin,
+    PostsMixin,
+    RecurringMixin,
+    _LegacyMixin,
+    RowMappersMixin,
+):
     pass
