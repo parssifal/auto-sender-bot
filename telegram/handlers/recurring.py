@@ -190,9 +190,9 @@ def build_router(store: StateStore) -> Router:
             return
 
         lang = await h._user_lang(store, query.from_user.id)
-        data = await state.get_data()
-        scheduled_at_utc = data.get("scheduled_at_utc")
-        scheduled_local = data.get("scheduled_local")
+        ctx = await h.get_repeat_ctx(state)
+        scheduled_at_utc = ctx.scheduled_at_utc
+        scheduled_local = ctx.scheduled_local
         if not isinstance(scheduled_at_utc, int) or not isinstance(scheduled_local, str):
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             await state.clear()
