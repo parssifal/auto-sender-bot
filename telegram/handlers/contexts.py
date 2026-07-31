@@ -63,6 +63,7 @@ class PreviewRef:
 class ScheduleContext(PostContent, DateTimePick, PreviewRef):
     selected_chat_ids: list[int] = field(default_factory=list)
     dest_page: int = 0
+    chat_id: int | None = None          # single resolved destination (after dest select)
 
 
 @dataclass
@@ -70,6 +71,7 @@ class RepeatContext(PostContent, DateTimePick, PreviewRef):
     selected_chat_ids: list[int] = field(default_factory=list)
     dest_page: int = 0
     interval_type: str | None = None
+    chat_id: int | None = None          # single resolved destination
 
 
 @dataclass
