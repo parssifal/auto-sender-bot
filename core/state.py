@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 import aiosqlite
 
+from core.migrate import run_migrations
 from core.rbac import DraftPermissions, can_create_team_draft, resolve_draft_permissions
 
 
@@ -143,203 +144,13 @@ class StateStore:
             await cur.close()
 
     async def migrate(self) -> None:
-        await self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                timezone TEXT NULL,
-                language TEXT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
+        await run_migrations(self._conn)
+        await self._reconcile_user_columns()
+        await self._backfill_team_owners()
 
-            CREATE TABLE IF NOT EXISTS destinations (
-                chat_id INTEGER PRIMARY KEY,
-                type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                username TEXT NULL,
-                bot_status TEXT NOT NULL,
-                bot_can_post INTEGER NULL,
-                updated_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS user_destinations (
-                user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                linked_via TEXT NOT NULL,
-                linked_at INTEGER NOT NULL,
-                PRIMARY KEY (user_id, chat_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS teams (
-                id TEXT PRIMARY KEY,
-                owner_user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                FOREIGN KEY (owner_user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_teams_owner_created
-                ON teams(owner_user_id, created_at);
-
-            CREATE TABLE IF NOT EXISTS team_members (
-                team_id TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (team_id, user_id),
-                CHECK (role IN ('owner', 'editor', 'viewer')),
-                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_team_members_user_team
-                ON team_members(user_id, team_id);
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_single_owner
-                ON team_members(team_id)
-                WHERE role='owner';
-
-            CREATE TABLE IF NOT EXISTS team_invites (
-                token TEXT PRIMARY KEY,
-                team_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                created_by_user_id INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL,
-                accepted_by_user_id INTEGER NULL,
-                accepted_at INTEGER NULL,
-                CHECK (role IN ('editor', 'viewer')),
-                CHECK (expires_at > created_at),
-                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (accepted_by_user_id) REFERENCES users(user_id) ON DELETE SET NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_team_invites_team_created
-                ON team_invites(team_id, created_at);
-
-            CREATE INDEX IF NOT EXISTS idx_team_invites_expires
-                ON team_invites(expires_at, accepted_at);
-
-            CREATE TABLE IF NOT EXISTS drafts (
-                id TEXT PRIMARY KEY,
-                team_id TEXT NULL,
-                author_user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                kind TEXT NOT NULL,
-                text TEXT NULL,
-                entities_json TEXT NULL,
-                caption TEXT NULL,
-                caption_entities_json TEXT NULL,
-                caption_above INTEGER NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                CHECK (kind IN ('text', 'media')),
-                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
-                FOREIGN KEY (author_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_drafts_author_created
-                ON drafts(author_user_id, created_at);
-
-            CREATE INDEX IF NOT EXISTS idx_drafts_team_created
-                ON drafts(team_id, created_at);
-
-            CREATE TABLE IF NOT EXISTS draft_media (
-                draft_id TEXT NOT NULL,
-                idx INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                file_id TEXT NOT NULL,
-                PRIMARY KEY (draft_id, idx),
-                FOREIGN KEY (draft_id) REFERENCES drafts(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS scheduled_posts (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                scheduled_at_utc INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                text TEXT NULL,
-                entities_json TEXT NULL,
-                caption TEXT NULL,
-                caption_entities_json TEXT NULL,
-                caption_above INTEGER NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                next_retry_at_utc INTEGER NULL,
-                created_at INTEGER NOT NULL,
-                sent_at INTEGER NULL,
-                last_error TEXT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_scheduled_due
-                ON scheduled_posts(status, scheduled_at_utc, next_retry_at_utc);
-
-            CREATE TABLE IF NOT EXISTS scheduled_post_media (
-                post_id TEXT NOT NULL,
-                idx INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                file_id TEXT NOT NULL,
-                PRIMARY KEY (post_id, idx),
-                FOREIGN KEY (post_id) REFERENCES scheduled_posts(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS recurring_patterns (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                interval_type TEXT NOT NULL,
-                weekdays_mask INTEGER NULL,
-                time_of_day_minutes INTEGER NOT NULL,
-                timezone TEXT NOT NULL,
-                start_at_utc INTEGER NOT NULL,
-                end_at_utc INTEGER NULL,
-                max_occurrences INTEGER NULL,
-                current_count INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                CHECK (time_of_day_minutes BETWEEN 0 AND 1439),
-                CHECK (weekdays_mask IS NULL OR weekdays_mask BETWEEN 1 AND 127),
-                CHECK (max_occurrences IS NULL OR max_occurrences > 0),
-                CHECK (current_count >= 0),
-                CHECK (is_active IN (0, 1)),
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                FOREIGN KEY (chat_id) REFERENCES destinations(chat_id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_recurring_patterns_user_active
-                ON recurring_patterns(user_id, is_active, created_at);
-
-            CREATE INDEX IF NOT EXISTS idx_recurring_patterns_chat_active
-                ON recurring_patterns(chat_id, is_active);
-
-            CREATE TABLE IF NOT EXISTS recurring_instances (
-                pattern_id TEXT NOT NULL,
-                post_id TEXT NOT NULL UNIQUE,
-                ordinal INTEGER NOT NULL,
-                scheduled_for_utc INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                PRIMARY KEY (pattern_id, ordinal),
-                CHECK (ordinal > 0),
-                FOREIGN KEY (pattern_id) REFERENCES recurring_patterns(id) ON DELETE CASCADE,
-                FOREIGN KEY (post_id) REFERENCES scheduled_posts(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_recurring_instances_pattern_scheduled
-                ON recurring_instances(pattern_id, scheduled_for_utc);
-            """
-        )
-
+    async def _reconcile_user_columns(self) -> None:
+        # Legacy-DB safety net: the baseline path skips DDL, so ensure the
+        # columns folded into migration 001 also exist on pre-migration DBs.
         user_columns = await self._conn.execute_fetchall("PRAGMA table_info(users)")
         user_column_names = {str(row["name"]) for row in user_columns}
         if "language" not in user_column_names:
@@ -348,7 +159,9 @@ class StateStore:
             await self._conn.execute("ALTER TABLE users ADD COLUMN username TEXT NULL")
         if "first_name" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
+        await self._conn.commit()
 
+    async def _backfill_team_owners(self) -> None:
         now = int(time.time())
         await self._conn.execute(
             """

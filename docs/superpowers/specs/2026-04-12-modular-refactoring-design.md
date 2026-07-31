@@ -137,7 +137,9 @@ def build_router(store):
 
 **Risk/mitigation:** aiogram handler registration order affects routing — extract incrementally, domain by domain, each step under tests and a manual command walk-through.
 
-### Phase 2 — Versioned Migrations + Baseline
+### Phase 2 — Versioned Migrations + Baseline — DONE (2026-07-31)
+
+Implemented: `core/migrations/001..005_*.sql` + `core/migrate.py::run_migrations`; `StateStore.migrate()` now delegates to the runner and keeps two idempotent legacy-DB reconciliation steps (`_reconcile_user_columns`, `_backfill_team_owners`) that the original `migrate()` performed but this spec's Phase 2 sketch omitted. Covered by `tests/test_migrations.py` (fresh / rerun / baseline / failed-file isolation). Plan: `docs/superpowers/plans/2026-07-31-phase2-versioned-migrations.md`.
 
 Replace the monolithic `migrate()` (`state.py:145–380`) with numbered `.sql` files + a runner backed by `schema_migrations`. Independent of Phase 1 — can run in parallel.
 
