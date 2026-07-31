@@ -9,7 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
-from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
+from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F401  # re-export for existing callers
+from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
 from telegram.handlers.states import (
@@ -22,7 +23,6 @@ from telegram.handlers.states import (
 from telegram.handlers.keyboards import (
     _broadcast_destinations_kb,
     _confirm_kb,
-    _destination_label,
     _destinations_kb,
     _draft_create_scope_kb,
     _draft_location_label,
@@ -67,21 +67,6 @@ def _is_datetime_entry_state(state_name: str | None) -> bool:
     }
 
 
-def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
-    ref = draft_ref.strip().lower()
-    if not ref:
-        return None
-
-    for draft in drafts:
-        if draft.id == ref:
-            return draft.id
-
-    matches = [draft.id for draft in drafts if draft.id.startswith(ref)]
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-
 def _resolve_scheduled_post_id(posts: list[ScheduledPostRow], post_ref: str) -> tuple[str | None, bool]:
     ref = post_ref.strip().lower()
     if not ref:
@@ -95,21 +80,6 @@ def _resolve_scheduled_post_id(posts: list[ScheduledPostRow], post_ref: str) -> 
     if len(matches) == 1:
         return matches[0], False
     return None, len(matches) > 1
-
-
-def _resolve_team_id(teams: list[Team], team_ref: str) -> str | None:
-    ref = team_ref.strip().lower()
-    if not ref:
-        return None
-
-    for team in teams:
-        if team.id == ref:
-            return team.id
-
-    matches = [team.id for team in teams if team.id.startswith(ref)]
-    if len(matches) == 1:
-        return matches[0]
-    return None
 
 
 async def _clear_inline_markup(message: Message) -> None:
@@ -382,14 +352,9 @@ async def _render_broadcast_destinations(
 
 
 async def _resolve_broadcast_destinations(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
-    destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(store, user_id)}
-    resolved: list[tuple[int, str]] = []
-    for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
-        destination = destination_map.get(chat_id)
-        if destination is None:
-            continue
-        resolved.append((chat_id, _destination_label(destination.title, destination.username)))
-    return resolved
+    from core.services import broadcast_svc
+
+    return await broadcast_svc.resolve_valid_destinations(store, user_id, selected_chat_ids)
 
 
 async def _resolve_broadcast_destination_lines(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:

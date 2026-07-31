@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from core.rbac import DraftPermissions
+from core.services import draft_svc
 from core.state import DraftRow, StateStore
 from telegram.i18n import tr
 from telegram.handlers import states, keyboards as kb, helpers as h
@@ -233,16 +234,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_ref = parts[1].strip().lower()
-        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
-        draft_id = h._resolve_draft_id(drafts, draft_ref)
-        if draft_id is None:
-            lang = await h._user_lang(store, message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
-            return
-
-        draft = await store.get_draft(draft_id)
-        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
-        if draft is None or permissions is None or not permissions.can_edit:
+        draft, permissions = await draft_svc.resolve_draft_by_ref(store, message.from_user.id, draft_ref, need="edit")
+        if draft is None:
             lang = await h._user_lang(store, message.from_user.id)
             await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
             return
@@ -260,15 +253,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_ref = parts[1].strip().lower()
-        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
-        draft_id = h._resolve_draft_id(drafts, draft_ref)
-        if draft_id is None:
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
-            return
-
-        draft = await store.get_draft(draft_id)
-        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
-        if draft is None or permissions is None or not permissions.can_delete:
+        draft, permissions = await draft_svc.resolve_draft_by_ref(store, message.from_user.id, draft_ref, need="delete")
+        if draft is None:
             await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
             return
 
@@ -292,16 +278,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         draft_ref = parts[1].strip().lower()
-        drafts = await store.list_drafts(message.from_user.id, scope="all", limit=200)
-        draft_id = h._resolve_draft_id(drafts, draft_ref)
-        if draft_id is None:
-            lang = await h._user_lang(store, message.from_user.id)
-            await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
-            return
-
-        draft = await store.get_draft(draft_id)
-        permissions = await store.get_draft_permissions(draft_id, message.from_user.id)
-        if draft is None or permissions is None or not permissions.can_publish:
+        draft, permissions = await draft_svc.resolve_draft_by_ref(store, message.from_user.id, draft_ref, need="publish")
+        if draft is None:
             lang = await h._user_lang(store, message.from_user.id)
             await message.answer(tr(lang, "draft_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
             return
@@ -364,9 +342,8 @@ def build_router(store: StateStore) -> Router:
 
         draft_id = parts[3]
         lang = await h._user_lang(store, query.from_user.id)
-        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
-        draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_view else None
-        if draft is None or permissions is None or not permissions.can_view:
+        draft, permissions = await draft_svc.resolve_draft_by_id(store, draft_id, query.from_user.id, need="view")
+        if draft is None:
             await query.answer(tr(lang, "draft_missing"), show_alert=True)
             if (query.message.text or "").startswith("draft="):
                 await _render_drafts(store, query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
@@ -400,9 +377,8 @@ def build_router(store: StateStore) -> Router:
 
         draft_id = parts[3]
         lang = await h._user_lang(store, query.from_user.id)
-        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
-        draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_delete else None
-        if draft is None or permissions is None or not permissions.can_delete:
+        draft, permissions = await draft_svc.resolve_draft_by_id(store, draft_id, query.from_user.id, need="delete")
+        if draft is None:
             await query.answer(tr(lang, "draft_missing"), show_alert=True)
             await _render_drafts(store, query.message, user_id=query.from_user.id, scope=scope, page=page, edit=True)
             return
@@ -464,11 +440,10 @@ def build_router(store: StateStore) -> Router:
 
         action = parts[1]
         draft_id = parts[2]
-        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
         lang = await h._user_lang(store, query.from_user.id)
         if action == "edit":
-            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_edit else None
-            if draft is None or permissions is None or not permissions.can_edit:
+            draft, permissions = await draft_svc.resolve_draft_by_id(store, draft_id, query.from_user.id, need="edit")
+            if draft is None:
                 await query.answer(tr(lang, "draft_missing"), show_alert=True)
                 return
 
@@ -477,8 +452,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         if action == "publish":
-            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
-            if draft is None or permissions is None or not permissions.can_publish:
+            draft, permissions = await draft_svc.resolve_draft_by_id(store, draft_id, query.from_user.id, need="publish")
+            if draft is None:
                 await query.answer(tr(lang, "draft_missing"), show_alert=True)
                 return
 
@@ -486,6 +461,7 @@ def build_router(store: StateStore) -> Router:
             await _start_draft_publish(store, query.message, state, user_id=query.from_user.id, draft=draft)
             return
 
+        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
         allowed = False
         if permissions is not None:
             allowed = action == "delete" and permissions.can_delete

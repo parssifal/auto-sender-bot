@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from core.services import team_svc
 from core.state import StateStore
 from telegram.i18n import tr
 from telegram.handlers import keyboards as kb, helpers as h
@@ -90,26 +91,17 @@ def build_router(store: StateStore) -> Router:
 
         team_ref = parts[1].strip().lower()
         role = parts[2].strip().lower() if len(parts) == 3 and parts[2].strip() else "viewer"
-        if role not in {"viewer", "editor"}:
+
+        prep = await team_svc.prepare_team_invite(
+            store, owner_id=message.from_user.id, team_ref=team_ref, role=role
+        )
+        if prep.status == "role_invalid":
             await message.answer(tr(lang, "team_invite_role_invalid"), reply_markup=await h._main_menu_for(store, message.from_user.id))
             return
-
-        owned_teams = await store.list_owned_teams(message.from_user.id, limit=200)
-        team_id = h._resolve_team_id(owned_teams, team_ref)
-        if team_id is None:
+        if prep.status != "ok":
             await message.answer(tr(lang, "team_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
             return
-
-        try:
-            invite = await store.create_team_invite(team_id, message.from_user.id, role)
-        except ValueError:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
-            return
-
-        team = next((item for item in owned_teams if item.id == team_id), None)
-        if team is None:
-            await message.answer(tr(lang, "team_missing"), reply_markup=await h._main_menu_for(store, message.from_user.id))
-            return
+        invite, team = prep.invite, prep.team
 
         bot_user = await message.bot.me()
         start_payload = f"ti_{invite.token}"

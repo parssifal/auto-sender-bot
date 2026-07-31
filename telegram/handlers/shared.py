@@ -11,6 +11,7 @@ from aiogram.types import (
     Message,
 )
 
+from core.services import broadcast_svc, draft_svc
 from core.state import StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.utils import ParsedScheduleTime, parse_local_datetime
@@ -852,26 +853,19 @@ def build_router(store: StateStore) -> Router:
                     return
 
             if kind == "text":
-                post_ids = await store.create_broadcast_posts(
-                    user_id=user_id,
-                    chat_ids=selected_chat_ids,
-                    scheduled_at_utc=scheduled_at_utc,
-                    kind="text",
-                    text=str(data.get("text") or ""),
-                    entities_json=data.get("entities_json"),
-                )
+                content = broadcast_svc.PostContent(kind="text", text=data.get("text"),
+                                                    entities_json=data.get("entities_json"))
             else:
-                media_items: list[dict[str, str]] = list(data.get("media_items", []))
-                post_ids = await store.create_broadcast_posts(
-                    user_id=user_id,
-                    chat_ids=selected_chat_ids,
-                    scheduled_at_utc=scheduled_at_utc,
-                    kind="media",
-                    caption=data.get("caption"),
+                content = broadcast_svc.PostContent(
+                    kind="media", caption=data.get("caption"),
                     caption_entities_json=data.get("caption_entities_json"),
                     caption_above=bool(data.get("caption_above", False)),
-                    media_items=media_items,
+                    media_items=list(data.get("media_items", [])),
                 )
+            post_ids = await broadcast_svc.create_broadcast(
+                store, user_id=user_id, chat_ids=selected_chat_ids,
+                scheduled_at_utc=scheduled_at_utc, content=content,
+            )
 
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
@@ -946,9 +940,8 @@ def build_router(store: StateStore) -> Router:
                 await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
 
-            permissions = await store.get_draft_permissions(draft_id, user_id)
-            draft = await store.get_draft(draft_id) if permissions is not None and permissions.can_publish else None
-            if draft is None or permissions is None or not permissions.can_publish:
+            draft = await draft_svc.resolve_publishable_draft(store, draft_id, user_id)
+            if draft is None:
                 await state.clear()
                 await query.message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, query.from_user.id))
                 return
@@ -964,25 +957,9 @@ def build_router(store: StateStore) -> Router:
                 await state.clear()
                 return
 
-            if draft.kind == "text":
-                post_id = await store.create_scheduled_text_post(
-                    user_id=user_id,
-                    chat_id=draft.chat_id,
-                    scheduled_at_utc=scheduled_at_utc,
-                    text=str(draft.text or ""),
-                    entities_json=draft.entities_json,
-                )
-            else:
-                media_items = await store.get_draft_media(draft.id)
-                post_id = await store.create_scheduled_media_post(
-                    user_id=user_id,
-                    chat_id=draft.chat_id,
-                    scheduled_at_utc=scheduled_at_utc,
-                    caption=draft.caption,
-                    caption_entities_json=draft.caption_entities_json,
-                    caption_above=None if draft.caption_above is None else bool(draft.caption_above),
-                    media_items=media_items,
-                )
+            post_id = await draft_svc.publish_draft(
+                store, user_id=user_id, draft=draft, scheduled_at_utc=scheduled_at_utc
+            )
 
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)

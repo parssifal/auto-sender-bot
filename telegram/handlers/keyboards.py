@@ -11,6 +11,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
+from core.services._shared import _destination_label, _normalize_selected_chat_ids  # noqa: F401  # re-export for existing callers
 from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, Team
 from core.time_picker import TimePicker
 from telegram.i18n import (
@@ -93,25 +94,6 @@ def _destinations_kb(
         buttons.append(nav)
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def _normalize_selected_chat_ids(raw_value: object) -> list[int]:
-    if not isinstance(raw_value, list):
-        return []
-
-    selected: set[int] = set()
-    for item in raw_value:
-        if isinstance(item, bool):
-            continue
-        if isinstance(item, int):
-            selected.add(item)
-            continue
-        if isinstance(item, str):
-            try:
-                selected.add(int(item))
-            except ValueError:
-                continue
-    return sorted(selected)
 
 
 def _toggle_selected_chat_ids(selected_chat_ids: list[int], chat_id: int, enabled: bool) -> list[int]:
@@ -626,12 +608,6 @@ def _short_id(post_id: str) -> str:
 def _format_local(epoch_utc: int, tz_name: str) -> str:
     dt = datetime.fromtimestamp(epoch_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
     return dt.strftime("%d.%m.%Y %H:%M")
-
-
-def _destination_label(title: str, username: str | None) -> str:
-    if username:
-        return f"{title} (@{username})"
-    return title
 
 
 def _repeat_count_label(pattern: RecurringPattern) -> str:
