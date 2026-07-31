@@ -244,7 +244,18 @@ core/
 
 **Verification:** `pytest -q`; new service unit tests without aiogram (pass a real/fake store); manual broadcast + team-draft publish with RBAC checks.
 
-### Phase 4 — Typed FSM Contexts
+### Phase 4 — Typed FSM Contexts — DONE (2026-07-31)
+
+Implemented: `telegram/handlers/contexts.py` (mixins `PostContent`/`DateTimePick`/`PreviewRef` composed into `Schedule/Repeat/Broadcast/Draft/EditContext`) + read-only typed getters `get_*_ctx` in `helpers.py` that hydrate a dataclass from **only the keys present** in flat FSM storage. Handlers read via the getters; **writes stay flat `update_data(**keys)`** so in-flight sessions survive a mid-flow deploy. Cross-flow dispatch (`shared.py::_get_content_ctx`) returns the flow-correct context. 264 tests green (was 254); new `tests/test_fsm_contexts.py` (dataclasses + present-key hydration incl. a pre-deploy flat-key session). Plan: `docs/superpowers/plans/2026-07-31-phase4-typed-fsm-contexts.md`.
+
+**Spec-vs-reality corrections applied (override the sketch below):**
+- `draft_text`/`draft_entities_json` are **cross-flow** working fields (the shared collect handler touches them for every flow), so they live on `PostContent`, not only `DraftContext`.
+- `text_before_media` is a `bool` (every read is `bool(...)`), not `str | None`.
+- `chat_id` is used by schedule/repeat/draft (not draft-only) → added to `Schedule/RepeatContext`.
+- `edit_draft_id` is a **draft-edit** field (written `drafts.py`, read `_update_draft_from_state`) → added to `DraftContext`; `team_id` is a `str`.
+- `PreviewRef` is composed into every flow context (preview refs written during any previewing flow).
+- The typed layer is **read-only**: symmetric typed writes are a possible follow-up, deliberately out of scope (writes are already flat & backward-compatible). Mismatched write keys surface at read time.
+- **Deliberately NOT migrated (partial migration is deploy-safe by design):** the datetime-picker navigation handlers in `shared.py` (defensive `int(data.get("chat_id") or 0)` reads that forward the raw `data` dict to prompt helpers); `keyboards.py` pure dict helpers (`_selected_date_from_state` etc. — the pure layer takes a plain dict, not `state`); `_clear_live_preview` (`helpers.py` — logic hinges on a `"key" in data` presence check a dataclass cannot express).
 
 Replace untyped `dict[str, Any]` FSM data (~26 keys) with dataclasses. Depends on Phase 1 (needs split modules + `shared.py`); orthogonal to Phase 3.
 
@@ -346,10 +357,12 @@ Pagination (`qpage`/`epage`/`delpage`), `qview:{post_id}` preview, `tests/test_r
 ## Implementation Order & Dependencies
 
 ```
-Phase 0 (done) → Phase 1 → Phase 3
-                        ↘ Phase 4
-Phase 2 (independent, can run in parallel with Phase 1)
+Phase 0 (done) → Phase 1 (done) → Phase 3 (done)
+                               ↘ Phase 4 (done)
+Phase 2 (done, independent)
 ```
+
+All four refactoring phases are implemented and merged/on-branch as of 2026-07-31.
 
 ---
 
