@@ -54,7 +54,14 @@ These resolve gaps between the design spec (`docs/superpowers/specs/2026-04-12-m
 
 **Existing tests as the safety net:** `tests/test_state_broadcast.py`, `test_state_drafts.py`, `test_draft_rbac.py`, and the `test_router_*` flow tests exercise these exact paths end-to-end. Run the full suite after every task; a regression there means the extraction changed behavior.
 
-**Test conventions (verified 2026-07-31):** there is **no shared `store` fixture** in `tests/conftest.py` (it only sets `sys.path`). Each `test_state_*.py` defines its **own** module-level `@pytest_asyncio.fixture async def store()` that builds `StateStore(conn)`, `await state.migrate()`, seeds rows, `yield`s, then `await conn.close()` — and marks async tests with `@pytest.mark.asyncio`. New service test files follow the same pattern (copy the 4-line fixture from `tests/test_state_broadcast.py:15-33`). Seed destinations with `store.upsert_destination(chat_id, "channel", title, username, "administrator", True)`; read broadcast/scheduled posts back with `store.list_pending_posts(user_id, limit=...)` (fields `.chat_id`, `.kind`, `.text`) — the same accessors the existing broadcast tests use. Do **not** assume `add_destination`/`get_scheduled_post`-style helpers unless a grep confirms them.
+**Test conventions (verified 2026-07-31):** there is **no shared `store` fixture** in `tests/conftest.py` (it only sets `sys.path`). Each `test_state_*.py` defines its **own** module-level `@pytest_asyncio.fixture async def store()` that opens the DB with **`from core.db import open_db` → `conn = await open_db(":memory:")`** (this sets `conn.row_factory = aiosqlite.Row` and `PRAGMA foreign_keys=ON` — required, because every DAL method reads rows by name like `row["chat_id"]`; a bare `aiosqlite.connect` raises `TypeError: tuple indices must be integers`), then `StateStore(conn)`, `await state.migrate()`, seeds rows, `yield`s, then `await conn.close()`. Async tests are marked `@pytest.mark.asyncio`. Copy the fixture from `tests/test_state_broadcast.py:14-20`.
+
+**Seeding a usable destination requires TWO calls** (verified `state.py:284-296,461-472`): `count_user_destinations`/`list_user_destinations` read through the `user_destinations` link table, so `upsert_destination(...)` alone is invisible to the acting user. Seed with:
+```python
+await store.upsert_destination(chat_id, "channel", title, username, "administrator", True)
+await store.link_user_destination(user_id, chat_id, "link")   # links it to the user
+```
+Read broadcast/scheduled posts back with `store.list_pending_posts(user_id, limit=...)` (fields `.chat_id`, `.kind`, `.text`). Draft/team seeding: reuse `tests/test_state_drafts.py` (it uses `open_db`, `create_team`, `create_draft`), **not** `tests/test_draft_rbac.py` (that tests the pure `rbac` module with in-memory args — no DB, no store).
 
 ---
 
@@ -131,29 +138,34 @@ git commit -m "chore(services): scaffold core/services package + import-boundary
 
 ```python
 # tests/test_broadcast_svc.py
-import aiosqlite
 import pytest
 import pytest_asyncio
 
+from core.db import open_db
 from core.services import broadcast_svc
 from core.state import StateStore
 
 
 @pytest_asyncio.fixture
 async def store():
-    conn = await aiosqlite.connect(":memory:")   # match tests/test_state_broadcast.py:15-33 exactly
+    conn = await open_db(":memory:")            # sets row_factory=Row + foreign_keys ON
     state = StateStore(conn)
     await state.migrate()
     yield state
     await conn.close()
 
 
+async def _seed_dest(store, user_id, chat_id, title, username):
+    await store.upsert_destination(chat_id, "channel", title, username, "administrator", True)
+    await store.link_user_destination(user_id, chat_id, "link")   # link table = what the DAL reads
+
+
 @pytest.mark.asyncio
 async def test_resolve_valid_destinations_filters_unknown_and_labels(store):
     uid = 42
     await store.ensure_user(uid)
-    await store.upsert_destination(-100, "channel", "Alpha", "alpha", "administrator", True)
-    await store.upsert_destination(-200, "channel", "Beta", None, "administrator", True)
+    await _seed_dest(store, uid, -100, "Alpha", "alpha")
+    await _seed_dest(store, uid, -200, "Beta", None)
 
     resolved = await broadcast_svc.resolve_valid_destinations(store, uid, [-100, -999, -200])
 
@@ -161,7 +173,7 @@ async def test_resolve_valid_destinations_filters_unknown_and_labels(store):
     assert resolved[0][1]  # non-empty human label
 ```
 
-> Copy the fixture + seeding **verbatim** from `tests/test_state_broadcast.py:15-33` (it uses `aiosqlite.connect(":memory:")` and `upsert_destination`). Confirm `upsert_destination` alone makes the destination show up in `list_user_destinations` for `uid`; if the existing broadcast test also calls `link_user_destination`, mirror that.
+> The `_seed_dest` helper (`upsert_destination` + `link_user_destination`) is mandatory — `count_user_destinations`/`list_user_destinations` JOIN `user_destinations`, so an unlinked destination is invisible and the assertion would fail on `[]`. Reuse `_seed_dest` in Task 2's tests too.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -178,7 +190,7 @@ from core.state import StateStore
 from telegram.handlers.keyboards import _normalize_selected_chat_ids, _destination_label
 ```
 
-> **Boundary note (decision 6):** `keyboards.py` is pure (no store, no Telegram I/O) — but it still lives under `telegram/` and the boundary guard test (`test_services_boundary.py`) fails on ANY `telegram.*` import. So these two pure symbols must be treated like the ref-matchers: **move `_normalize_selected_chat_ids` and `_destination_label` into a new `core/services/_shared.py`** (or `core/text.py`) and leave re-exports in `keyboards.py` (`from core.services._shared import ...`), so `keyboards.py`/handlers/tests keep importing them from the old path. Confirm both symbols are only *pure* (grep their bodies — they are, per `keyboards.py:98,631`). Update the boundary test if you'd rather special-case `keyboards` — but moving is cleaner and consistent with the ref-matchers.
+> **Boundary note (decision 6):** `keyboards.py` is pure (no store, no Telegram I/O) — but it still lives under `telegram/` and the boundary guard test (`test_services_boundary.py`) fails on ANY `telegram.*` import. So these two pure symbols must be treated like the ref-matchers: **move `_normalize_selected_chat_ids` and `_destination_label` into `core/services/_shared.py`** (the single home for all relocated pure helpers, see Task 4 Step 3) and leave re-exports in `keyboards.py` (`from core.services._shared import ...`), so `keyboards.py`/handlers/tests keep importing them from the old path. Confirm both symbols are only *pure* (grep their bodies — they are, per `keyboards.py:98,631`). Update the boundary test if you'd rather special-case `keyboards` — but moving is cleaner and consistent with the ref-matchers.
 
 `_list_all_user_destinations` (helpers.py:329) is **trivial** — just `count_user_destinations` + `list_user_destinations(offset=0, limit=total)`, no team-merge. The service owns the same two DAL calls directly:
 
@@ -388,7 +400,7 @@ async def test_publish_draft_text_creates_scheduled_post(store):
     assert post.kind == "text" and post.chat_id == draft.chat_id
 ```
 
-> Lift seeding helpers from `tests/test_draft_rbac.py` (it already builds authors/teams/roles). Do not re-derive RBAC seeding from scratch.
+> Seed from `tests/test_state_drafts.py` (it uses `open_db` + `create_team` + `create_draft` against a real store) — **not** `tests/test_draft_rbac.py`, which tests the pure `rbac` module with in-memory args and has no store/DB. Build a team draft (author + a viewer member) to exercise the permission gate; reuse the same `store`/`open_db` fixture as Task 1.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -501,10 +513,10 @@ Expected: FAIL — function undefined.
 ```python
 # core/services/draft_svc.py — add
 from core.rbac import DraftPermissions
-from telegram.handlers.helpers import _resolve_draft_id   # pure string matcher
+from core.services._shared import _resolve_draft_id   # relocated pure string matcher
 ```
 
-> **Boundary note:** `_resolve_draft_id` is a pure function but lives under `telegram/handlers/` — importing it into a service would violate decision 6 and the boundary guard test. **Resolution:** move `_resolve_draft_id` (and only it) from `helpers.py` into `core/services/draft_svc.py` (or a new `core/services/_refs.py` if `team` needs a sibling), and leave a re-export in `helpers.py` (`from core.services.draft_svc import _resolve_draft_id`) so existing `helpers`/handler callers and `tests/` imports keep working. Do the same for `_resolve_team_id` in Task 5. Verify with `grep -rn "_resolve_draft_id" telegram/ tests/` and update the boundary test expectation (it should still pass — the symbol now originates in `core`).
+> **Boundary note:** `_resolve_draft_id` is pure but lives under `telegram/handlers/` — importing it into a service would trip the boundary guard test. **Resolution:** move the pure ref-matchers `_resolve_draft_id` and `_resolve_team_id` (and, from Task 1, `_normalize_selected_chat_ids` + `_destination_label`) into a single new module **`core/services/_shared.py`**, and leave re-exports at their old homes so existing callers keep working: `helpers.py` re-exports `from core.services._shared import _resolve_draft_id, _resolve_team_id`; `keyboards.py` re-exports `_normalize_selected_chat_ids, _destination_label`. Use `core/services/_shared.py` consistently in Tasks 1, 4, and 5 (do NOT scatter a team helper inside `draft_svc`). Verify no breakage with `grep -rn "_resolve_draft_id\|_resolve_team_id\|_normalize_selected_chat_ids\|_destination_label" telegram/ tests/` — all call sites resolve through the re-exports; the boundary test still passes because the symbols now originate in `core`.
 
 ```python
 _NEED_ATTR = {"view": "can_view", "edit": "can_edit",
@@ -609,7 +621,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.state import StateStore, Team, TeamInvite   # confirm exact type names/exports
-from core.services.draft_svc import _resolve_team_id   # moved here in Step 4 below
+from core.services._shared import _resolve_team_id   # relocated in Task 4 Step 3
 
 
 @dataclass
