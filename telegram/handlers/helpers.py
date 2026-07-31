@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
+from core.services._shared import _resolve_draft_id  # re-export for existing callers
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore, Team
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
@@ -64,21 +65,6 @@ def _is_datetime_entry_state(state_name: str | None) -> bool:
         BroadcastStates.entering_datetime.state,
         EditStates.entering_datetime.state,
     }
-
-
-def _resolve_draft_id(drafts: list[DraftRow], draft_ref: str) -> str | None:
-    ref = draft_ref.strip().lower()
-    if not ref:
-        return None
-
-    for draft in drafts:
-        if draft.id == ref:
-            return draft.id
-
-    matches = [draft.id for draft in drafts if draft.id.startswith(ref)]
-    if len(matches) == 1:
-        return matches[0]
-    return None
 
 
 def _resolve_scheduled_post_id(posts: list[ScheduledPostRow], post_ref: str) -> tuple[str | None, bool]:

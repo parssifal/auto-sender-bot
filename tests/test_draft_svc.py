@@ -124,3 +124,71 @@ async def test_publish_draft_media_creates_scheduled_post(store):
     assert post.kind == "media"
     assert post.chat_id == -1001
     assert post.caption == "Look at this"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("need", ["view", "edit", "delete", "publish"])
+async def test_resolve_draft_by_ref_gates_on_permission(store, need):
+    author_id = 111
+    viewer_id = 222
+    await store.ensure_user(author_id)
+    await store.ensure_user(viewer_id)
+    await _seed_dest(store, -2001, "Beta", "beta")
+
+    team_id = await store.create_team(author_id, "Newsroom")
+    await store.upsert_team_member(team_id, viewer_id, "viewer")
+
+    draft_id = await store.create_draft(
+        team_id=team_id,
+        author_user_id=author_id,
+        chat_id=-2001,
+        kind="text",
+        text="Team draft body",
+        entities_json=None,
+    )
+
+    draft, perms = await draft_svc.resolve_draft_by_ref(store, viewer_id, draft_id, need=need)
+
+    if need == "view":
+        assert draft is not None
+        assert draft.id == draft_id
+        assert perms is not None
+        assert perms.can_view is True
+    else:
+        assert draft is None
+        assert perms is not None
+
+
+@pytest.mark.asyncio
+async def test_resolve_draft_by_ref_unknown_ref_returns_none_none(store):
+    await store.ensure_user(1)
+    draft, perms = await draft_svc.resolve_draft_by_ref(store, 1, "zzzz", need="view")
+    assert draft is None and perms is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_draft_by_id_gates(store):
+    author_id = 333
+    outsider_id = 444
+    await store.ensure_user(author_id)
+    await store.ensure_user(outsider_id)
+    await _seed_dest(store, -3001, "Gamma", "gamma")
+
+    draft_id = await store.create_draft(
+        author_user_id=author_id,
+        chat_id=-3001,
+        kind="text",
+        text="Personal draft",
+        entities_json=None,
+    )
+
+    draft, perms = await draft_svc.resolve_draft_by_id(store, draft_id, author_id, need="publish")
+    assert draft is not None
+    assert draft.id == draft_id
+    assert perms is not None
+    assert perms.can_publish is True
+
+    draft, perms = await draft_svc.resolve_draft_by_id(store, draft_id, outsider_id, need="publish")
+    assert draft is None
+    assert perms is not None
+    assert perms.can_publish is False
