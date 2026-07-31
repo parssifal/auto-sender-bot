@@ -11,6 +11,7 @@ from aiogram.types import (
     Message,
 )
 
+from core.services import broadcast_svc
 from core.state import StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
 from core.utils import ParsedScheduleTime, parse_local_datetime
@@ -852,26 +853,19 @@ def build_router(store: StateStore) -> Router:
                     return
 
             if kind == "text":
-                post_ids = await store.create_broadcast_posts(
-                    user_id=user_id,
-                    chat_ids=selected_chat_ids,
-                    scheduled_at_utc=scheduled_at_utc,
-                    kind="text",
-                    text=str(data.get("text") or ""),
-                    entities_json=data.get("entities_json"),
-                )
+                content = broadcast_svc.PostContent(kind="text", text=data.get("text"),
+                                                    entities_json=data.get("entities_json"))
             else:
-                media_items: list[dict[str, str]] = list(data.get("media_items", []))
-                post_ids = await store.create_broadcast_posts(
-                    user_id=user_id,
-                    chat_ids=selected_chat_ids,
-                    scheduled_at_utc=scheduled_at_utc,
-                    kind="media",
-                    caption=data.get("caption"),
+                content = broadcast_svc.PostContent(
+                    kind="media", caption=data.get("caption"),
                     caption_entities_json=data.get("caption_entities_json"),
                     caption_above=bool(data.get("caption_above", False)),
-                    media_items=media_items,
+                    media_items=list(data.get("media_items", [])),
                 )
+            post_ids = await broadcast_svc.create_broadcast(
+                store, user_id=user_id, chat_ids=selected_chat_ids,
+                scheduled_at_utc=scheduled_at_utc, content=content,
+            )
 
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
