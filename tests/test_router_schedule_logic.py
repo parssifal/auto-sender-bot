@@ -1,14 +1,13 @@
 from datetime import date, datetime, timezone
 
-from telegram.router import (
+from telegram.handlers.helpers import _resolve_caption_above, _schedule_validation_text
+from telegram.handlers.keyboards import (
     _calendar_month_from_state,
     _parse_calendar_date_token,
     _parse_calendar_month_token,
     _parse_time_token,
-    _resolve_caption_above,
     _schedule_calendar_kb,
     _schedule_time_kb,
-    _schedule_validation_text,
 )
 
 

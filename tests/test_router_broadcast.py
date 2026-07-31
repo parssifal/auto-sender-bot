@@ -16,7 +16,8 @@ from aiogram.types import Update
 from core.db import open_db
 from core.state import StateStore
 from telegram.i18n import tr
-from telegram.router import BroadcastStates, build_router
+from telegram.handlers.states import BroadcastStates
+from telegram.router import build_router
 
 USER_ID = 1001
 PRIVATE_CHAT_ID = USER_ID

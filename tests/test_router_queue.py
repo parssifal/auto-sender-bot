@@ -7,7 +7,7 @@ import pytest_asyncio
 
 from core.db import open_db
 from core.state import StateStore
-from telegram.router import _queue_paged_kb, _edit_paged_kb, _delete_paged_kb
+from telegram.handlers.keyboards import _queue_paged_kb, _edit_paged_kb, _delete_paged_kb
 
 USER_ID = 1001
 CHAT_ID = -2001
