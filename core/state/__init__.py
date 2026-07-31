@@ -26,6 +26,7 @@ import time
 
 from core.state._legacy import _LegacyMixin
 from core.state.base import StateStoreBase
+from core.state.destinations import DestinationsMixin
 from core.state.models import (
     Destination,
     DraftRow,
@@ -57,5 +58,5 @@ __all__ = [
 ]
 
 
-class StateStore(StateStoreBase, UsersMixin, _LegacyMixin, RowMappersMixin):
+class StateStore(StateStoreBase, UsersMixin, DestinationsMixin, _LegacyMixin, RowMappersMixin):
     pass
