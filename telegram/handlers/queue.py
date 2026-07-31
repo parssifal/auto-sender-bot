@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
 
 from core.state import ScheduledPostRow, StateStore
@@ -115,7 +116,22 @@ async def _render_delete_posts(store: StateStore, message: Message, *, user_id: 
         await message.answer(text, reply_markup=reply_markup)
 
 
-async def _render_queue_page(store: StateStore, message: Message, page: int, user_id: int, *, edit: bool = False) -> None:
+def _app_button(lang: str, webapp_url: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=tr(lang, "app_open_btn"),
+        web_app=WebAppInfo(url=f"{webapp_url.rstrip('/')}/app"),
+    )
+
+
+async def _render_queue_page(
+    store: StateStore,
+    message: Message,
+    page: int,
+    user_id: int,
+    *,
+    edit: bool = False,
+    webapp_url: str | None = None,
+) -> None:
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
@@ -131,10 +147,18 @@ async def _render_queue_page(store: StateStore, message: Message, page: int, use
 
     if not posts:
         text = tr(lang, "queue_empty")
+        app_kb = (
+            InlineKeyboardMarkup(inline_keyboard=[[_app_button(lang, webapp_url)]])
+            if webapp_url
+            else None
+        )
         if edit:
-            await message.edit_text(text, reply_markup=None)
+            await message.edit_text(text, reply_markup=app_kb)
         else:
-            await message.answer(text, reply_markup=await h._main_menu_for(store, user_id))
+            await message.answer(
+                text,
+                reply_markup=app_kb if app_kb is not None else await h._main_menu_for(store, user_id),
+            )
         return
 
     lines: list[str] = []
@@ -153,6 +177,8 @@ async def _render_queue_page(store: StateStore, message: Message, page: int, use
 
     text = tr(lang, "queue_header", lines="\n".join(lines))
     reply_markup = kb._queue_paged_kb(buttons, page=page, has_more=has_more, lang=lang)
+    if webapp_url:
+        reply_markup.inline_keyboard.append([_app_button(lang, webapp_url)])
     if edit:
         await message.edit_text(text, reply_markup=reply_markup)
     else:
@@ -392,7 +418,7 @@ async def _save_scheduled_post_text(
     return True
 
 
-def build_router(store: StateStore) -> Router:
+def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     router = Router(name="queue")
 
     @router.message(Command("edit"))
@@ -554,13 +580,13 @@ def build_router(store: StateStore) -> Router:
     @router.message(Command("queue"))
     async def cmd_queue(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        await _render_queue_page(store, message, page=0, user_id=message.from_user.id)
+        await _render_queue_page(store, message, page=0, user_id=message.from_user.id, webapp_url=webapp_url)
 
     @router.callback_query(F.data.startswith("qpage:"))
     async def cb_queue_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
         await query.answer()
-        await _render_queue_page(store, query.message, page=page, user_id=query.from_user.id, edit=True)
+        await _render_queue_page(store, query.message, page=page, user_id=query.from_user.id, edit=True, webapp_url=webapp_url)
 
     @router.callback_query(F.data.startswith("qview:"))
     async def cb_queue_view(query: CallbackQuery, state: FSMContext) -> None:
