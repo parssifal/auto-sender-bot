@@ -24,7 +24,7 @@ def build_router(store: StateStore) -> Router:
 
         await state.clear()
         await state.set_state(states.BroadcastStates.choosing_destinations)
-        await state.update_data(selected_chat_ids=[], dest_page=0)
+        await h.patch_broadcast_ctx(state, selected_chat_ids=[], dest_page=0)
         await h._render_broadcast_destinations(store, message, state, user_id=message.from_user.id, page=0, edit=False)
 
     @router.callback_query(F.data.startswith("bcpage:"))
@@ -80,7 +80,7 @@ def build_router(store: StateStore) -> Router:
         selected_chat_ids = kb._normalize_selected_chat_ids(ctx.selected_chat_ids)
         next_selected_chat_ids = kb._toggle_selected_chat_ids(selected_chat_ids, chat_id, enabled_token == "on")
         page = int(ctx.dest_page or 0)
-        await state.update_data(selected_chat_ids=next_selected_chat_ids)
+        await h.patch_broadcast_ctx(state, selected_chat_ids=next_selected_chat_ids)
         await query.answer()
         await h._render_broadcast_destinations(
             store,
@@ -109,12 +109,13 @@ def build_router(store: StateStore) -> Router:
         selected_chat_ids = kb._normalize_selected_chat_ids(ctx.selected_chat_ids)
         valid_chat_ids = {destination.chat_id for destination in await h._list_all_user_destinations(store, query.from_user.id)}
         selected_chat_ids = [chat_id for chat_id in selected_chat_ids if chat_id in valid_chat_ids]
-        await state.update_data(selected_chat_ids=selected_chat_ids)
+        await h.patch_broadcast_ctx(state, selected_chat_ids=selected_chat_ids)
         if not selected_chat_ids:
             await query.answer(tr(lang, "broadcast_choose_one"), show_alert=True)
             return
 
-        await state.update_data(
+        await h.patch_broadcast_ctx(
+            state,
             selected_date=None,
             calendar_year=None,
             calendar_month=None,

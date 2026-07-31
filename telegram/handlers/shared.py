@@ -59,6 +59,9 @@ from telegram.handlers.helpers import (
     get_repeat_ctx,
     get_schedule_ctx,
     menu_button_texts,
+    patch_broadcast_ctx,
+    patch_content_ctx,
+    patch_schedule_ctx,
 )
 from telegram.handlers.teams import _handle_team_invite_start
 
@@ -172,7 +175,7 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             return
 
-        await state.update_data(calendar_year=year, calendar_month=month)
+        await patch_content_ctx(state, current_state, calendar_year=year, calendar_month=month)
         data = await state.get_data()
         text = await _datetime_entry_prompt_text(store, state, lang, current_state)
         await query.answer()
@@ -207,7 +210,9 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             return
 
-        await state.update_data(
+        await patch_content_ctx(
+            state,
+            current_state,
             selected_date=selected_date.isoformat(),
             calendar_year=selected_date.year,
             calendar_month=selected_date.month,
@@ -328,7 +333,7 @@ def build_router(store: StateStore) -> Router:
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is not None:
-            await state.update_data(calendar_year=selected_date.year, calendar_month=selected_date.month)
+            await patch_content_ctx(state, current_state, calendar_year=selected_date.year, calendar_month=selected_date.month)
         if current_state == RepeatStates.selecting_time.state:
             previous_state = RepeatStates.entering_datetime
         elif current_state == DraftStates.selecting_time.state:
@@ -584,7 +589,9 @@ def build_router(store: StateStore) -> Router:
                 text_after_media=text_after_media,
                 explicit_above=None,
             )
-            await state.update_data(
+            await patch_content_ctx(
+                state,
+                current_state,
                 draft_text=draft_text,
                 draft_entities_json=draft_entities_json,
                 caption_above=caption_above,
@@ -632,7 +639,9 @@ def build_router(store: StateStore) -> Router:
                 explicit_above=explicit_above,
             )
 
-        await state.update_data(
+        await patch_content_ctx(
+            state,
+            current_state,
             media_items=media,
             draft_text=draft_text,
             draft_entities_json=draft_entities_json,
@@ -669,7 +678,9 @@ def build_router(store: StateStore) -> Router:
             collecting_state = DraftStates.collecting_post
         else:
             collecting_state = ScheduleStates.collecting_post
-        await state.update_data(
+        await patch_content_ctx(
+            state,
+            current_state,
             media_items=[],
             text=None,
             entities_json=None,
@@ -709,7 +720,9 @@ def build_router(store: StateStore) -> Router:
             if not media:
                 await query.message.answer(tr(lang, "media_need_at_least_one"), reply_markup=_media_collect_kb(lang))
                 return
-            await state.update_data(
+            await patch_content_ctx(
+                state,
+                current_state,
                 kind="media",
                 caption=draft_text if draft_text_valid else None,
                 caption_entities_json=ctx.draft_entities_json if draft_text_valid else None,
@@ -721,7 +734,9 @@ def build_router(store: StateStore) -> Router:
             return
 
         if media:
-            await state.update_data(
+            await patch_content_ctx(
+                state,
+                current_state,
                 kind="media",
                 caption=draft_text if draft_text_valid else None,
                 caption_entities_json=ctx.draft_entities_json if draft_text_valid else None,
@@ -741,7 +756,9 @@ def build_router(store: StateStore) -> Router:
             return
 
         if draft_text_valid:
-            await state.update_data(
+            await patch_content_ctx(
+                state,
+                current_state,
                 kind="text",
                 text=draft_text,
                 entities_json=ctx.draft_entities_json,
@@ -804,11 +821,11 @@ def build_router(store: StateStore) -> Router:
                 _normalize_selected_chat_ids(ctx.selected_chat_ids),
             )
             if not selected_chat_ids:
-                await state.update_data(selected_chat_ids=[], dest_page=0)
+                await patch_broadcast_ctx(state, selected_chat_ids=[], dest_page=0)
                 await state.set_state(BroadcastStates.choosing_destinations)
                 await _render_broadcast_destinations(store, message, state, user_id=user_id, page=0, edit=False)
                 return
-            await state.update_data(selected_chat_ids=selected_chat_ids)
+            await patch_broadcast_ctx(state, selected_chat_ids=selected_chat_ids)
             await state.set_state(BroadcastStates.confirming)
             text = tr(
                 lang,
@@ -854,13 +871,13 @@ def build_router(store: StateStore) -> Router:
                 _normalize_selected_chat_ids(ctx.selected_chat_ids),
             )
             if not resolved_destinations:
-                await state.update_data(selected_chat_ids=[], dest_page=0)
+                await patch_broadcast_ctx(state, selected_chat_ids=[], dest_page=0)
                 await state.set_state(BroadcastStates.choosing_destinations)
                 await _render_broadcast_destinations(store, query.message, state, user_id=user_id, page=0, edit=False)
                 return
 
             selected_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
-            await state.update_data(selected_chat_ids=selected_chat_ids)
+            await patch_broadcast_ctx(state, selected_chat_ids=selected_chat_ids)
             for chat_id, _ in resolved_destinations:
                 ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
                 if not ok:
@@ -1029,7 +1046,7 @@ def build_router(store: StateStore) -> Router:
 
         await state.clear()
         await state.set_state(ScheduleStates.entering_datetime)
-        await state.update_data(chat_id=chat_id, selected_date=None, calendar_year=None, calendar_month=None)
+        await patch_schedule_ctx(state, chat_id=chat_id, selected_date=None, calendar_year=None, calendar_month=None)
         local_time = _format_local(scheduled_at_utc, tz_name)
         title = await store.get_destination_title(chat_id) or str(chat_id)
         await query.message.answer(

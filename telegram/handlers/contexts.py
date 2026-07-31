@@ -86,6 +86,7 @@ class DraftContext(PostContent, DateTimePick, PreviewRef):
     team_id: str | None = None          # team ids are short string ids
     draft_publish_id: str | None = None
     edit_draft_id: str | None = None    # set while editing a draft (DraftStates.editing_post)
+    dest_page: int = 0                  # destination-picker page during draft creation
 
 
 @dataclass
@@ -93,6 +94,7 @@ class EditContext(PostContent, DateTimePick, PreviewRef):
     edit_post_id: str | None = None
     edit_draft_id: str | None = None
     edit_preserve_caption_above: bool = False
+    chat_id: int | None = None          # destination of the post being edited
 
 
 def field_names(cls: type) -> frozenset[str]:

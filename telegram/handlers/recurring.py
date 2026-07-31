@@ -133,7 +133,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         page = int(query.data.split(":")[1])
-        await state.update_data(dest_page=page)
+        await h.patch_repeat_ctx(state, dest_page=page)
         await query.answer()
         await h._render_destinations(
             store,
@@ -166,7 +166,8 @@ def build_router(store: StateStore) -> Router:
             await query.answer(tr(lang, "repeat_interval_invalid"), show_alert=True)
             return
 
-        await state.update_data(
+        await h.patch_repeat_ctx(
+            state,
             interval_type=interval_type,
             selected_date=None,
             calendar_year=None,
@@ -199,7 +200,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         chat_id = int(query.data.split(":")[1])
-        await state.update_data(chat_id=chat_id)
+        await h.patch_repeat_ctx(state, chat_id=chat_id)
         await query.answer()
         await h._move_to_post_collection(
             query.message,
