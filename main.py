@@ -16,6 +16,7 @@ from core.state import StateStore
 from core.webapp import start_webapp_server
 from telegram.admin import build_admin_router
 from telegram.router import build_router
+from telegram.user_app import build_user_app_router
 
 
 async def amain() -> None:
@@ -31,10 +32,11 @@ async def amain() -> None:
 
     storage = build_fsm_storage(cfg)
     dp = Dispatcher(storage=storage, events_isolation=build_fsm_event_isolation(storage))
-    dp.include_router(build_router(store=store))
+    dp.include_router(build_router(store=store, webapp_url=cfg.webapp_url))
     dp.include_router(
         build_admin_router(store=store, admin_ids=cfg.admin_ids, webapp_url=cfg.webapp_url)
     )
+    dp.include_router(build_user_app_router(store=store, webapp_url=cfg.webapp_url))
 
     session = AiohttpSession(timeout=cfg.telegram_http_timeout_seconds)
     bot = Bot(token=cfg.bot_token, session=session)
