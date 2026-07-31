@@ -1,7 +1,8 @@
 # Design: Tech-Debt Cleanup (Post-Refactor)
 
 **Date:** 2026-07-31
-**Status:** Draft — a menu of independent items, each with its own recommendation.
+**Status:** ✅ RESOLVED (2026-07-31). Owner chose to implement **4a, 4b, 4c** despite their defer recommendations below; **4d** recorded in Obsidian instead of archiving the (gitignored) `TODO.md`; **4e** was already in sync. All merged to local `main` (`f6b9358` + `c9dac73`), 300 tests green, not pushed to origin. See Work Log 2026-07-31 "Тех-долг (roadmap item 4)". Recommendation text below is kept for historical context.
+**Original status:** Draft — a menu of independent items, each with its own recommendation.
 **Scope:** Maintenance/hardening — no new user-facing features.
 **Scale:** 1–10 users.
 **Roadmap:** Item 4 of `docs/superpowers/2026-07-31-roadmap-post-refactor.md`. Each sub-item can be its own small plan (or skipped). Plans in later sessions.
