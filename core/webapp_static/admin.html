@@ -40,6 +40,7 @@
   }
   .topbar h1{font-size:20px; font-weight:800; margin:0; letter-spacing:-.01em}
   .topbar .live{font-size:11px; font-weight:700; color:var(--hint); letter-spacing:.06em; text-transform:uppercase}
+  .topbar-actions{display:flex; align-items:center; gap:8px}
   .ghost-btn{
     appearance:none; border:0; background:transparent; color:var(--accent);
     font-size:20px; width:38px; height:38px; border-radius:12px; cursor:pointer;
@@ -174,7 +175,10 @@
 <div id="app">
   <div class="topbar">
     <h1>Панель бота</h1>
-    <button id="refresh" class="ghost-btn" title="Обновить" aria-label="Обновить данные">↻</button>
+    <div class="topbar-actions">
+      <span class="live" id="lastUpdated" aria-live="polite"></span>
+      <button id="refresh" class="ghost-btn" title="Обновить" aria-label="Обновить данные">↻</button>
+    </div>
   </div>
 
   <div class="banner" id="banner"></div>
@@ -270,6 +274,10 @@
   var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   var initData = tg && tg.initData ? tg.initData : "";
   var lastStats = null;
+  var REFRESH_MS = 45000;       // авто-обновление статистики каждые 45 с
+  var refreshTimer = null;      // id setInterval опроса
+  var inFlight = false;         // защита от наложения запросов
+  var lastUpdatedAt = null;     // время последнего успешного обновления (ms)
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var nf = new Intl.NumberFormat("ru-RU");
   var PALETTE = ["--c1","--c2","--c3","--c4","--c5"];
@@ -581,18 +589,38 @@
     ];
   }
 
-  function load(){
-    if(!initData){ render(demo()); renderUsers(demoUsers()); return; }
-    api("/api/stats").then(render).catch(function(){
+  function markUpdated(){ lastUpdatedAt = Date.now(); renderLastUpdated(); }
+
+  function renderLastUpdated(){
+    var el = $("lastUpdated");
+    if(!el || !lastUpdatedAt){ return; }
+    var secs = Math.round((Date.now() - lastUpdatedAt) / 1000);
+    var label;
+    if(secs < 10){ label = "обновлено только что"; }
+    else if(secs < 60){ label = "обновлено " + secs + " с назад"; }
+    else { label = "обновлено " + Math.round(secs / 60) + " мин назад"; }
+    el.textContent = label;
+    var t = new Date(lastUpdatedAt);
+    el.title = "Обновлено в " + t.toLocaleTimeString("ru-RU");
+  }
+
+  // Fetch + render. Оба вызова (кнопка ↻ и таймер) идут сюда.
+  // inFlight пропускает тик, если предыдущий запрос ещё не завершился.
+  function refreshStats(){
+    if(!initData){ render(demo()); renderUsers(demoUsers()); markUpdated(); return; }
+    if(inFlight){ return; }
+    inFlight = true;
+    var done = function(){ inFlight = false; };
+    api("/api/stats").then(function(d){ render(d); markUpdated(); }).catch(function(){
       banner("Нет доступа. Проверьте, что вы в списке администраторов.");
-    });
+    }).then(done, done);
     api("/api/users").then(function(d){ renderUsers(d.users); }).catch(function(){});
   }
 
   // ---- Wire up ----
   applyTheme();
-  if(tg){ tg.ready(); tg.expand(); tg.onEvent("themeChanged", function(){ applyTheme(); load(); }); }
-  $("refresh").addEventListener("click", load);
+  if(tg){ tg.ready(); tg.expand(); tg.onEvent("themeChanged", function(){ applyTheme(); refreshStats(); }); }
+  $("refresh").addEventListener("click", refreshStats);
   $("findBtn").addEventListener("click", findUser);
   $("findInput").addEventListener("keydown", function(e){ if(e.key==="Enter") findUser(); });
   $("broadcastText").addEventListener("input", updateBroadcastCounter);
@@ -600,7 +628,19 @@
   $("broadcastConfirm").addEventListener("click", sendBroadcast);
   $("broadcastCancel").addEventListener("click", closeBroadcastModal);
   $("broadcastModal").addEventListener("click", function(e){ if(e.target===$("broadcastModal")) closeBroadcastModal(); });
-  load();
+
+  // Авто-обновление: опрос по таймеру, но только когда вкладка видна
+  // (скрытая вкладка сеть не трогает). Возврат на вкладку → мгновенное обновление.
+  refreshTimer = setInterval(function(){
+    if(document.visibilityState === "visible"){ refreshStats(); }
+  }, REFRESH_MS);
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "visible"){ refreshStats(); }
+  });
+  // Держим относительную метку («N мин назад») свежей без сетевых запросов.
+  setInterval(renderLastUpdated, 15000);
+
+  refreshStats();
 })();
 </script>
 </body>

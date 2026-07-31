@@ -1,7 +1,7 @@
 # Design: Admin Dashboard Auto-Refresh
 
 **Date:** 2026-07-31
-**Status:** Draft — ready for planning
+**Status:** Implemented 2026-07-31 (frontend-only; interval 45s; stats-only, detail stays manual)
 **Scope:** Small frontend-only enhancement — the admin Mini App refreshes stats automatically instead of only via the manual "↻" button.
 **Scale:** 1–10 users.
 **Roadmap:** Item 3 of `docs/superpowers/2026-07-31-roadmap-post-refactor.md`. Plan in a later session.
