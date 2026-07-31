@@ -138,3 +138,58 @@ async def test_api_users_returns_list_for_admin(server, store) -> None:
             assert "users" in body
             ids = [u["user_id"] for u in body["users"]]
             assert ADMIN_ID in ids
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.sent.append((chat_id, text))
+
+
+@pytest_asyncio.fixture
+async def bcast_server(store: StateStore):
+    bot = _FakeBot()
+    await store.ensure_user(101)
+    await store.ensure_user(102)
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store,
+        bot_token=TOKEN, admin_ids=(ADMIN_ID,), bot=bot,
+    )
+    srv._fake_bot = bot
+    yield srv
+    await srv.close()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_forbidden_without_admin(bcast_server):
+    url = f"http://{bcast_server.host}:{bcast_server.port}/api/broadcast"
+    async with ClientSession() as s:
+        async with s.post(url, json={"text": "hi"},
+                          headers={"Authorization": _init_data(NON_ADMIN_ID)}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_broadcast_rejects_empty_text(bcast_server):
+    url = f"http://{bcast_server.host}:{bcast_server.port}/api/broadcast"
+    async with ClientSession() as s:
+        async with s.post(url, json={"text": "   "},
+                          headers={"Authorization": _init_data(ADMIN_ID)}) as r:
+            assert r.status == 400
+
+
+@pytest.mark.asyncio
+async def test_broadcast_happy_path_returns_summary(bcast_server):
+    url = f"http://{bcast_server.host}:{bcast_server.port}/api/broadcast"
+    async with ClientSession() as s:
+        async with s.post(url, json={"text": "hello all"},
+                          headers={"Authorization": _init_data(ADMIN_ID)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    # store fixture seeds ADMIN_ID (42) + this fixture adds 101,102 => total 3
+    assert body["total"] == 3
+    assert body["delivered"] == 3
+    assert body["blocked"] == 0
+    assert body["failed"] == 0

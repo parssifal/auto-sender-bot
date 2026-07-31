@@ -60,6 +60,7 @@ async def amain() -> None:
                 store=store,
                 bot_token=cfg.bot_token,
                 admin_ids=cfg.admin_ids,
+                bot=bot,
             )
         await dp.start_polling(bot, polling_timeout=cfg.telegram_polling_timeout_seconds)
     finally:
