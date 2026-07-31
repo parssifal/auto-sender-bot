@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
-from core.services._shared import _resolve_draft_id, _resolve_team_id  # re-export for existing callers
+from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F401  # re-export for existing callers
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr

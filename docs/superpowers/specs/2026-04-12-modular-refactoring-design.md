@@ -203,7 +203,14 @@ Tables present + empty `schema_migrations` ⇒ deployed pre-migration DB ⇒ rec
 
 **Risk/mitigation:** naive `split(";")` breaks on triggers/CTEs containing semicolons, and does not strip SQL comments. Our migrations are simple CREATE TABLE/INDEX only — keep `.sql` files free of inline `--` / `/* */` comments that contain semicolons; if complex DDL is ever needed, switch that file to an explicit statement list.
 
-### Phase 3 — Service Layer (light, orchestration-only)
+### Phase 3 — Service Layer (light, orchestration-only) — DONE (2026-07-31)
+
+Implemented: `core/services/{broadcast_svc,draft_svc,team_svc}.py` (+ `_shared.py` for relocated pure helpers `_normalize_selected_chat_ids`, `_destination_label`, `_resolve_draft_id`, `_resolve_team_id`, each re-exported from its old `telegram/handlers/*` home so callers/tests are unaffected). Services take `store` first and import ONLY `core.*` — enforced by `tests/test_services_boundary.py` (AST guard). Extracted:
+- `broadcast_svc.resolve_valid_destinations` + `create_broadcast(PostContent)` — the broadcast branch of `shared.py::cb_confirm_yes`.
+- `draft_svc.resolve_publishable_draft` + `publish_draft` (draft-publish branch), plus `resolve_draft_by_ref` / `resolve_draft_by_id` that DRY the 7 repeated permission gates in `drafts.py`.
+- `team_svc.prepare_team_invite` (invite preparation) — `cmd_team_invite`.
+
+**Key spec-vs-reality decisions (see plan):** the real publish orchestration lived in the cross-flow `cb_confirm_yes`, entangled with Telegram I/O — so the **admin checks (`_check_user_admin`/`_check_bot_admin_and_post`) stay in the handler** and services expose separate *resolve* and *create* steps. The invite-**accept** path (`accept_team_invite`) was NOT wrapped: it is an already-transactional DAL call whose only remaining handler work is i18n-key selection (same A1 rationale as stats aggregates). `create_broadcast_posts`, `accept_team_invite`, all stats aggregates, and `rbac.py` are unchanged. Tests: **254 passing** (was 233); new `tests/test_{broadcast,draft,team}_svc.py` run without aiogram. Plan: `docs/superpowers/plans/2026-07-31-phase3-service-layer.md`.
 
 A service here is pure business orchestration: no Telegram I/O, no raw SQL. It reads via the DAL, makes decisions, returns a result — extracted from handlers so it is unit-testable without aiogram mocks. Depends on Phase 1 (services are lifted out of the already-split feature modules).
 

@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 
 from core.rbac import DraftPermissions
-from core.services._shared import _destination_label, _normalize_selected_chat_ids
+from core.services._shared import _destination_label, _normalize_selected_chat_ids  # noqa: F401  # re-export for existing callers
 from core.state import Destination, DraftRow, RecurringPattern, RecurringPatternSummary, Team
 from core.time_picker import TimePicker
 from telegram.i18n import (
