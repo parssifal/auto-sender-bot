@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Мои посты</title>
+<style>
+  :root{
+    --bg:#ffffff; --group-bg:#eef0f3; --card:#ffffff; --text:#0b0b0f;
+    --hint:#8a8f98; --accent:#3390ec; --separator:rgba(0,0,0,.07);
+    --danger:#f2557a; --ok:#2fb6a8;
+    --radius:18px; --gap:12px; --pad:16px;
+    --num:"ui-rounded","SF Pro Rounded",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17212b; --group-bg:#0e1621; --card:#232e3c; --text:#f4f6f8;
+      --hint:#8596a8; --accent:#64a9ee; --separator:rgba(255,255,255,.08);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--group-bg); color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
+    padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom));
+  }
+  #app{max-width:560px; margin:0 auto; padding:0 var(--pad)}
+  .topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 14px}
+  .topbar h1{font-size:20px; font-weight:800; margin:0; letter-spacing:-.01em}
+  .topbar .live{font-size:11px; font-weight:700; color:var(--hint); letter-spacing:.06em; text-transform:uppercase}
+  .eyebrow{font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--hint); margin:0 2px 8px}
+  section{margin-bottom:22px}
+  .card{background:var(--card); border-radius:var(--radius); padding:var(--pad); margin-bottom:var(--gap)}
+  .row{display:flex; align-items:baseline; justify-content:space-between; gap:10px}
+  .row b{font-size:15px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .row .when{font-family:var(--num); font-size:13px; color:var(--accent); font-weight:700; flex:none}
+  .meta{font-size:13px; color:var(--hint); margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .actions{display:flex; gap:8px; margin-top:14px}
+  button.act{
+    appearance:none; border:0; border-radius:12px; padding:9px 14px; font-size:14px;
+    font-weight:600; cursor:pointer; background:var(--separator); color:var(--text);
+  }
+  button.act:active{opacity:.7}
+  button.act.danger{color:#fff; background:var(--danger)}
+  button.act.primary{color:#fff; background:var(--accent)}
+  .empty{color:var(--hint); font-size:14px; text-align:center; padding:22px 0}
+  .banner{background:var(--card); border-radius:var(--radius); padding:12px var(--pad); font-size:13px; color:var(--hint); margin-bottom:var(--gap)}
+
+  /* Reschedule modal */
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:24px; z-index:10}
+  .overlay.open{display:flex}
+  .modal{background:var(--card); border-radius:var(--radius); padding:20px; width:100%; max-width:360px}
+  .modal h3{margin:0 0 14px; font-size:17px}
+  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:14px}
+  .field label{font-size:12px; color:var(--hint); font-weight:600}
+  .field input{
+    appearance:none; border:1px solid var(--separator); background:var(--group-bg); color:var(--text);
+    border-radius:12px; padding:11px 12px; font-size:15px; font-family:var(--num);
+  }
+  .modal .actions{justify-content:flex-end}
+  .err{color:var(--danger); font-size:13px; min-height:18px; margin-bottom:8px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <h1 id="t-title">Мои посты</h1>
+    <span class="live" id="t-demo" hidden>demo</span>
+  </div>
+
+  <div class="banner" id="tz-banner" hidden></div>
+
+  <section>
+    <p class="eyebrow" id="t-queue">Запланированные</p>
+    <div id="queue-list"></div>
+  </section>
+
+  <section>
+    <p class="eyebrow" id="t-recurring">Повторяющиеся</p>
+    <div id="recurring-list"></div>
+  </section>
+</div>
+
+<div class="overlay" id="modal">
+  <div class="modal">
+    <h3 id="m-title">Перенести пост</h3>
+    <div class="err" id="m-err"></div>
+    <div class="field">
+      <label id="m-date-l">Дата</label>
+      <input type="date" id="m-date">
+    </div>
+    <div class="field">
+      <label id="m-time-l">Время</label>
+      <input type="time" id="m-time">
+    </div>
+    <div class="actions">
+      <button class="act" id="m-cancel">Отмена</button>
+      <button class="act primary" id="m-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+const initData = tg?.initData || "";
+tg?.ready?.();
+tg?.expand?.();
+const AUTH = { "Authorization": "tma " + initData };
+let TZ = "UTC", LANG = "ru";
+let rescheduleId = null;
+
+const I18N = {
+  ru: {
+    title:"Мои посты", queue:"Запланированные", recurring:"Повторяющиеся",
+    empty_q:"Нет запланированных постов", empty_r:"Нет повторяющихся",
+    resched:"Перенести", cancel:"Отменить", cancel_series:"Отменить серию",
+    kind_text:"Текст", kind_media:n=>`Медиа × ${n}`, next:"Следующий",
+    m_title:"Перенести пост", m_date:"Дата", m_time:"Время", m_cancel:"Отмена", m_save:"Сохранить",
+    confirm_cancel:"Отменить этот пост?", confirm_series:"Отменить всю серию?",
+    tz_note:tz=>`Время указано в вашем часовом поясе: ${tz}`,
+    err:e=>"Ошибка: "+e, need_both:"Укажите дату и время",
+  },
+  en: {
+    title:"My posts", queue:"Scheduled", recurring:"Recurring",
+    empty_q:"No scheduled posts", empty_r:"No recurring patterns",
+    resched:"Reschedule", cancel:"Cancel", cancel_series:"Cancel series",
+    kind_text:"Text", kind_media:n=>`Media × ${n}`, next:"Next",
+    m_title:"Reschedule post", m_date:"Date", m_time:"Time", m_cancel:"Cancel", m_save:"Save",
+    confirm_cancel:"Cancel this post?", confirm_series:"Cancel the whole series?",
+    tz_note:tz=>`Times shown in your timezone: ${tz}`,
+    err:e=>"Error: "+e, need_both:"Pick a date and time",
+  },
+};
+const INTERVAL = {
+  ru:{ daily:"Ежедневно", weekly:"Еженедельно", weekdays:"По будням" },
+  en:{ daily:"Daily", weekly:"Weekly", weekdays:"Weekdays" },
+};
+const t = k => (I18N[LANG] || I18N.en)[k];
+const intervalLabel = it => (INTERVAL[LANG] || INTERVAL.en)[it] || it;
+
+function pad(n){return String(n).padStart(2,"0");}
+function fmtLocal(epoch){
+  if(!epoch) return "—";
+  return new Intl.DateTimeFormat(LANG==="ru"?"ru-RU":"en-GB",{
+    timeZone:TZ, day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit",
+  }).format(new Date(epoch*1000));
+}
+function composeLocal(dateStr,timeStr){ const [y,m,d]=dateStr.split("-"); return `${d}.${m}.${y} ${timeStr}`; }
+function escapeHtml(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+async function api(path,opts){
+  const r = await fetch(path,{ headers:{...AUTH,...(opts?.headers||{})}, ...opts });
+  if(!r.ok){
+    let msg = r.status;
+    try{ const j = await r.json(); msg = j.error || msg; }catch{}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+function applyStaticLabels(){
+  document.getElementById("t-title").textContent = t("title");
+  document.getElementById("t-queue").textContent = t("queue");
+  document.getElementById("t-recurring").textContent = t("recurring");
+  document.getElementById("m-title").textContent = t("m_title");
+  document.getElementById("m-date-l").textContent = t("m_date");
+  document.getElementById("m-time-l").textContent = t("m_time");
+  document.getElementById("m-cancel").textContent = t("m_cancel");
+  document.getElementById("m-save").textContent = t("m_save");
+  const b = document.getElementById("tz-banner");
+  b.textContent = t("tz_note")(TZ); b.hidden = false;
+}
+
+function renderQueue(posts){
+  const el = document.getElementById("queue-list");
+  if(!posts.length){ el.innerHTML = `<div class="card"><div class="empty">${t("empty_q")}</div></div>`; return; }
+  el.innerHTML = "";
+  for(const p of posts){
+    const kind = p.kind==="text" ? t("kind_text") : t("kind_media")(p.media_count);
+    const card = document.createElement("div"); card.className="card";
+    card.innerHTML = `
+      <div class="row"><b>${escapeHtml(p.destination_title)}</b><span class="when">${fmtLocal(p.scheduled_at_utc)}</span></div>
+      <div class="meta">${kind}${p.preview?" · "+escapeHtml(p.preview):""}</div>
+      <div class="actions">
+        <button class="act primary" data-act="resched" data-id="${p.id}">${t("resched")}</button>
+        <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
+      </div>`;
+    el.appendChild(card);
+  }
+}
+
+function renderRecurring(patterns){
+  const el = document.getElementById("recurring-list");
+  if(!patterns.length){ el.innerHTML = `<div class="card"><div class="empty">${t("empty_r")}</div></div>`; return; }
+  el.innerHTML = "";
+  for(const p of patterns){
+    const tod = pad(Math.floor(p.time_of_day_minutes/60))+":"+pad(p.time_of_day_minutes%60);
+    const card = document.createElement("div"); card.className="card";
+    card.innerHTML = `
+      <div class="row"><b>${escapeHtml(p.destination_title)}</b><span class="when">${intervalLabel(p.interval_type)} · ${tod}</span></div>
+      <div class="meta">${t("next")}: ${fmtLocal(p.next_scheduled_at_utc)}</div>
+      <div class="actions">
+        <button class="act danger" data-act="rec-cancel" data-id="${p.id}">${t("cancel_series")}</button>
+      </div>`;
+    el.appendChild(card);
+  }
+}
+
+async function loadAll(){
+  if(!initData){ renderDemo(); return; }
+  const [q, rec] = await Promise.all([api("/api/my/queue"), api("/api/my/recurring")]);
+  TZ = q.tz || TZ; LANG = q.lang || LANG;
+  applyStaticLabels();
+  renderQueue(q.posts);
+  renderRecurring(rec.patterns);
+}
+
+// Reschedule modal
+const modal = document.getElementById("modal");
+function openModal(id){
+  rescheduleId = id;
+  document.getElementById("m-err").textContent = "";
+  modal.classList.add("open");
+}
+function closeModal(){ modal.classList.remove("open"); rescheduleId = null; }
+document.getElementById("m-cancel").addEventListener("click", closeModal);
+document.getElementById("m-save").addEventListener("click", async ()=>{
+  const date = document.getElementById("m-date").value;
+  const time = document.getElementById("m-time").value;
+  const errEl = document.getElementById("m-err");
+  if(!date || !time){ errEl.textContent = t("need_both"); return; }
+  try{
+    await api(`/api/my/post/${rescheduleId}/reschedule`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ local_datetime: composeLocal(date,time) }),
+    });
+    closeModal();
+    await loadAll();
+  }catch(e){ errEl.textContent = t("err")(e.message); }
+});
+
+document.addEventListener("click", async (e)=>{
+  const btn = e.target.closest("button[data-act]"); if(!btn) return;
+  const id = btn.dataset.id, act = btn.dataset.act;
+  try{
+    if(act==="resched"){ openModal(id); return; }
+    if(act==="cancel"){
+      if(!confirm(t("confirm_cancel"))) return;
+      await api(`/api/my/post/${id}/cancel`, { method:"POST" });
+    }else if(act==="rec-cancel"){
+      if(!confirm(t("confirm_series"))) return;
+      await api(`/api/my/recurring/${id}/cancel`, { method:"POST" });
+    }
+    await loadAll();
+  }catch(err){ alert(t("err")(err.message)); }
+});
+
+function renderDemo(){
+  TZ="UTC"; LANG="ru";
+  document.getElementById("t-demo").hidden = false;
+  applyStaticLabels();
+  const now = Math.floor(Date.now()/1000);
+  renderQueue([
+    {id:"demo1",destination_title:"Demo Channel",scheduled_at_utc:now+7200,kind:"text",media_count:0,preview:"Пример текстового поста"},
+    {id:"demo2",destination_title:"News",scheduled_at_utc:now+86400,kind:"media",media_count:3,preview:"Фотоальбом"},
+  ]);
+  renderRecurring([
+    {id:"demoR",destination_title:"Demo Channel",interval_type:"daily",time_of_day_minutes:540,next_scheduled_at_utc:now+86400},
+  ]);
+}
+
+loadAll().catch(err=>{
+  document.getElementById("queue-list").innerHTML =
+    `<div class="card"><div class="empty">${t("err")(err.message)}</div></div>`;
+});
+</script>
+</body>
+</html>

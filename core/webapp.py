@@ -10,7 +10,8 @@ from aiogram.utils.web_app import check_webapp_signature, parse_webapp_init_data
 from aiohttp import web
 
 from core.services import admin_broadcast_svc
-from core.state import StateStore
+from core.state import ScheduledPostRow, StateStore
+from core.utils import parse_local_datetime, validate_schedule_time
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,25 @@ class WebappServer:
         return f"http://{self.host}:{self.port}{path}"
 
 
+async def _post_to_json(store: StateStore, row: ScheduledPostRow) -> dict:
+    """Map a pending one-off post to the Mini App JSON shape.
+
+    No telegram/formatter import — the raw ``scheduled_at_utc`` epoch is returned
+    and the browser formats local time from it (core must not import telegram).
+    """
+    title = await store.get_destination_title(row.chat_id) or str(row.chat_id)
+    media = await store.get_post_media(row.id) if row.kind != "text" else []
+    preview = (row.text or row.caption or "")[:120]
+    return {
+        "id": row.id,
+        "destination_title": title,
+        "scheduled_at_utc": row.scheduled_at_utc,
+        "kind": row.kind,
+        "media_count": len(media),
+        "preview": preview,
+    }
+
+
 def _extract_init_data(request: web.Request) -> str | None:
     header = request.headers.get("Authorization")
     if not header:
@@ -135,9 +155,94 @@ async def start_webapp_server(
             return None
         return user
 
+    def _require_user(request: web.Request) -> dict | None:
+        init_data = _extract_init_data(request)
+        if not init_data:
+            return None
+        return validate_init_data(init_data, bot_token)
+
     async def index(_request: web.Request) -> web.Response:
         html_path = _STATIC_DIR / "admin.html"
         return web.Response(text=html_path.read_text(encoding="utf-8"), content_type="text/html")
+
+    async def app_index(_request: web.Request) -> web.Response:
+        html_path = _STATIC_DIR / "queue.html"
+        return web.Response(text=html_path.read_text(encoding="utf-8"), content_type="text/html")
+
+    async def api_my_queue(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        rows = await store.list_editable_pending_posts(user_id, limit=50, offset=0)
+        posts = [await _post_to_json(store, r) for r in rows]
+        return web.json_response(
+            {"tz": tz_name, "lang": await store.get_user_language(user_id), "posts": posts}
+        )
+
+    async def api_my_recurring(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        summaries = await store.list_user_recurring_summaries(user_id, offset=0, limit=50)
+        patterns = [
+            {
+                "id": s.pattern.id,
+                "destination_title": s.destination_title,
+                "interval_type": s.pattern.interval_type,
+                "time_of_day_minutes": s.pattern.time_of_day_minutes,
+                "next_scheduled_at_utc": s.next_scheduled_at_utc,
+            }
+            for s in summaries
+        ]
+        return web.json_response(
+            {"tz": tz_name, "lang": await store.get_user_language(user_id), "patterns": patterns}
+        )
+
+    async def api_my_reschedule(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        post_id = request.match_info["id"]
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        raw = str(payload.get("local_datetime") or "").strip()
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        try:
+            parsed = parse_local_datetime(raw, tz_name)
+        except (ValueError, KeyError):
+            return web.json_response({"error": "bad_datetime"}, status=400)
+        check = validate_schedule_time(parsed.utc_epoch)
+        if not check.is_valid:
+            return web.json_response({"error": check.error_key}, status=400)
+        ok = await store.update_editable_post_time(post_id, user_id, scheduled_at_utc=parsed.utc_epoch)
+        if not ok:
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response({"ok": True, "scheduled_at_utc": parsed.utc_epoch})
+
+    async def api_my_cancel(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        ok = await store.cancel_post(int(user["id"]), request.match_info["id"])
+        if not ok:
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response({"ok": True})
+
+    async def api_my_recurring_cancel(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        ok = await store.cancel_recurring_pattern(int(user["id"]), request.match_info["id"])
+        if not ok:
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response({"ok": True})
 
     async def api_stats(request: web.Request) -> web.Response:
         if _require_admin(request) is None:
@@ -185,6 +290,12 @@ async def start_webapp_server(
     app.router.add_get("/api/user/{id}", api_user)
     app.router.add_get("/api/users", api_users)
     app.router.add_post("/api/broadcast", api_broadcast)
+    app.router.add_get("/app", app_index)
+    app.router.add_get("/api/my/queue", api_my_queue)
+    app.router.add_get("/api/my/recurring", api_my_recurring)
+    app.router.add_post("/api/my/post/{id}/reschedule", api_my_reschedule)
+    app.router.add_post("/api/my/post/{id}/cancel", api_my_cancel)
+    app.router.add_post("/api/my/recurring/{id}/cancel", api_my_recurring_cancel)
 
     runner = web.AppRunner(app)
     await runner.setup()
