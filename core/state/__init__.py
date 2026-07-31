@@ -43,6 +43,7 @@ from core.state.models import (
 from core.state.posts import PostsMixin
 from core.state.recurring import RecurringMixin
 from core.state.row_mappers import RowMappersMixin
+from core.state.stats import StatsMixin
 from core.state.teams import TeamsMixin
 from core.state.users import UsersMixin
 
@@ -70,6 +71,7 @@ class StateStore(
     DraftsMixin,
     PostsMixin,
     RecurringMixin,
+    StatsMixin,
     _LegacyMixin,
     RowMappersMixin,
 ):
