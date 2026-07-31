@@ -17,6 +17,7 @@ from telegram.handlers.contexts import (
     BroadcastContext,
     DraftContext,
     EditContext,
+    PreviewRef,
     RepeatContext,
     ScheduleContext,
     field_names,
@@ -49,7 +50,8 @@ from telegram.handlers.keyboards import (
 # Read-only typed access over flat FSM storage. Each getter hydrates its
 # dataclass from ONLY the keys present in state, so a partially-populated or
 # pre-deploy flat-key session reads back cleanly (absent keys → defaults).
-# Writes stay as `state.update_data(**flat_keys)` at the call sites.
+# Writes go through the patch_*_ctx helpers below (Phase 4 / 4b), which
+# validate keys against the target context before the flat update_data.
 
 
 async def _get_ctx(state, cls):
@@ -76,6 +78,72 @@ async def get_draft_ctx(state) -> DraftContext:
 
 async def get_edit_ctx(state) -> EditContext:
     return await _get_ctx(state, EditContext)
+
+
+# --- Typed FSM context writes (Phase 4 / 4b) -----------------------------
+# Symmetric to the getters above: thin wrappers over ``update_data`` that
+# validate the write keys against the target context's dataclass fields, so a
+# mistyped key fails loudly at write time instead of silently failing to
+# hydrate at read time. Storage stays flat — these only add a typed guard.
+
+
+async def patch_ctx(state, ctx_cls: type, **changes) -> None:
+    """Validate ``changes`` keys against ``ctx_cls`` fields, then ``update_data``."""
+    unknown = set(changes) - field_names(ctx_cls)
+    if unknown:
+        raise KeyError(
+            f"Unknown {ctx_cls.__name__} FSM field(s): {sorted(unknown)}; "
+            f"valid fields: {sorted(field_names(ctx_cls))}"
+        )
+    await state.update_data(**changes)
+
+
+async def patch_schedule_ctx(state, **changes) -> None:
+    await patch_ctx(state, ScheduleContext, **changes)
+
+
+async def patch_repeat_ctx(state, **changes) -> None:
+    await patch_ctx(state, RepeatContext, **changes)
+
+
+async def patch_broadcast_ctx(state, **changes) -> None:
+    await patch_ctx(state, BroadcastContext, **changes)
+
+
+async def patch_draft_ctx(state, **changes) -> None:
+    await patch_ctx(state, DraftContext, **changes)
+
+
+async def patch_edit_ctx(state, **changes) -> None:
+    await patch_ctx(state, EditContext, **changes)
+
+
+async def patch_preview_ctx(state, **changes) -> None:
+    """Typed write for the flow-agnostic live-preview message refs."""
+    await patch_ctx(state, PreviewRef, **changes)
+
+
+def _ctx_cls_for_state(current_state) -> type:
+    """Resolve the flow's context class from the active FSM state string.
+
+    Mirrors ``shared._get_content_ctx`` so the cross-flow content/datetime/
+    preview handlers can route writes through ``patch_content_ctx`` with the
+    correct flow-specific field set.
+    """
+    if current_state in RepeatStates:
+        return RepeatContext
+    if current_state in BroadcastStates:
+        return BroadcastContext
+    if current_state in DraftStates:
+        return DraftContext
+    if current_state in EditStates:
+        return EditContext
+    return ScheduleContext
+
+
+async def patch_content_ctx(state, current_state, **changes) -> None:
+    """Typed cross-flow write: resolve the flow ctx from ``current_state``."""
+    await patch_ctx(state, _ctx_cls_for_state(current_state), **changes)
 
 
 # Keys of the reply-keyboard main-menu buttons (see keyboards._main_menu_kb).
@@ -233,7 +301,9 @@ async def _move_to_post_collection(
     collecting_state: State,
     lang: str,
 ) -> None:
-    await state.update_data(
+    await patch_content_ctx(
+        state,
+        collecting_state.state,
         scheduled_at_utc=scheduled_at_utc,
         scheduled_local=scheduled_local,
         kind=None,
@@ -260,7 +330,8 @@ async def _move_repeat_to_destination_selection(
     scheduled_at_utc: int,
     scheduled_local: str,
 ) -> None:
-    await state.update_data(
+    await patch_repeat_ctx(
+        state,
         scheduled_at_utc=scheduled_at_utc,
         scheduled_local=scheduled_local,
         chat_id=None,
@@ -366,7 +437,7 @@ async def _render_broadcast_destinations(
 
     has_more = len(items) > page_size
     items = items[:page_size]
-    await state.update_data(dest_page=current_page)
+    await patch_broadcast_ctx(state, dest_page=current_page)
     if not items:
         if edit:
             await _clear_inline_markup(message)
@@ -444,7 +515,7 @@ async def _clear_live_preview(bot: Bot, state: FSMContext | None) -> None:
                 # Already deleted, too old (>48h), or otherwise gone — ignore.
                 pass
     if "preview_msg_ids" in data or "preview_chat_id" in data:
-        await state.update_data(preview_msg_ids=[], preview_chat_id=None)
+        await patch_preview_ctx(state, preview_msg_ids=[], preview_chat_id=None)
 
 
 async def _send_post_preview(
@@ -499,7 +570,7 @@ async def _send_post_preview(
             sent_ids.extend(stats.message_ids)
 
     if state is not None:
-        await state.update_data(preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)
+        await patch_preview_ctx(state, preview_msg_ids=sent_ids, preview_chat_id=message.chat.id)
 
 
 async def _build_draft_summary(store: StateStore, draft: DraftRow, *, lang: str) -> dict[str, str]:
@@ -694,7 +765,8 @@ async def _move_draft_publish_to_confirmation(
         await message.answer(tr(lang, "draft_missing"), reply_markup=await _main_menu_for(store, user_id))
         return
 
-    await state.update_data(
+    await patch_draft_ctx(
+        state,
         scheduled_at_utc=scheduled_at_utc,
         scheduled_local=scheduled_local,
         chat_id=draft.chat_id,

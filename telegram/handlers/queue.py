@@ -190,7 +190,8 @@ async def _start_scheduled_post_edit(store: StateStore, message: Message, state:
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     summary = await h._build_scheduled_post_summary(store, post, lang=lang)
     await state.clear()
-    await state.update_data(
+    await h.patch_edit_ctx(
+        state,
         edit_post_id=post.id,
         chat_id=post.chat_id,
     )
@@ -221,7 +222,8 @@ async def _start_scheduled_post_text_edit(
     lang = await h._user_lang(store, user_id)
     summary = await h._build_scheduled_post_summary(store, post, lang=lang)
     await state.clear()
-    await state.update_data(
+    await h.patch_edit_ctx(
+        state,
         edit_post_id=post.id,
         chat_id=post.chat_id,
     )
@@ -257,7 +259,8 @@ async def _start_scheduled_post_time_edit(
     summary = await h._build_scheduled_post_summary(store, post, lang=lang)
     local_dt = datetime.fromtimestamp(post.scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
     await state.clear()
-    await state.update_data(
+    await h.patch_edit_ctx(
+        state,
         edit_post_id=post.id,
         chat_id=post.chat_id,
         selected_date=local_dt.date().isoformat(),
@@ -296,7 +299,8 @@ async def _start_scheduled_post_media_edit(
     existing_entities = post.caption_entities_json if post.kind == "media" else post.entities_json
     existing_caption_above = None if post.caption_above is None else bool(post.caption_above)
     await state.clear()
-    await state.update_data(
+    await h.patch_edit_ctx(
+        state,
         edit_post_id=post.id,
         chat_id=post.chat_id,
         kind=None,

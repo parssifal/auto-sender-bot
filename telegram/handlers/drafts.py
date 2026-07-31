@@ -13,7 +13,8 @@ from telegram.handlers import states, keyboards as kb, helpers as h
 
 
 async def _move_to_draft_collection(store: StateStore, message: Message, state: FSMContext, *, chat_id: int, lang: str) -> None:
-    await state.update_data(
+    await h.patch_draft_ctx(
+        state,
         chat_id=chat_id,
         kind=None,
         text=None,
@@ -152,7 +153,8 @@ async def _start_draft_edit(store: StateStore, message: Message, state: FSMConte
     lang = await h._user_lang(store, user_id)
     summary = await h._build_draft_summary(store, draft, lang=lang)
     await state.clear()
-    await state.update_data(
+    await h.patch_draft_ctx(
+        state,
         edit_draft_id=draft.id,
         chat_id=draft.chat_id,
         team_id=draft.team_id,
@@ -190,7 +192,8 @@ async def _start_draft_publish(store: StateStore, message: Message, state: FSMCo
 
     where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
     await state.clear()
-    await state.update_data(
+    await h.patch_draft_ctx(
+        state,
         draft_publish_id=draft.id,
         chat_id=draft.chat_id,
         selected_date=None,
@@ -221,7 +224,7 @@ def build_router(store: StateStore) -> Router:
         await store.ensure_user(message.from_user.id)
         await state.clear()
         await state.set_state(states.DraftStates.choosing_destination)
-        await state.update_data(dest_page=0)
+        await h.patch_draft_ctx(state, dest_page=0)
         await h._render_destinations(store, message, page=0, user_id=message.from_user.id, select_prefix="ddsel", page_prefix="ddpage")
 
     @router.message(Command("draft_edit"))
@@ -477,7 +480,7 @@ def build_router(store: StateStore) -> Router:
             return
 
         page = int(query.data.split(":")[1])
-        await state.update_data(dest_page=page)
+        await h.patch_draft_ctx(state, dest_page=page)
         await query.answer()
         await h._render_destinations(
             store,
@@ -496,7 +499,7 @@ def build_router(store: StateStore) -> Router:
 
         chat_id = int(query.data.split(":")[1])
         lang = await h._user_lang(store, query.from_user.id)
-        await state.update_data(chat_id=chat_id)
+        await h.patch_draft_ctx(state, chat_id=chat_id)
         await query.answer()
         await _move_to_draft_collection(store, query.message, state, chat_id=chat_id, lang=lang)
 

@@ -58,12 +58,16 @@ from telegram.handlers.helpers import (
 
 
 class FakeState:
-    """Minimal stand-in for aiogram FSMContext.get_data()."""
+    """Minimal stand-in for aiogram FSMContext.get_data()/update_data()."""
 
     def __init__(self, data):
         self._data = dict(data)
 
     async def get_data(self):
+        return dict(self._data)
+
+    async def update_data(self, **changes):
+        self._data.update(changes)
         return dict(self._data)
 
 
@@ -105,3 +109,76 @@ async def test_edit_getter_reads_edit_fields():
     assert ctx.edit_post_id == "p1"
     assert ctx.edit_preserve_caption_above is True
     assert ctx.scheduled_at_utc == 1700000000
+
+
+# --- Typed FSM writes (Phase 4 / 4b) -------------------------------------
+
+from telegram.handlers.helpers import (  # noqa: E402
+    patch_ctx, patch_schedule_ctx, patch_draft_ctx, patch_edit_ctx,
+    patch_broadcast_ctx, patch_preview_ctx, patch_content_ctx, _ctx_cls_for_state,
+)
+from telegram.handlers.states import (  # noqa: E402
+    ScheduleStates, RepeatStates, BroadcastStates, DraftStates, EditStates,
+)
+
+
+@pytest.mark.asyncio
+async def test_patch_writes_valid_keys():
+    state = FakeState({})
+    await patch_schedule_ctx(state, chat_id=42, dest_page=1, selected_date=None)
+    assert await state.get_data() == {"chat_id": 42, "dest_page": 1, "selected_date": None}
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_unknown_key_and_writes_nothing():
+    state = FakeState({})
+    with pytest.raises(KeyError):
+        await patch_schedule_ctx(state, chta_id=42)  # deliberate typo
+    assert await state.get_data() == {}  # validation happens before the write
+
+
+@pytest.mark.asyncio
+async def test_edit_context_carries_chat_id_write():
+    # chat_id is written by the edit flow; before 4b it was absent from EditContext
+    # and silently dropped by get_edit_ctx. It must now round-trip.
+    assert "chat_id" in field_names(EditContext)
+    state = FakeState({})
+    await patch_edit_ctx(state, edit_post_id="p", chat_id=7)
+    ctx = await get_edit_ctx(state)
+    assert ctx.chat_id == 7
+
+
+@pytest.mark.asyncio
+async def test_draft_context_carries_dest_page_write():
+    assert "dest_page" in field_names(DraftContext)
+    state = FakeState({})
+    await patch_draft_ctx(state, dest_page=3)
+    assert (await get_draft_ctx(state)).dest_page == 3
+
+
+def test_ctx_cls_for_state_maps_each_flow():
+    assert _ctx_cls_for_state(RepeatStates.entering_datetime.state) is RepeatContext
+    assert _ctx_cls_for_state(BroadcastStates.entering_datetime.state) is BroadcastContext
+    assert _ctx_cls_for_state(DraftStates.entering_datetime.state) is DraftContext
+    assert _ctx_cls_for_state(EditStates.entering_datetime.state) is EditContext
+    assert _ctx_cls_for_state(ScheduleStates.entering_datetime.state) is ScheduleContext
+
+
+@pytest.mark.asyncio
+async def test_patch_content_ctx_validates_against_resolved_flow():
+    # selected_chat_ids is not a DraftContext field → a draft-state write must fail,
+    # but the same key is valid once the flow resolves to the broadcast context.
+    state = FakeState({})
+    with pytest.raises(KeyError):
+        await patch_content_ctx(state, DraftStates.collecting_post.state, selected_chat_ids=[1])
+    assert await state.get_data() == {}
+    await patch_content_ctx(state, BroadcastStates.collecting_post.state, selected_chat_ids=[1])
+    assert (await state.get_data())["selected_chat_ids"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_patch_preview_ctx_rejects_non_preview_key():
+    state = FakeState({})
+    await patch_preview_ctx(state, preview_msg_ids=[1], preview_chat_id=9)
+    with pytest.raises(KeyError):
+        await patch_preview_ctx(state, chat_id=1)  # not a PreviewRef field

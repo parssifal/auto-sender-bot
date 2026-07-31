@@ -27,13 +27,13 @@ def build_router(store: StateStore) -> Router:
 
         await state.clear()
         await state.set_state(states.ScheduleStates.choosing_destination)
-        await state.update_data(dest_page=0)
+        await h.patch_schedule_ctx(state, dest_page=0)
         await h._render_destinations(store, message, page=0, user_id=message.from_user.id)
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
         page = int(query.data.split(":")[1])
-        await state.update_data(dest_page=page)
+        await h.patch_schedule_ctx(state, dest_page=page)
         await query.answer()
         await h._render_destinations(store, query.message, page=page, user_id=query.from_user.id)
 
@@ -48,7 +48,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         chat_id = int(query.data.split(":")[1])
-        await state.update_data(
+        await h.patch_schedule_ctx(
+            state,
             chat_id=chat_id,
             selected_date=None,
             calendar_year=None,
