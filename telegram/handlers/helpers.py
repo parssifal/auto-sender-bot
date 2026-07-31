@@ -22,7 +22,6 @@ from telegram.handlers.states import (
 from telegram.handlers.keyboards import (
     _broadcast_destinations_kb,
     _confirm_kb,
-    _destination_label,
     _destinations_kb,
     _draft_create_scope_kb,
     _draft_location_label,
@@ -382,14 +381,9 @@ async def _render_broadcast_destinations(
 
 
 async def _resolve_broadcast_destinations(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
-    destination_map = {destination.chat_id: destination for destination in await _list_all_user_destinations(store, user_id)}
-    resolved: list[tuple[int, str]] = []
-    for chat_id in _normalize_selected_chat_ids(selected_chat_ids):
-        destination = destination_map.get(chat_id)
-        if destination is None:
-            continue
-        resolved.append((chat_id, _destination_label(destination.title, destination.username)))
-    return resolved
+    from core.services import broadcast_svc
+
+    return await broadcast_svc.resolve_valid_destinations(store, user_id, selected_chat_ids)
 
 
 async def _resolve_broadcast_destination_lines(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
