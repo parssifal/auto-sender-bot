@@ -36,3 +36,88 @@ async def test_fresh_db_creates_all_tables_and_records_versions():
             )
         }
         assert versions == {1, 2, 3, 4, 5}
+
+
+@pytest.mark.asyncio
+async def test_rerun_is_noop_and_versions_stable():
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        await run_migrations(conn)
+        first = await conn.execute_fetchall(
+            "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+        )
+        await run_migrations(conn)  # second run
+        second = await conn.execute_fetchall(
+            "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+        )
+        assert [tuple(r) for r in first] == [tuple(r) for r in second]
+
+
+@pytest.mark.asyncio
+async def test_baseline_records_versions_without_dropping_data():
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        # Pre-existing (pre-migration) schema + data.
+        await conn.execute(
+            "CREATE TABLE users (user_id INTEGER PRIMARY KEY, "
+            "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+        )
+        await conn.execute(
+            "CREATE TABLE scheduled_posts (id TEXT PRIMARY KEY)"
+        )
+        await conn.execute(
+            "INSERT INTO users(user_id, created_at, updated_at) VALUES (42, 0, 0)"
+        )
+        await conn.commit()
+
+        await run_migrations(conn)
+
+        versions = {
+            r[0]
+            for r in await conn.execute_fetchall(
+                "SELECT version FROM schema_migrations"
+            )
+        }
+        assert versions == {1, 2, 3, 4, 5}
+        # Data intact, no DDL ran over the existing tables.
+        row = await conn.execute_fetchall("SELECT user_id FROM users")
+        assert [r[0] for r in row] == [42]
+
+
+@pytest.mark.asyncio
+async def test_failed_file_leaves_prior_versions_and_reruns_clean(tmp_path, monkeypatch):
+    import core.migrate as migrate_mod
+
+    mig = tmp_path / "migrations"
+    mig.mkdir()
+    (mig / "001_a.sql").write_text("CREATE TABLE IF NOT EXISTS a (id INTEGER PRIMARY KEY);")
+    (mig / "002_b.sql").write_text("CREATE TABLE IF NOT EXISTS b (id INTEGER PRIMARY KEY);")
+    # 003 is invalid on the first pass.
+    bad = mig / "003_c.sql"
+    bad.write_text("CREATE TABLE c (this is not valid sql;")
+
+    monkeypatch.setattr(migrate_mod, "MIGRATIONS_DIR", mig)
+
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        with pytest.raises(Exception):
+            await migrate_mod.run_migrations(conn)
+
+        versions = {
+            r[0]
+            for r in await conn.execute_fetchall(
+                "SELECT version FROM schema_migrations"
+            )
+        }
+        assert versions == {1, 2}  # 3 not recorded
+
+        # Fix file 003 and re-run; should complete and record version 3.
+        bad.write_text("CREATE TABLE IF NOT EXISTS c (id INTEGER PRIMARY KEY);")
+        await migrate_mod.run_migrations(conn)
+        versions = {
+            r[0]
+            for r in await conn.execute_fetchall(
+                "SELECT version FROM schema_migrations"
+            )
+        }
+        assert versions == {1, 2, 3}
