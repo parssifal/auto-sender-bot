@@ -83,8 +83,9 @@ class BroadcastContext(PostContent, DateTimePick, PreviewRef):
 @dataclass
 class DraftContext(PostContent, DateTimePick, PreviewRef):
     chat_id: int | None = None
-    team_id: int | None = None
+    team_id: str | None = None          # team ids are short string ids
     draft_publish_id: str | None = None
+    edit_draft_id: str | None = None    # set while editing a draft (DraftStates.editing_post)
 
 
 @dataclass

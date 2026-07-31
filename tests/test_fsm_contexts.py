@@ -32,7 +32,7 @@ def test_schedule_context_field_superset():
 
 def test_draft_context_extra_fields():
     fn = field_names(DraftContext)
-    assert {"chat_id", "team_id", "draft_publish_id"} <= fn
+    assert {"chat_id", "team_id", "draft_publish_id", "edit_draft_id"} <= fn
     assert {"draft_text", "draft_entities_json"} <= fn  # inherited from PostContent
 
 
