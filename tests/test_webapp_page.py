@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ADMIN_HTML = Path(__file__).resolve().parents[1] / "core" / "webapp_static" / "admin.html"
+QUEUE_HTML = Path(__file__).resolve().parents[1] / "core" / "webapp_static" / "queue.html"
 
 
 def test_admin_page_loads_telegram_sdk() -> None:
@@ -46,3 +47,20 @@ def test_admin_page_auto_refreshes_stats() -> None:
     assert "inFlight" in html
     # "Last updated" indicator element.
     assert 'id="lastUpdated"' in html
+
+
+def test_admin_page_has_back_to_queue_link() -> None:
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    # A back-link returns to the user queue Mini App at /app.
+    assert 'id="back-app"' in html
+    assert '"/app"' in html
+
+
+def test_queue_page_has_role_gated_admin_link() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # The admin-panel button exists but starts hidden…
+    assert 'id="admin-link"' in html
+    # …is only revealed when the queue payload flags the caller as admin…
+    assert "q.is_admin" in html
+    # …and navigates to the admin dashboard at "/".
+    assert 'location.href = "/"' in html

@@ -178,7 +178,12 @@ async def start_webapp_server(
         rows = await store.list_editable_pending_posts(user_id, limit=50, offset=0)
         posts = [await _post_to_json(store, r) for r in rows]
         return web.json_response(
-            {"tz": tz_name, "lang": await store.get_user_language(user_id), "posts": posts}
+            {
+                "tz": tz_name,
+                "lang": await store.get_user_language(user_id),
+                "is_admin": user_id in admin_set,
+                "posts": posts,
+            }
         )
 
     async def api_my_recurring(request: web.Request) -> web.Response:

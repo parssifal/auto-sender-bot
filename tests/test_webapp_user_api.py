@@ -234,3 +234,26 @@ async def test_app_serves_html(server):
             assert r.content_type == "text/html"
             body = await r.text()
     assert "<html" in body.lower()
+
+
+@pytest.mark.asyncio
+async def test_my_queue_reports_admin_flag(store):
+    # The queue payload carries an is_admin flag so the page can reveal the
+    # admin-panel link only for admins. The caller id is derived server-side.
+    async def _is_admin_for(admin_ids: tuple[int, ...]) -> bool:
+        srv = await start_webapp_server(
+            host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=admin_ids
+        )
+        try:
+            async with ClientSession() as s:
+                async with s.get(
+                    srv.url("/api/my/queue"), headers={"Authorization": _init_data(USER_A)}
+                ) as r:
+                    assert r.status == 200
+                    body = await r.json()
+        finally:
+            await srv.close()
+        return body["is_admin"]
+
+    assert await _is_admin_for((999,)) is False
+    assert await _is_admin_for((USER_A,)) is True

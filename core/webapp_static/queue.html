@@ -30,6 +30,12 @@
   .topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 14px}
   .topbar h1{font-size:20px; font-weight:800; margin:0; letter-spacing:-.01em}
   .topbar .live{font-size:11px; font-weight:700; color:var(--hint); letter-spacing:.06em; text-transform:uppercase}
+  .topbar-actions{display:flex; align-items:center; gap:10px; flex:none}
+  .adminlink{
+    appearance:none; border:0; border-radius:12px; padding:7px 13px; font-size:13px;
+    font-weight:700; cursor:pointer; background:var(--accent); color:#fff; white-space:nowrap;
+  }
+  .adminlink:active{opacity:.7}
   .eyebrow{font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--hint); margin:0 2px 8px}
   section{margin-bottom:22px}
   .card{background:var(--card); border-radius:var(--radius); padding:var(--pad); margin-bottom:var(--gap)}
@@ -67,7 +73,10 @@
 <div id="app">
   <div class="topbar">
     <h1 id="t-title">Мои посты</h1>
-    <span class="live" id="t-demo" hidden>demo</span>
+    <div class="topbar-actions">
+      <span class="live" id="t-demo" hidden>demo</span>
+      <button class="adminlink" id="admin-link" hidden>Админ-панель</button>
+    </div>
   </div>
 
   <div class="banner" id="tz-banner" hidden></div>
@@ -113,7 +122,7 @@ let rescheduleId = null;
 
 const I18N = {
   ru: {
-    title:"Мои посты", queue:"Запланированные", recurring:"Повторяющиеся",
+    title:"Мои посты", queue:"Запланированные", recurring:"Повторяющиеся", admin_btn:"Админ-панель",
     empty_q:"Нет запланированных постов", empty_r:"Нет повторяющихся",
     resched:"Перенести", cancel:"Отменить", cancel_series:"Отменить серию",
     kind_text:"Текст", kind_media:n=>`Медиа × ${n}`, next:"Следующий",
@@ -123,7 +132,7 @@ const I18N = {
     err:e=>"Ошибка: "+e, need_both:"Укажите дату и время",
   },
   en: {
-    title:"My posts", queue:"Scheduled", recurring:"Recurring",
+    title:"My posts", queue:"Scheduled", recurring:"Recurring", admin_btn:"Admin panel",
     empty_q:"No scheduled posts", empty_r:"No recurring patterns",
     resched:"Reschedule", cancel:"Cancel", cancel_series:"Cancel series",
     kind_text:"Text", kind_media:n=>`Media × ${n}`, next:"Next",
@@ -162,6 +171,7 @@ async function api(path,opts){
 
 function applyStaticLabels(){
   document.getElementById("t-title").textContent = t("title");
+  document.getElementById("admin-link").textContent = t("admin_btn");
   document.getElementById("t-queue").textContent = t("queue");
   document.getElementById("t-recurring").textContent = t("recurring");
   document.getElementById("m-title").textContent = t("m_title");
@@ -213,9 +223,14 @@ async function loadAll(){
   const [q, rec] = await Promise.all([api("/api/my/queue"), api("/api/my/recurring")]);
   TZ = q.tz || TZ; LANG = q.lang || LANG;
   applyStaticLabels();
+  if(q.is_admin){ document.getElementById("admin-link").hidden = false; }
   renderQueue(q.posts);
   renderRecurring(rec.patterns);
 }
+
+// Same-origin navigation to the admin dashboard (admin.html at "/"), staying
+// inside the Telegram Mini App WebView. Button is only revealed for admins.
+document.getElementById("admin-link").addEventListener("click", ()=>{ location.href = "/"; });
 
 // Reschedule modal
 const modal = document.getElementById("modal");

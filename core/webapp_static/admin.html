@@ -48,6 +48,12 @@
   }
   .ghost-btn:active{background:var(--separator)}
   .ghost-btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .backlink{
+    appearance:none; border:0; background:var(--separator); color:var(--text);
+    font-size:13px; font-weight:700; padding:7px 12px; border-radius:12px;
+    cursor:pointer; white-space:nowrap;
+  }
+  .backlink:active{opacity:.7}
 
   .card{background:var(--card); border-radius:var(--radius); padding:var(--pad)}
   section{margin-bottom:var(--gap)}
@@ -176,6 +182,7 @@
   <div class="topbar">
     <h1>Панель бота</h1>
     <div class="topbar-actions">
+      <button id="back-app" class="backlink" title="Мои посты">← Мои посты</button>
       <span class="live" id="lastUpdated" aria-live="polite"></span>
       <button id="refresh" class="ghost-btn" title="Обновить" aria-label="Обновить данные">↻</button>
     </div>
@@ -621,6 +628,7 @@
   applyTheme();
   if(tg){ tg.ready(); tg.expand(); tg.onEvent("themeChanged", function(){ applyTheme(); refreshStats(); }); }
   $("refresh").addEventListener("click", refreshStats);
+  $("back-app").addEventListener("click", function(){ location.href = "/app"; });
   $("findBtn").addEventListener("click", findUser);
   $("findInput").addEventListener("keydown", function(e){ if(e.key==="Enter") findUser(); });
   $("broadcastText").addEventListener("input", updateBroadcastCounter);
