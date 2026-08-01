@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import Message, ReplyKeyboardMarkup
 
+from core.limits import ResourceLimitError
 from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F401  # re-export for existing callers
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
@@ -44,6 +45,20 @@ from telegram.handlers.keyboards import (
     _schedule_datetime_markup,
     _short_id,
 )
+
+
+_LIMIT_MESSAGE_KEYS = {
+    "posts": "limit_posts",
+    "drafts": "limit_drafts",
+    "destinations": "limit_destinations",
+    "recurring": "limit_recurring",
+}
+
+
+def limit_message(lang: str | None, exc: ResourceLimitError) -> str:
+    """Localized user-facing message for a per-user resource cap violation."""
+    key = _LIMIT_MESSAGE_KEYS.get(exc.resource, "limit_posts")
+    return tr(lang, key, limit=exc.limit)
 
 
 # --- Typed FSM context getters (Phase 4) ---------------------------------
@@ -643,6 +658,9 @@ async def _save_draft_from_state(
                 media_items=media_items,
             )
             kind_label = tr(lang, "kind_media", count=len(media_items))
+    except ResourceLimitError as exc:
+        await message.answer(limit_message(lang, exc), reply_markup=await _main_menu_for(store, user_id))
+        return True
     except ValueError:
         return False
 

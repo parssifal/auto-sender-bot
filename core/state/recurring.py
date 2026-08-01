@@ -3,10 +3,24 @@ from __future__ import annotations
 import time
 import uuid
 
+import core.limits as limits
+from core.limits import ResourceLimitError
 from core.state.models import RecurringInstance, RecurringPattern, RecurringPatternSummary
 
 
 class RecurringMixin:
+    async def count_user_recurring(self, user_id: int) -> int:
+        """Active recurring patterns for a user."""
+        row = await self._execute_fetchone(
+            "SELECT COUNT(1) AS cnt FROM recurring_patterns WHERE user_id=? AND is_active=1",
+            (user_id,),
+        )
+        return 0 if row is None else int(row["cnt"])
+
+    async def _guard_recurring_cap(self, user_id: int) -> None:
+        if await self.count_user_recurring(user_id) >= limits.MAX_RECURRING_PER_USER:
+            raise ResourceLimitError("recurring", limits.MAX_RECURRING_PER_USER)
+
     async def create_recurring_pattern(
         self,
         user_id: int,
@@ -22,6 +36,7 @@ class RecurringMixin:
         current_count: int = 0,
         is_active: bool = True,
     ) -> str:
+        await self._guard_recurring_cap(user_id)
         now = int(time.time())
         pattern_id = uuid.uuid4().hex
         await self._conn.execute(
@@ -345,6 +360,7 @@ class RecurringMixin:
         if kind == "media" and not items:
             raise ValueError("Recurring media post must contain at least one media item")
 
+        await self._guard_recurring_cap(user_id)
         now = int(time.time())
         pattern_id = uuid.uuid4().hex
         post_id = uuid.uuid4().hex
