@@ -1,7 +1,8 @@
 # Design: Permanent Mini App Address (Ops)
 
-**Date:** 2026-07-31
-**Status:** Draft — **deferred until roadmap items 1–4 are done** (owner-sequenced). Ops/hosting task.
+**Date:** 2026-07-31 · **Artifacts prepared:** 2026-08-01
+**Status:** Claude-side artifacts DONE (branch `feature/permanent-webapp-address`) — owner cutover pending. Ops/hosting task.
+**Artifacts:** `deploy/Caddyfile`, `deploy/duckdns/{duckdns-update.sh,duckdns.service,duckdns.timer}`, `deploy/README.md` (cutover runbook + verification), plus `.env.example` / `docker-compose.yml` guidance. Owner-only steps (DNS registration, ports 80/443, install Caddy, final restart) tracked in `deploy/README.md`.
 **Scope:** Infrastructure — give the webapp a stable public HTTPS address so the Mini App(s) don't break on restart.
 **Scale:** 1–10 users; single VPS.
 **Roadmap:** Item 5 (last) of `docs/superpowers/2026-07-31-roadmap-post-refactor.md`.
