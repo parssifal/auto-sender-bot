@@ -56,6 +56,13 @@ def test_admin_page_has_back_to_queue_link() -> None:
     assert '"/app"' in html
 
 
+def test_queue_page_loads_telegram_sdk() -> None:
+    # Without the Telegram SDK, window.Telegram.WebApp is undefined, initData
+    # is empty, and the page falls back to demo mode instead of the real user.
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    assert "telegram-web-app.js" in html
+
+
 def test_queue_page_has_role_gated_admin_link() -> None:
     html = QUEUE_HTML.read_text(encoding="utf-8")
     # The admin-panel button exists but starts hidden…
