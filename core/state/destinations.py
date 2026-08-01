@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 
+import core.limits as limits
+from core.limits import ResourceLimitError
 from core.state.models import Destination
 
 
@@ -33,6 +35,15 @@ class DestinationsMixin:
         await self._conn.commit()
 
     async def link_user_destination(self, user_id: int, chat_id: int, linked_via: str) -> None:
+        # Only NEW links count toward the cap; re-linking an existing destination
+        # is an upsert (no growth) and must always be allowed.
+        existing = await self._execute_fetchone(
+            "SELECT 1 FROM user_destinations WHERE user_id=? AND chat_id=?",
+            (user_id, chat_id),
+        )
+        if existing is None and await self.count_user_destinations(user_id) >= limits.MAX_DESTINATIONS_PER_USER:
+            raise ResourceLimitError("destinations", limits.MAX_DESTINATIONS_PER_USER)
+
         now = int(time.time())
         await self._conn.execute(
             """

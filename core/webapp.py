@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,56 @@ logger = logging.getLogger(__name__)
 
 DAY = 86_400
 _STATIC_DIR = Path(__file__).parent / "webapp_static"
+
+# --- Hardening defaults ---------------------------------------------------- #
+# JSON payloads handled here are tiny; cap the raw request body well below
+# aiohttp's 1 MiB default so an oversized POST cannot exhaust memory.
+_DEFAULT_MAX_BODY_BYTES = 64 * 1024
+# Per-remote request budget (defence-in-depth; a reverse proxy should also
+# rate-limit, but the app must not fall over if that proxy is absent).
+_DEFAULT_RATE_LIMIT_MAX = 240
+_DEFAULT_RATE_LIMIT_WINDOW_S = 60.0
+# A broadcast is a single Telegram message per recipient (max 4096 chars).
+_DEFAULT_BROADCAST_TEXT_MAX = 4096
+_ENTITIES_JSON_MAX = 32 * 1024
+
+
+class _RateLimiter:
+    """Fixed-window per-key request counter.
+
+    Keyed on the client's remote address. The tracked-key set is bounded
+    (LRU eviction) so a flood of distinct/spoofed keys cannot turn the limiter
+    itself into a memory-exhaustion vector.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_requests: int,
+        window_seconds: float,
+        max_keys: int = 10_000,
+    ) -> None:
+        self._max = max_requests
+        self._window = window_seconds
+        self._max_keys = max_keys
+        # key -> (window_start, count)
+        self._buckets: "OrderedDict[str, tuple[float, int]]" = OrderedDict()
+
+    def allow(self, key: str, *, now: float) -> bool:
+        window_start, count = self._buckets.get(key, (now, 0))
+        if now - window_start >= self._window:
+            window_start, count = now, 0
+
+        count += 1
+        self._buckets[key] = (window_start, count)
+        self._buckets.move_to_end(key)
+        while len(self._buckets) > self._max_keys:
+            self._buckets.popitem(last=False)
+
+        return count <= self._max
+
+    def tracked_key_count(self) -> int:
+        return len(self._buckets)
 
 
 def validate_init_data(
@@ -143,8 +194,42 @@ async def start_webapp_server(
     bot_token: str,
     admin_ids: tuple[int, ...],
     bot: object | None = None,
+    max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
+    rate_limit_max: int = _DEFAULT_RATE_LIMIT_MAX,
+    rate_limit_window_s: float = _DEFAULT_RATE_LIMIT_WINDOW_S,
+    broadcast_text_max: int = _DEFAULT_BROADCAST_TEXT_MAX,
 ) -> WebappServer:
     admin_set = set(admin_ids)
+    rate_limiter = _RateLimiter(
+        max_requests=rate_limit_max, window_seconds=rate_limit_window_s
+    )
+
+    # Read the static Mini App pages once at startup instead of hitting the
+    # disk on every (unauthenticated) request.
+    def _read_static(name: str) -> str:
+        try:
+            return (_STATIC_DIR / name).read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("Static asset %s missing", name)
+            return "<!doctype html><title>Not found</title>"
+
+    admin_html = _read_static("admin.html")
+    queue_html = _read_static("queue.html")
+
+    @web.middleware
+    async def _guard_mw(request: web.Request, handler):
+        key = request.remote or "unknown"
+        if not rate_limiter.allow(key, now=time.monotonic()):
+            return web.json_response({"error": "rate_limited"}, status=429)
+        # Reject oversized bodies up front. aiohttp's client_max_size also guards
+        # the streamed read, but handlers wrap request.json() in broad excepts
+        # that would mask the 413 — checking Content-Length here keeps it clean.
+        if (request.content_length or 0) > max_body_bytes:
+            return web.json_response({"error": "payload_too_large"}, status=413)
+        response = await handler(request)
+        # Do not advertise the server implementation/version.
+        response.headers["Server"] = "webapp"
+        return response
 
     def _require_admin(request: web.Request) -> dict | None:
         init_data = _extract_init_data(request)
@@ -162,12 +247,10 @@ async def start_webapp_server(
         return validate_init_data(init_data, bot_token)
 
     async def index(_request: web.Request) -> web.Response:
-        html_path = _STATIC_DIR / "admin.html"
-        return web.Response(text=html_path.read_text(encoding="utf-8"), content_type="text/html")
+        return web.Response(text=admin_html, content_type="text/html")
 
     async def app_index(_request: web.Request) -> web.Response:
-        html_path = _STATIC_DIR / "queue.html"
-        return web.Response(text=html_path.read_text(encoding="utf-8"), content_type="text/html")
+        return web.Response(text=queue_html, content_type="text/html")
 
     async def api_my_queue(request: web.Request) -> web.Response:
         user = _require_user(request)
@@ -283,13 +366,17 @@ async def start_webapp_server(
         text = str(payload.get("text") or "").strip()
         if not text:
             return web.json_response({"error": "empty_text"}, status=400)
+        if len(text) > broadcast_text_max:
+            return web.json_response({"error": "text_too_long"}, status=400)
         entities_json = payload.get("entities_json")
+        if isinstance(entities_json, str) and len(entities_json) > _ENTITIES_JSON_MAX:
+            return web.json_response({"error": "entities_too_large"}, status=400)
         summary = await admin_broadcast_svc.broadcast_to_all(
             store, bot, text=text, entities_json=entities_json,
         )
         return web.json_response(summary)
 
-    app = web.Application()
+    app = web.Application(client_max_size=max_body_bytes, middlewares=[_guard_mw])
     app.router.add_get("/", index)
     app.router.add_get("/api/stats", api_stats)
     app.router.add_get("/api/user/{id}", api_user)

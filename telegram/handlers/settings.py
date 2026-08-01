@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from core.limits import ResourceLimitError
 from core.state import StateStore
 from core.timezone_resolver import timezone_from_coordinates
 from telegram.i18n import key_values, language_display_name, resolve_language_choice, tr
@@ -161,7 +162,11 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             bot_status="administrator",
             bot_can_post=True,
         )
-        await store.link_user_destination(message.from_user.id, chat.id, linked_via="username")
+        try:
+            await store.link_user_destination(message.from_user.id, chat.id, linked_via="username")
+        except ResourceLimitError as exc:
+            await message.answer(h.limit_message(lang, exc))
+            return
         await message.answer(
             tr(lang, "link_ok", title=chat.title or username),
             reply_markup=await h._main_menu_for(store, message.from_user.id),
@@ -204,7 +209,12 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             bot_status="administrator",
             bot_can_post=True,
         )
-        await store.link_user_destination(message.from_user.id, forward_chat.id, linked_via="forward")
+        try:
+            await store.link_user_destination(message.from_user.id, forward_chat.id, linked_via="forward")
+        except ResourceLimitError as exc:
+            await state.clear()
+            await message.answer(h.limit_message(lang, exc))
+            return
         await state.clear()
         await message.answer(
             tr(lang, "link_ok", title=forward_chat.title),

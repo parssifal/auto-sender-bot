@@ -4,10 +4,25 @@ import time
 import uuid
 from typing import Iterable
 
+import core.limits as limits
+from core.limits import ResourceLimitError
 from core.state.models import ScheduledPostRow
 
 
 class PostsMixin:
+    async def count_active_posts(self, user_id: int) -> int:
+        """Un-sent scheduled posts (status in pending/sending) for a user."""
+        row = await self._execute_fetchone(
+            "SELECT COUNT(1) AS cnt FROM scheduled_posts "
+            "WHERE user_id=? AND status IN ('pending', 'sending')",
+            (user_id,),
+        )
+        return 0 if row is None else int(row["cnt"])
+
+    async def _guard_active_posts_cap(self, user_id: int) -> None:
+        if await self.count_active_posts(user_id) >= limits.MAX_ACTIVE_POSTS_PER_USER:
+            raise ResourceLimitError("posts", limits.MAX_ACTIVE_POSTS_PER_USER)
+
     async def create_scheduled_text_post(
         self,
         user_id: int,
@@ -16,6 +31,7 @@ class PostsMixin:
         text: str,
         entities_json: str | None,
     ) -> str:
+        await self._guard_active_posts_cap(user_id)
         post_id = uuid.uuid4().hex
         await self._insert_scheduled_text_post(
             post_id=post_id,
@@ -39,6 +55,7 @@ class PostsMixin:
         caption_above: bool | None,
         media_items: list[dict[str, str]],
     ) -> str:
+        await self._guard_active_posts_cap(user_id)
         post_id = uuid.uuid4().hex
         await self._insert_scheduled_media_post(
             post_id=post_id,
@@ -75,6 +92,12 @@ class PostsMixin:
             raise ValueError("kind must be 'text' or 'media'")
         if kind == "media" and not media_items:
             raise ValueError("media_items are required for media broadcast")
+
+        # A broadcast fans out to one post per destination; count them against
+        # the same active-posts cap so repeated broadcasts can't grow unbounded.
+        active = await self.count_active_posts(user_id)
+        if active + len(unique_chat_ids) > limits.MAX_ACTIVE_POSTS_PER_USER:
+            raise ResourceLimitError("posts", limits.MAX_ACTIVE_POSTS_PER_USER)
 
         created_at = int(time.time())
         post_ids: list[str] = []

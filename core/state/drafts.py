@@ -3,11 +3,20 @@ from __future__ import annotations
 import time
 import uuid
 
+import core.limits as limits
+from core.limits import ResourceLimitError
 from core.rbac import DraftPermissions, can_create_team_draft, resolve_draft_permissions
 from core.state.models import DraftRow
 
 
 class DraftsMixin:
+    async def count_user_drafts(self, author_user_id: int) -> int:
+        row = await self._execute_fetchone(
+            "SELECT COUNT(1) AS cnt FROM drafts WHERE author_user_id=?",
+            (author_user_id,),
+        )
+        return 0 if row is None else int(row["cnt"])
+
     @staticmethod
     def _normalize_draft_payload(
         *,
@@ -62,6 +71,9 @@ class DraftsMixin:
             team_role = await self.get_team_member_role(team_id, author_user_id)
             if not can_create_team_draft(team_role):
                 raise ValueError("User must be an owner or editor to write team drafts")
+
+        if await self.count_user_drafts(author_user_id) >= limits.MAX_DRAFTS_PER_USER:
+            raise ResourceLimitError("drafts", limits.MAX_DRAFTS_PER_USER)
 
         normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
             self._normalize_draft_payload(

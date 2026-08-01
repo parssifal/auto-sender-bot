@@ -30,10 +30,12 @@ from telegram.handlers.keyboards import (
     _format_local, _selected_date_from_state,
     _is_time_selection_state,
 )
+from core.limits import ResourceLimitError
 from telegram.handlers.helpers import (
     _check_bot_admin_and_post,
     _check_user_admin,
     _clear_inline_markup,
+    limit_message,
     _edit_datetime_prompt,
     _extract_media_item,
     _is_datetime_entry_state,
@@ -904,10 +906,18 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
                     caption_above=bool(ctx.caption_above),
                     media_items=list(ctx.media_items),
                 )
-            post_ids = await broadcast_svc.create_broadcast(
-                store, user_id=user_id, chat_ids=selected_chat_ids,
-                scheduled_at_utc=scheduled_at_utc, content=content,
-            )
+            try:
+                post_ids = await broadcast_svc.create_broadcast(
+                    store, user_id=user_id, chat_ids=selected_chat_ids,
+                    scheduled_at_utc=scheduled_at_utc, content=content,
+                )
+            except ResourceLimitError as exc:
+                await state.clear()
+                await query.message.answer(
+                    limit_message(lang, exc),
+                    reply_markup=await _main_menu_for(store, query.from_user.id),
+                )
+                return
 
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
@@ -944,22 +954,30 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             local_dt = datetime.fromtimestamp(scheduled_at_utc, tz=timezone.utc).astimezone(ZoneInfo(tz_name))
             time_of_day_minutes = local_dt.hour * 60 + local_dt.minute
             interval_type = str(ctx.interval_type or "")
-            pattern_id, post_id = await store.create_recurring_series(
-                user_id=user_id,
-                chat_id=chat_id,
-                interval_type=interval_type,
-                weekdays_mask=_repeat_weekdays_mask(interval_type),
-                time_of_day_minutes=time_of_day_minutes,
-                timezone=tz_name,
-                start_at_utc=scheduled_at_utc,
-                kind=str(kind or ""),
-                text=str(ctx.text or "") if kind == "text" else None,
-                entities_json=ctx.entities_json if kind == "text" else None,
-                caption=ctx.caption if kind == "media" else None,
-                caption_entities_json=ctx.caption_entities_json if kind == "media" else None,
-                caption_above=bool(ctx.caption_above) if kind == "media" else None,
-                media_items=list(ctx.media_items) if kind == "media" else None,
-            )
+            try:
+                pattern_id, post_id = await store.create_recurring_series(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    interval_type=interval_type,
+                    weekdays_mask=_repeat_weekdays_mask(interval_type),
+                    time_of_day_minutes=time_of_day_minutes,
+                    timezone=tz_name,
+                    start_at_utc=scheduled_at_utc,
+                    kind=str(kind or ""),
+                    text=str(ctx.text or "") if kind == "text" else None,
+                    entities_json=ctx.entities_json if kind == "text" else None,
+                    caption=ctx.caption if kind == "media" else None,
+                    caption_entities_json=ctx.caption_entities_json if kind == "media" else None,
+                    caption_above=bool(ctx.caption_above) if kind == "media" else None,
+                    media_items=list(ctx.media_items) if kind == "media" else None,
+                )
+            except ResourceLimitError as exc:
+                await state.clear()
+                await query.message.answer(
+                    limit_message(lang, exc),
+                    reply_markup=await _main_menu_for(store, query.from_user.id),
+                )
+                return
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
             await query.message.answer(
@@ -999,9 +1017,17 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
                 await state.clear()
                 return
 
-            post_id = await draft_svc.publish_draft(
-                store, user_id=user_id, draft=draft, scheduled_at_utc=scheduled_at_utc
-            )
+            try:
+                post_id = await draft_svc.publish_draft(
+                    store, user_id=user_id, draft=draft, scheduled_at_utc=scheduled_at_utc
+                )
+            except ResourceLimitError as exc:
+                await state.clear()
+                await query.message.answer(
+                    limit_message(lang, exc),
+                    reply_markup=await _main_menu_for(store, query.from_user.id),
+                )
+                return
 
             await state.clear()
             local_time = _format_local(scheduled_at_utc, tz_name)
@@ -1030,25 +1056,33 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             await state.clear()
             return
 
-        if kind == "text":
-            post_id = await store.create_scheduled_text_post(
-                user_id=user_id,
-                chat_id=chat_id,
-                scheduled_at_utc=scheduled_at_utc,
-                text=str(ctx.text or ""),
-                entities_json=ctx.entities_json,
+        try:
+            if kind == "text":
+                post_id = await store.create_scheduled_text_post(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scheduled_at_utc=scheduled_at_utc,
+                    text=str(ctx.text or ""),
+                    entities_json=ctx.entities_json,
+                )
+            else:
+                media_items: list[dict[str, str]] = list(ctx.media_items)
+                post_id = await store.create_scheduled_media_post(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scheduled_at_utc=scheduled_at_utc,
+                    caption=ctx.caption,
+                    caption_entities_json=ctx.caption_entities_json,
+                    caption_above=bool(ctx.caption_above),
+                    media_items=media_items,
+                )
+        except ResourceLimitError as exc:
+            await state.clear()
+            await query.message.answer(
+                limit_message(lang, exc),
+                reply_markup=await _main_menu_for(store, query.from_user.id),
             )
-        else:
-            media_items: list[dict[str, str]] = list(ctx.media_items)
-            post_id = await store.create_scheduled_media_post(
-                user_id=user_id,
-                chat_id=chat_id,
-                scheduled_at_utc=scheduled_at_utc,
-                caption=ctx.caption,
-                caption_entities_json=ctx.caption_entities_json,
-                caption_above=bool(ctx.caption_above),
-                media_items=media_items,
-            )
+            return
 
         await state.clear()
         await state.set_state(ScheduleStates.entering_datetime)
@@ -1094,6 +1128,15 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         from_user = getattr(event, "from_user", None)
         if from_user:
             await store.ensure_user(from_user.id)
-            await store.link_user_destination(from_user.id, chat.id, linked_via="my_chat_member")
+            try:
+                await store.link_user_destination(from_user.id, chat.id, linked_via="my_chat_member")
+            except ResourceLimitError as exc:
+                # At the destination cap: don't auto-link. Best-effort DM notice
+                # (silently ignore if the user never started the bot).
+                try:
+                    lang = await _user_lang(store, from_user.id)
+                    await event.bot.send_message(from_user.id, limit_message(lang, exc))
+                except Exception:
+                    pass
 
     return router
