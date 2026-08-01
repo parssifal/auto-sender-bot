@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -9,6 +9,7 @@ from core.state import StateStore
 from core.timezone_resolver import timezone_from_coordinates
 from telegram.i18n import key_values, language_display_name, resolve_language_choice, tr
 from telegram.handlers import states, keyboards as kb, helpers as h
+from telegram.menu_button import set_user_menu_button
 
 
 _MENU_TIMEZONE_TEXTS = key_values("menu_timezone")
@@ -17,7 +18,7 @@ _MENU_DESTINATIONS_TEXTS = key_values("menu_destinations")
 _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 
 
-def build_router(store: StateStore) -> Router:
+def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     router = Router(name="settings")
 
     @router.message(F.text.in_(_MENU_DESTINATIONS_TEXTS))
@@ -106,7 +107,7 @@ def build_router(store: StateStore) -> Router:
         await message.answer(tr(lang, "language_prompt"), reply_markup=kb._language_kb())
 
     @router.message(states.LanguageStates.waiting_lang)
-    async def set_language(message: Message, state: FSMContext) -> None:
+    async def set_language(message: Message, state: FSMContext, bot: Bot) -> None:
         chosen = resolve_language_choice((message.text or "").strip())
         current_lang = await h._user_lang(store, message.from_user.id)
         if not chosen:
@@ -114,6 +115,11 @@ def build_router(store: StateStore) -> Router:
             return
         await store.set_user_language(message.from_user.id, chosen)
         await state.clear()
+        if webapp_url:
+            # Re-localize the blue "Menu" button to the newly chosen language.
+            await set_user_menu_button(
+                bot, chat_id=message.chat.id, webapp_url=webapp_url, language=chosen
+            )
         await message.answer(
             tr(chosen, "language_saved", language_name=language_display_name(chosen)),
             reply_markup=kb._main_menu_kb(chosen),

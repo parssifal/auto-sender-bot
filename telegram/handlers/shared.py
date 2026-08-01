@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -64,6 +64,7 @@ from telegram.handlers.helpers import (
     patch_schedule_ctx,
 )
 from telegram.handlers.teams import _handle_team_invite_start
+from telegram.menu_button import set_user_menu_button
 
 
 async def _get_content_ctx(state, current_state):
@@ -120,11 +121,11 @@ def _not_command_or_menu(message: Message) -> bool:
     return not text.startswith("/") and text not in _MENU_BUTTON_TEXTS
 
 
-def build_router(store: StateStore) -> Router:
+def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     router = Router(name="shared")
 
     @router.message(CommandStart())
-    async def cmd_start(message: Message, state: FSMContext) -> None:
+    async def cmd_start(message: Message, state: FSMContext, bot: Bot) -> None:
         await store.ensure_user(
             message.from_user.id,
             username=message.from_user.username,
@@ -138,6 +139,11 @@ def build_router(store: StateStore) -> Router:
 
         lang = await _user_lang(store, message.from_user.id)
         await state.clear()
+        if webapp_url:
+            # Localize this user's blue "Menu" button to open the Mini App.
+            await set_user_menu_button(
+                bot, chat_id=message.chat.id, webapp_url=webapp_url, language=lang
+            )
         await message.answer(
             tr(lang, "start_message"),
             reply_markup=_main_menu_kb(lang),

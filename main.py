@@ -15,6 +15,7 @@ from core.scheduler import scheduler_loop
 from core.state import StateStore
 from core.webapp import start_webapp_server
 from telegram.admin import build_admin_router
+from telegram.menu_button import set_default_menu_button
 from telegram.router import build_router
 from telegram.user_app import build_user_app_router
 
@@ -64,6 +65,9 @@ async def amain() -> None:
                 admin_ids=cfg.admin_ids,
                 bot=bot,
             )
+        # Blue "Menu" button next to the input field opens the user Mini App
+        # (reset to Telegram's default commands button when WEBAPP_URL is unset).
+        await set_default_menu_button(bot, webapp_url=cfg.webapp_url)
         await dp.start_polling(bot, polling_timeout=cfg.telegram_polling_timeout_seconds)
     finally:
         stop_event.set()
