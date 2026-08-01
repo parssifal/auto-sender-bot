@@ -1,0 +1,25 @@
+# systemd oneshot unit — runs the DuckDNS updater once.
+# Triggered on a schedule by duckdns.timer (do not enable this unit directly).
+#
+# Install:
+#   sudo install -m 755 duckdns-update.sh /usr/local/bin/duckdns-update.sh
+#   sudo cp duckdns.service duckdns.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now duckdns.timer
+#
+# Check:  systemctl status duckdns.timer ; journalctl -u duckdns.service --since "1 hour ago"
+
+[Unit]
+Description=Update DuckDNS dynamic DNS record
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=DUCKDNS_ENV=/etc/duckdns/duckdns.env
+ExecStart=/usr/local/bin/duckdns-update.sh
+# Hardening: the updater only needs outbound network + to read its env file.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

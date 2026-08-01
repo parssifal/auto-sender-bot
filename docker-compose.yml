@@ -16,7 +16,8 @@ services:
       WEBAPP_PORT: 8081
     ports:
       - 127.0.0.1:8080:8080
-      # Admin Mini App — put a reverse proxy (e.g. Caddy) with TLS in front of this.
+      # Mini App(s) — a TLS reverse proxy fronts this. Plan of record: Caddy +
+      # DuckDNS for a permanent HTTPS address (see deploy/README.md).
       - 127.0.0.1:8081:8081
     volumes:
       - ./data:/app/data

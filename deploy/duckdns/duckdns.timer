@@ -1,0 +1,14 @@
+# systemd timer — runs duckdns.service every 5 minutes (and shortly after boot).
+# Enable with:  sudo systemctl enable --now duckdns.timer
+
+[Unit]
+Description=Run DuckDNS updater every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+# Survive missed runs (e.g. laptop/VPS was asleep).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,34 @@
+# Caddyfile — permanent HTTPS front for the Mini App(s)
+#
+# Reverse-proxies https://<sub>.duckdns.org -> the bot's aiohttp webapp on
+# 127.0.0.1:8081 (plain HTTP), with automatic Let's Encrypt TLS.
+#
+# Install location on the VPS: /etc/caddy/Caddyfile
+# Reload after edits:          sudo systemctl reload caddy
+#
+# Prerequisites (owner):
+#   - DNS: <sub>.duckdns.org must resolve to this VPS's public IP.
+#   - Firewall: inbound TCP 80 (ACME HTTP-01 challenge) and 443 (TLS) open.
+#   - The bot is running and listening on 127.0.0.1:8081
+#     (docker-compose already publishes 127.0.0.1:8081:8081).
+#
+# Replace <sub> below with your registered DuckDNS subdomain before use.
+
+<sub>.duckdns.org {
+	# Automatic HTTPS via Let's Encrypt. Set a contact email so ACME can
+	# warn about exp/renewal issues (optional but recommended).
+	# tls you@example.com
+
+	encode gzip zstd
+
+	reverse_proxy 127.0.0.1:8081 {
+		# Preserve the original host/scheme so the app sees the public origin.
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Keep access logs; rotate via Caddy's built-in roller.
+	log {
+		output file /var/log/caddy/miniapp-access.log
+	}
+}
