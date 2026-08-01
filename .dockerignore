@@ -17,9 +17,7 @@ __pycache__/
 !/.env.example
 
 data/
-tests/
 
 AGENTS.md
 TODO.md
 README.md
-requirements-dev.txt
