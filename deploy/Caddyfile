@@ -21,13 +21,12 @@
 
 	encode gzip zstd
 
-	reverse_proxy 127.0.0.1:8081 {
-		# Preserve the original host/scheme so the app sees the public origin.
-		header_up Host {host}
-		header_up X-Forwarded-Proto {scheme}
-	}
+	# Caddy already forwards Host + X-Forwarded-* to the upstream by default,
+	# so a plain reverse_proxy is enough.
+	reverse_proxy 127.0.0.1:8081
 
-	# Keep access logs; rotate via Caddy's built-in roller.
+	# Access log. NOTE: Caddy runs as the `caddy` user, so /var/log/caddy must
+	# be writable by it: `sudo chown -R caddy:caddy /var/log/caddy` (see README).
 	log {
 		output file /var/log/caddy/miniapp-access.log
 	}

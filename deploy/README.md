@@ -70,10 +70,12 @@ sudo ufw allow 443/tcp
 ```bash
 # Install Caddy (Debian/Ubuntu) — see https://caddyserver.com/docs/install
 sudo mkdir -p /var/log/caddy
+sudo chown -R caddy:caddy /var/log/caddy              # Caddy runs as user `caddy`
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 sudo sed -i 's/<sub>/YOURSUB/' /etc/caddy/Caddyfile   # or edit by hand
+sudo caddy validate --config /etc/caddy/Caddyfile     # sanity-check
 sudo systemctl enable --now caddy
-sudo systemctl reload caddy
+sudo systemctl restart caddy                          # load the new config
 journalctl -u caddy -n 30 --no-pager                  # watch cert issuance
 ```
 Caddy obtains the Let's Encrypt certificate automatically on first request.
