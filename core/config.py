@@ -36,7 +36,7 @@ def _load_dotenv(path: str = ".env") -> None:
             line = line.removeprefix("export ").lstrip()
 
         if "=" not in line:
-            raise RuntimeError(f"Invalid {env_path} line {line_no}: {raw_line!r}")
+            raise RuntimeError(f"Invalid {env_path} line {line_no}: missing '='")
 
         key, value = line.split("=", 1)
         key = key.strip()

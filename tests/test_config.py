@@ -57,6 +57,18 @@ def test_load_config_rejects_non_positive_healthcheck_port(monkeypatch: pytest.M
         config_module.load_config()
 
 
+def test_load_dotenv_invalid_line_does_not_leak_secret(tmp_path) -> None:
+    secret = "1234567890:AAHfakebottokenSECRETdonotleak"
+    env_file = tmp_path / ".env"
+    env_file.write_text(secret + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        config_module._load_dotenv(str(env_file))
+
+    assert "line 1" in str(excinfo.value)
+    assert secret not in str(excinfo.value)
+
+
 def test_load_config_rejects_non_positive_scheduler_poll(monkeypatch: pytest.MonkeyPatch) -> None:
     _disable_dotenv(monkeypatch)
     monkeypatch.setenv("BOT_TOKEN", "token")
