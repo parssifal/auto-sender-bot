@@ -234,6 +234,28 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert call.text != tr("ru", "invalid_datetime_format")
 
 
+# T-15: /timezone in a group chat must not leave TimezoneStates armed on the
+# group's (chat, user) key, or every later group message gets timezone_invalid.
+@pytest.mark.asyncio
+async def test_timezone_command_leaves_no_state_in_group(interrupt_flow: InterruptHarness) -> None:
+    group_chat_id = -5000
+    group_key = StorageKey(bot_id=BOT_ID, chat_id=group_chat_id, user_id=USER_ID)
+    payload = {
+        "update_id": 30,
+        "message": {
+            "message_id": 40,
+            "date": 1_700_000_000,
+            "chat": {"id": group_chat_id, "type": "group", "title": "grp"},
+            "from": {"id": USER_ID, "is_bot": False, "first_name": "Test"},
+            "text": "/timezone",
+            "entities": [{"type": "bot_command", "offset": 0, "length": 9}],
+        },
+    }
+    await interrupt_flow.dispatcher.feed_update(interrupt_flow.bot, Update.model_validate(payload))
+
+    assert await interrupt_flow.dispatcher.storage.get_state(group_key) is None
+
+
 # T-14: state-scoped message handlers outside shared.py that lacked the
 # _not_command_or_menu filter and swallowed later-router commands as their input.
 # /team_create lives in the last-registered router (teams), so it is swallowed by

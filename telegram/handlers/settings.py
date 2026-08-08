@@ -38,7 +38,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     async def cmd_timezone(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
-        await state.set_state(states.TimezoneStates.waiting_tz)
         if message.chat.type != "private":
             await message.answer(
                 tr(lang, "timezone_private_only"),
@@ -46,6 +45,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
                 reply_markup=await h._main_menu_for(store, message.from_user.id),
             )
             return
+        await state.set_state(states.TimezoneStates.waiting_tz)
         await message.answer(
             tr(lang, "timezone_prompt"),
             parse_mode="Markdown",
