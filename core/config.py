@@ -82,6 +82,8 @@ def load_config() -> Config:
             scheduler_poll_seconds = float(poll_seconds_raw)
         except ValueError as exc:
             raise RuntimeError("SCHEDULER_POLL_SECONDS must be a number") from exc
+    if scheduler_poll_seconds <= 0:
+        raise RuntimeError("SCHEDULER_POLL_SECONDS must be > 0")
 
     polling_timeout_raw = os.getenv("TELEGRAM_POLLING_TIMEOUT_SECONDS")
     telegram_polling_timeout_seconds = 30

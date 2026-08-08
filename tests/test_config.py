@@ -57,6 +57,25 @@ def test_load_config_rejects_non_positive_healthcheck_port(monkeypatch: pytest.M
         config_module.load_config()
 
 
+def test_load_config_rejects_non_positive_scheduler_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("SCHEDULER_POLL_SECONDS", "0")
+
+    with pytest.raises(RuntimeError, match="SCHEDULER_POLL_SECONDS must be > 0"):
+        config_module.load_config()
+
+
+def test_load_config_parses_scheduler_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("SCHEDULER_POLL_SECONDS", "1.5")
+
+    cfg = config_module.load_config()
+
+    assert cfg.scheduler_poll_seconds == 1.5
+
+
 def test_load_config_parses_redis_url(monkeypatch: pytest.MonkeyPatch) -> None:
     _disable_dotenv(monkeypatch)
     monkeypatch.setenv("BOT_TOKEN", "token")
