@@ -161,7 +161,9 @@ function composeLocal(dateStr,timeStr){ const [y,m,d]=dateStr.split("-"); return
 function escapeHtml(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
 async function api(path,opts){
-  const r = await fetch(path,{ headers:{...AUTH,...(opts?.headers||{})}, ...opts });
+  // opts spreads first: otherwise its own `headers` key overwrites the merged
+  // object and drops Authorization (→ 403 on any call that sets Content-Type).
+  const r = await fetch(path,{ ...opts, headers:{...AUTH,...(opts?.headers||{})} });
   if(!r.ok){
     let msg = r.status;
     try{ const j = await r.json(); msg = j.error || msg; }catch{}

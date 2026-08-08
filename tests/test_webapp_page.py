@@ -63,6 +63,14 @@ def test_queue_page_loads_telegram_sdk() -> None:
     assert "telegram-web-app.js" in html
 
 
+def test_queue_page_keeps_auth_header_on_calls_with_own_headers() -> None:
+    # Regression: `{headers:{...AUTH}, ...opts}` let opts.headers (set by the
+    # reschedule POST for Content-Type) clobber Authorization → 403.
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    call = html.split("await fetch(path,")[1].split(");")[0]
+    assert call.index("...opts") < call.index("headers:{...AUTH")
+
+
 def test_queue_page_has_role_gated_admin_link() -> None:
     html = QUEUE_HTML.read_text(encoding="utf-8")
     # The admin-panel button exists but starts hidden…
