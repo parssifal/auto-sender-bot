@@ -218,6 +218,8 @@ async def start_webapp_server(
     rate_limit_window_s: float = _DEFAULT_RATE_LIMIT_WINDOW_S,
     broadcast_text_max: int = _DEFAULT_BROADCAST_TEXT_MAX,
 ) -> WebappServer:
+    if not bot_token:
+        raise ValueError("bot_token must be non-empty")
     admin_set = set(admin_ids)
     rate_limiter = _RateLimiter(
         max_requests=rate_limit_max, window_seconds=rate_limit_window_s

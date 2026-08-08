@@ -138,6 +138,17 @@ async def server(store: StateStore):
 
 
 @pytest.mark.asyncio
+async def test_empty_bot_token_rejected(store) -> None:
+    # With an empty token, check_webapp_signature computes HMAC over b"" and any
+    # user_id can be forged. Refuse to start rather than trust a blank token.
+    with pytest.raises(ValueError, match="bot_token must be non-empty"):
+        await start_webapp_server(
+            host="127.0.0.1", port=0, store=store,
+            bot_token="", admin_ids=(ADMIN_ID,), bot=_FakeBot(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_oversized_body_rejected(server) -> None:
     url = server.url("/api/broadcast")
     big = {"text": "x" * 9000}  # raw body exceeds max_body_bytes=8192
