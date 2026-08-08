@@ -68,10 +68,20 @@ async def run_migrations(conn: aiosqlite.Connection) -> None:
         version = _version_of(path)
         if version in applied:
             continue
-        for stmt in _split_statements(path.read_text()):
-            await conn.execute(stmt)
-        await conn.execute(
-            "INSERT INTO schema_migrations VALUES (?, datetime('now'))",
-            (version,),
+        # Apply the whole file + its version row as ONE transaction via
+        # executescript. executescript issues an implicit COMMIT first and
+        # ignores isolation_level, so the transaction must live INSIDE the
+        # script (BEGIN;...COMMIT;) rather than an outer execute("BEGIN").
+        # This makes each file atomic AND tolerates ";" inside trigger/string
+        # bodies (a naive split-on-";" would shred those). version is an int
+        # from _version_of, so the f-string interpolation is safe.
+        script = (
+            "BEGIN;\n"
+            + path.read_text()
+            + f"\nINSERT INTO schema_migrations VALUES ({version}, datetime('now'));\nCOMMIT;"
         )
-        await conn.commit()
+        try:
+            await conn.executescript(script)
+        except Exception:
+            await conn.rollback()
+            raise

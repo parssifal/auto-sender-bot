@@ -111,6 +111,74 @@ async def test_partial_schema_is_completed_not_baselined():
 
 
 @pytest.mark.asyncio
+async def test_trigger_with_semicolons_in_body_applies(tmp_path, monkeypatch):
+    # Defect 8a: split-on-";" shreds a CREATE TRIGGER whose BEGIN...END body
+    # holds inner ";". Applying the file as one script must keep it intact.
+    import core.migrate as migrate_mod
+
+    mig = tmp_path / "migrations"
+    mig.mkdir()
+    (mig / "001_t.sql").write_text(
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER);"
+    )
+    (mig / "002_trig.sql").write_text(
+        "CREATE TRIGGER bump AFTER INSERT ON t\n"
+        "BEGIN\n"
+        "  UPDATE t SET n = n + 1 WHERE id = NEW.id;\n"
+        "  UPDATE t SET n = n + 1 WHERE id = NEW.id;\n"
+        "END;\n"
+    )
+    monkeypatch.setattr(migrate_mod, "MIGRATIONS_DIR", mig)
+
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        await migrate_mod.run_migrations(conn)
+
+        triggers = {
+            r[0]
+            for r in await conn.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        assert "bump" in triggers
+        versions = {
+            r[0]
+            for r in await conn.execute_fetchall("SELECT version FROM schema_migrations")
+        }
+        assert versions == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_mid_file_failure_leaves_no_partial_ddl(tmp_path, monkeypatch):
+    # Defect 8b: a file's statements must be atomic. A valid CREATE followed by
+    # invalid SQL in the same file must leave neither the table nor a version.
+    import core.migrate as migrate_mod
+
+    mig = tmp_path / "migrations"
+    mig.mkdir()
+    (mig / "001_ok.sql").write_text("CREATE TABLE ok (id INTEGER PRIMARY KEY);")
+    (mig / "002_partial.sql").write_text(
+        "CREATE TABLE early (id INTEGER PRIMARY KEY);\n"
+        "CREATE TABLE broken (this is not valid sql;\n"
+    )
+    monkeypatch.setattr(migrate_mod, "MIGRATIONS_DIR", mig)
+
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        with pytest.raises(Exception):
+            await migrate_mod.run_migrations(conn)
+
+        tables = await _tables(conn)
+        assert "ok" in tables  # first file committed
+        assert "early" not in tables  # second file rolled back whole
+        versions = {
+            r[0]
+            for r in await conn.execute_fetchall("SELECT version FROM schema_migrations")
+        }
+        assert versions == {1}
+
+
+@pytest.mark.asyncio
 async def test_failed_file_leaves_prior_versions_and_reruns_clean(tmp_path, monkeypatch):
     import core.migrate as migrate_mod
 
