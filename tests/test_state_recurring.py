@@ -62,6 +62,50 @@ async def _seed_recurring_pattern(
 
 
 @pytest.mark.asyncio
+async def test_weekdays_mask_rejected_for_non_weekdays_intervals() -> None:
+    # weekdays_mask is only honoured by interval_type='weekdays' (scheduler.py:84).
+    # A mask on daily/weekly is stored but silently ignored, so reject it at the
+    # boundary instead of leaving a dead contract.
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.upsert_destination(
+            -1001, "channel", "Dest", "dest", "administrator", True,
+        )
+        for interval in ("daily", "weekly"):
+            with pytest.raises(ValueError, match="weekdays_mask"):
+                await store.create_recurring_pattern(
+                    user_id=123, chat_id=-1001, interval_type=interval,
+                    weekdays_mask=31, time_of_day_minutes=600,
+                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+                )
+            with pytest.raises(ValueError, match="weekdays_mask"):
+                await store.create_recurring_series(
+                    user_id=123, chat_id=-1001, interval_type=interval,
+                    weekdays_mask=31, time_of_day_minutes=600,
+                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+                    kind="text", text="x", entities_json=None,
+                )
+        # Legitimate uses still work: weekdays+mask, and weekly with no mask.
+        wk = await store.create_recurring_pattern(
+            user_id=123, chat_id=-1001, interval_type="weekdays",
+            weekdays_mask=31, time_of_day_minutes=600,
+            timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+        )
+        assert wk
+        weekly = await store.create_recurring_pattern(
+            user_id=123, chat_id=-1001, interval_type="weekly",
+            time_of_day_minutes=600, timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+        )
+        assert weekly
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_migrate_creates_recurring_patterns_schema() -> None:
     conn = await open_db(":memory:")
     try:
