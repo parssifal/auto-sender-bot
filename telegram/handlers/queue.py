@@ -605,6 +605,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         post_id = query.data.split(":")[1]
         ok = await store.cancel_post(user_id=query.from_user.id, post_id=post_id)
         await query.answer(tr(lang, "queue_cancel_ok") if ok else tr(lang, "queue_cancel_missing"), show_alert=False)
+        if not ok:
+            return
         await query.message.answer(tr(lang, "done"), reply_markup=await h._main_menu_for(store, query.from_user.id))
 
     return router

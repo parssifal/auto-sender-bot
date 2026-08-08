@@ -234,6 +234,17 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert call.text != tr("ru", "invalid_datetime_format")
 
 
+# T-18: a failed queue cancel must not follow the "not found" alert with "Done".
+@pytest.mark.asyncio
+async def test_failed_queue_cancel_sends_no_done(interrupt_flow: InterruptHarness) -> None:
+    await interrupt_flow.feed_callback("qcancel:does-not-exist", update_id=10, message_id=20)
+
+    done = tr("ru", "done")
+    assert not any(
+        isinstance(c, SendMessage) and c.text == done for c in interrupt_flow.bot.calls
+    )
+
+
 # T-17: /queue and /drafts mid-compose must clear the FSM state, or the next
 # plain message is silently swallowed as post text.
 @pytest.mark.parametrize("command", ["/queue", "/drafts"])
