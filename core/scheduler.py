@@ -17,7 +17,7 @@ from aiogram.exceptions import (
 )
 
 from core.limits import ResourceLimitError
-from core.notifier import send_media_post, send_text
+from core.notifier import InvalidEntitiesError, send_media_post, send_text
 from core.state import RecurringPattern, ScheduledPostRow, StateStore
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,21 @@ def _compute_backoff_seconds(attempt: int) -> int:
     idx = min(max(attempt - 1, 0), len(base) - 1)
     jitter = random.randint(0, 3)
     return base[idx] + jitter
+
+
+# After this many send attempts a post that still fails is marked 'failed' instead of
+# retried forever (which would hold an active-posts quota slot indefinitely). Six matches
+# the backoff ladder above: each tier is used once, before the repeating 3600s cap.
+MAX_SEND_ATTEMPTS = 6
+
+
+async def _mark_retry_or_failed(store: StateStore, post: ScheduledPostRow, *, next_retry_at_utc: int, error: str) -> None:
+    # post.attempts is the count BEFORE claim_post_for_sending incremented it for this
+    # attempt, so the current attempt number (and the DB value now) is post.attempts + 1.
+    if post.attempts + 1 >= MAX_SEND_ATTEMPTS:
+        await store.mark_failed(post_id=post.id, error=error)
+    else:
+        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at_utc, error=error)
 
 
 async def _user_is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -203,20 +218,24 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
         logger.info("Sent post %s to chat %s", post.id, post.chat_id)
     except TelegramRetryAfter as exc:
         next_retry_at = int(time.time()) + int(getattr(exc, "retry_after", 1)) + 1
-        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at, error=f"retry_after: {exc}")
+        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=f"retry_after: {exc}")
         logger.warning("RetryAfter for post %s: %s", post.id, exc)
     except (TelegramNetworkError,) as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.warning("Network error for post %s: %s", post.id, exc)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
         await store.mark_failed(post_id=post.id, error=str(exc))
         logger.warning("Permanent Telegram error for post %s: %s", post.id, exc)
     except TelegramAPIError as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.warning("Telegram API error for post %s: %s", post.id, exc)
+    except InvalidEntitiesError as exc:
+        # Deterministic content error: retrying can never fix it, so fail immediately.
+        await store.mark_failed(post_id=post.id, error=f"invalid entities: {exc}")
+        logger.warning("Post %s failed: invalid entities_json - %s", post.id, exc)
     except Exception as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.exception("Unexpected error sending post %s", post.id)

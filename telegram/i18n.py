@@ -32,6 +32,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Or use the calendar and quick buttons below."
         ),
         "invalid_datetime_format": "Invalid format. Example: `12.03.2026 12:15`",
+        "datetime_dst_gap": "That time doesn't exist on that day (clocks move forward for DST). Choose another time.",
         "datetime_future_required": "Time must be in the future.",
         "datetime_min_lead_required": "Time must be at least 5 minutes in the future.",
         "schedule_time_prompt": "Choose time for {date_label}, or send full date and time manually.",
@@ -411,6 +412,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Или используйте календарь и быстрые кнопки ниже."
         ),
         "invalid_datetime_format": "Неверный формат. Пример: `12.03.2026 12:15`",
+        "datetime_dst_gap": "Это время в этот день не существует (перевод часов на летнее время). Выберите другое время.",
         "datetime_future_required": "Время должно быть в будущем.",
         "datetime_min_lead_required": "Время должно быть минимум через 5 минут.",
         "schedule_time_prompt": "Выберите время для {date_label} или отправьте полную дату и время вручную.",

@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from core.time_picker import TimePicker, generate_calendar, get_quick_options, resolve_quick_option, resolve_selected_time
+from core.utils import NonexistentLocalTimeError
 
 
 def test_generate_calendar_marks_current_month_days() -> None:
@@ -132,3 +133,24 @@ def test_resolve_selected_time_creates_local_and_utc_values() -> None:
 
     assert parsed.local_dt.isoformat() == "2026-03-12T09:30:00+03:00"
     assert parsed.utc_epoch == int(datetime(2026, 3, 12, 6, 30, tzinfo=timezone.utc).timestamp())
+
+
+def test_resolve_quick_option_1h_adds_real_hour_across_dst_fallback() -> None:
+    # T-08: Europe/Berlin fall-back on 2026-10-25, transition at 01:00 UTC.
+    # now = 00:30 UTC (02:30 CEST). One REAL hour later = 01:30 UTC = 02:30 CET.
+    # Buggy wall-clock arithmetic yields 03:30+01:00 (two real hours).
+    parsed = resolve_quick_option(
+        "1h",
+        tz_name="Europe/Berlin",
+        now_utc=datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc),
+    )
+
+    assert parsed.local_dt.isoformat() == "2026-10-25T02:30:00+01:00"
+    assert parsed.utc_epoch == int(datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc).timestamp())
+
+
+def test_resolve_selected_time_rejects_nonexistent_dst_gap() -> None:
+    # T-07/T-09: 02:30 on 2026-03-29 does not exist in Europe/Berlin (spring-forward gap).
+    # Calendar time picks feed the recurring flow; rejecting here stops a shifted series.
+    with pytest.raises(NonexistentLocalTimeError):
+        resolve_selected_time(date(2026, 3, 29), hour=2, minute=30, tz_name="Europe/Berlin")

@@ -167,6 +167,20 @@ async def test_reschedule_unparseable_400(server, store):
 
 
 @pytest.mark.asyncio
+async def test_reschedule_dst_gap_400(server, store):
+    # T-07 (Mini App surface): 02:30 on 2026-03-29 does not exist in Europe/Berlin.
+    await store.set_user_timezone(USER_A, "Europe/Berlin")
+    pid = await _mk_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/my/post/{pid}/reschedule"),
+                          json={"local_datetime": "29.03.2026 02:30"},
+                          headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 400
+            body = await r.json()
+            assert body["error"] == "datetime_dst_gap"
+
+
+@pytest.mark.asyncio
 async def test_reschedule_not_owned_404(server, store):
     pid = await _mk_post(store, USER_B)
     local = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%d.%m.%Y %H:%M")

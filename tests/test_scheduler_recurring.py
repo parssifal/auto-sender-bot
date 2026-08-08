@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -550,5 +551,61 @@ async def test_process_due_post_ends_series_when_active_posts_cap_is_reached() -
         pattern = await store.get_recurring_pattern(pattern_id)
         assert pattern is not None
         assert pattern.is_active is False
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_marks_failed_after_max_attempts() -> None:
+    # T-10: a post whose send keeps failing must stop retrying and free its quota slot,
+    # not retry forever with a 3600s backoff cap while holding an active-posts slot.
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await _seed_destination(store)
+        now0 = int(time.time())
+        due_at = now0 - 10
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Doomed", None)
+
+        bot = FakeBot(fail_send=True)
+        # next_retry_at is computed from real time.time(); step now past the max backoff
+        # (3600s) each tick so every retry is re-claimable.
+        now = now0
+        statuses: list[str] = []
+        for _ in range(6):
+            post = await store.get_scheduled_post(post_id)
+            assert post is not None
+            await _process_due_post(bot=bot, store=store, post=post, now_utc=now)
+            statuses.append((await store.get_scheduled_post(post_id)).status)
+            now += 3700
+
+        assert statuses == ["pending", "pending", "pending", "pending", "pending", "failed"]
+        final = await store.get_scheduled_post(post_id)
+        assert final.attempts == 6
+        assert await store.count_active_posts(USER_ID) == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_fails_broken_entities_without_retry() -> None:
+    # T-11: a deterministic entities_json parse error can never be fixed by retrying, so
+    # the post must go straight to 'failed' on the first attempt, not retry (up to 6x).
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await _seed_destination(store)
+        due_at = int(time.time()) - 10
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "hi", "not json")
+
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+
+        final = await store.get_scheduled_post(post_id)
+        assert final.status == "failed"
+        assert final.attempts == 1
     finally:
         await conn.close()

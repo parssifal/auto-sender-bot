@@ -1,6 +1,6 @@
 import pytest
 
-from core.notifier import send_media_post
+from core.notifier import InvalidEntitiesError, _load_entities, send_media_post
 
 
 class _FakeMessage:
@@ -124,3 +124,14 @@ async def test_returns_message_ids_including_separate_long_caption() -> None:
     )
     # photo first (101), then the separate caption message (102)
     assert stats.message_ids == (101, 102)
+
+
+def test_load_entities_raises_invalid_entities_error_on_bad_json() -> None:
+    # T-11: malformed entities_json is deterministic; surface it as a permanent error.
+    with pytest.raises(InvalidEntitiesError):
+        _load_entities("not json")
+
+
+def test_load_entities_raises_invalid_entities_error_on_bad_structure() -> None:
+    with pytest.raises(InvalidEntitiesError):
+        _load_entities('[{"type": "bold"}]')  # MessageEntity needs offset/length
