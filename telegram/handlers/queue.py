@@ -584,6 +584,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     @router.message(Command("queue"))
     async def cmd_queue(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        await state.clear()
         await _render_queue_page(store, message, page=0, user_id=message.from_user.id, webapp_url=webapp_url)
 
     @router.callback_query(F.data.startswith("qpage:"))

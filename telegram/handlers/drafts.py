@@ -215,8 +215,9 @@ def build_router(store: StateStore) -> Router:
     router = Router(name="drafts")
 
     @router.message(Command("drafts"))
-    async def cmd_drafts(message: Message) -> None:
+    async def cmd_drafts(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        await state.clear()
         await _render_drafts(store, message, user_id=message.from_user.id, scope="all", page=0, edit=False)
 
     @router.message(Command("draft_create"))

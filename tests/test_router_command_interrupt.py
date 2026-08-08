@@ -234,6 +234,18 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert call.text != tr("ru", "invalid_datetime_format")
 
 
+# T-17: /queue and /drafts mid-compose must clear the FSM state, or the next
+# plain message is silently swallowed as post text.
+@pytest.mark.parametrize("command", ["/queue", "/drafts"])
+@pytest.mark.asyncio
+async def test_list_command_clears_state(interrupt_flow: InterruptHarness, command: str) -> None:
+    await interrupt_flow.reach_collecting_post()
+
+    await interrupt_flow.feed_message(command, update_id=10, message_id=20)
+
+    assert await interrupt_flow.get_state() is None
+
+
 # T-16: a stale sdsel: destination button must be ignored outside
 # ScheduleStates.choosing_destination, not hijack the current flow.
 @pytest.mark.asyncio
