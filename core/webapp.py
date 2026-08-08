@@ -175,6 +175,22 @@ async def _post_to_json(store: StateStore, row: ScheduledPostRow) -> dict:
     }
 
 
+def _client_key(request: web.Request) -> str:
+    """Rate-limit key: the real client behind our reverse proxy.
+
+    Behind our own Caddy (deploy/Caddyfile) ``request.remote`` is always
+    127.0.0.1, so keying on it puts every client in one bucket. Caddy appends
+    the real peer as the LAST ``X-Forwarded-For`` hop; earlier hops are
+    client-supplied and spoofable, so trust only the last one.
+    """
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        last = xff.rsplit(",", 1)[-1].strip()
+        if last:
+            return last
+    return request.remote or "unknown"
+
+
 def _extract_init_data(request: web.Request) -> str | None:
     header = request.headers.get("Authorization")
     if not header:
@@ -218,7 +234,7 @@ async def start_webapp_server(
 
     @web.middleware
     async def _guard_mw(request: web.Request, handler):
-        key = request.remote or "unknown"
+        key = _client_key(request)
         if not rate_limiter.allow(key, now=time.monotonic()):
             return web.json_response({"error": "rate_limited"}, status=429)
         # Reject oversized bodies up front. aiohttp's client_max_size also guards

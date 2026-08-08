@@ -12,7 +12,7 @@ from aiohttp import ClientSession
 
 from core.db import open_db
 from core.state import StateStore
-from core.webapp import _RateLimiter, start_webapp_server
+from core.webapp import _RateLimiter, _client_key, start_webapp_server
 
 TOKEN = "123456:test-token"
 ADMIN_ID = 42
@@ -82,6 +82,41 @@ def test_rate_limiter_bounds_tracked_keys() -> None:
     for i in range(1000):
         rl.allow(f"key-{i}", now=1.0)
     assert rl.tracked_key_count() <= 100
+
+
+# --------------------------------------------------------------------------- #
+# _client_key: rate-limit key behind our reverse proxy
+# --------------------------------------------------------------------------- #
+
+class _FakeReq:
+    def __init__(self, *, xff: str | None = None, remote: str | None = "127.0.0.1"):
+        self.headers = {} if xff is None else {"X-Forwarded-For": xff}
+        self.remote = remote
+
+
+def test_client_key_uses_last_xff_hop() -> None:
+    # Two different real clients behind the proxy get two different buckets,
+    # even though request.remote is 127.0.0.1 for both.
+    a = _client_key(_FakeReq(xff="203.0.113.7"))
+    b = _client_key(_FakeReq(xff="198.51.100.9"))
+    assert a == "203.0.113.7"
+    assert b == "198.51.100.9"
+    assert a != b
+
+
+def test_client_key_ignores_spoofed_first_hop() -> None:
+    # Caddy appends the real peer as the LAST hop; a client-supplied first hop
+    # must not let an attacker share/poison a victim's bucket. Two requests
+    # with different real last hops stay separate regardless of the forged head.
+    victim = _client_key(_FakeReq(xff="203.0.113.7"))
+    attacker = _client_key(_FakeReq(xff="203.0.113.7, 198.51.100.9"))
+    assert attacker == "198.51.100.9"
+    assert attacker != victim
+
+
+def test_client_key_falls_back_to_remote_without_xff() -> None:
+    assert _client_key(_FakeReq(xff=None, remote="10.0.0.5")) == "10.0.0.5"
+    assert _client_key(_FakeReq(xff=None, remote=None)) == "unknown"
 
 
 # --------------------------------------------------------------------------- #
