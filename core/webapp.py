@@ -30,6 +30,9 @@ _DEFAULT_RATE_LIMIT_WINDOW_S = 60.0
 # A broadcast is a single Telegram message per recipient (max 4096 chars).
 _DEFAULT_BROADCAST_TEXT_MAX = 4096
 _ENTITIES_JSON_MAX = 32 * 1024
+# Effective TTL for a Telegram WebApp initData payload. Telegram itself does not
+# expire it, so we bound replay of a leaked payload to a short window.
+_INIT_DATA_MAX_AGE_S = 600
 
 
 class _RateLimiter:
@@ -251,7 +254,7 @@ async def start_webapp_server(
         init_data = _extract_init_data(request)
         if not init_data:
             return None
-        user = validate_init_data(init_data, bot_token)
+        user = validate_init_data(init_data, bot_token, max_age_s=_INIT_DATA_MAX_AGE_S)
         if user is None or int(user.get("id", 0)) not in admin_set:
             return None
         return user
@@ -260,7 +263,7 @@ async def start_webapp_server(
         init_data = _extract_init_data(request)
         if not init_data:
             return None
-        return validate_init_data(init_data, bot_token)
+        return validate_init_data(init_data, bot_token, max_age_s=_INIT_DATA_MAX_AGE_S)
 
     async def index(_request: web.Request) -> web.Response:
         return web.Response(text=admin_html, content_type="text/html")

@@ -21,10 +21,10 @@ USER_B = 222
 CHAT_A = -3001
 
 
-def _init_data(user_id: int, *, token: str = TOKEN) -> str:
+def _init_data(user_id: int, *, token: str = TOKEN, auth_date: int | None = None) -> str:
     user = {"id": user_id, "first_name": "U"}
     fields = {
-        "auth_date": str(int(time.time())),
+        "auth_date": str(int(time.time()) if auth_date is None else auth_date),
         "query_id": "AAA",
         "user": json.dumps(user, separators=(",", ":")),
     }
@@ -87,6 +87,25 @@ async def test_my_queue_bad_signature_forbidden(server):
     async with ClientSession() as s:
         async with s.get(server.url("/api/my/queue"), headers={"Authorization": bad}) as r:
             assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_my_queue_rejects_initdata_older_than_600s(server):
+    # The caller enforces a 600s effective TTL on initData.
+    stale = _init_data(USER_A, auth_date=int(time.time()) - 700)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": stale}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_my_queue_accepts_initdata_within_600s(server):
+    fresh = _init_data(USER_A, auth_date=int(time.time()) - 100)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": fresh}) as r:
+            assert r.status == 200
 
 
 @pytest.mark.asyncio
