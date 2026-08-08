@@ -16,6 +16,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 
+from core.limits import ResourceLimitError
 from core.notifier import send_media_post, send_text
 from core.state import RecurringPattern, ScheduledPostRow, StateStore
 
@@ -105,12 +106,19 @@ async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPos
         logger.info("Recurring pattern %s completed at end_at=%s", pattern.id, pattern.end_at_utc)
         return
 
-    next_instance = await store.materialize_next_recurring_post(
-        pattern_id=pattern.id,
-        source_post_id=post.id,
-        next_ordinal=next_ordinal,
-        scheduled_for_utc=next_scheduled_for_utc,
-    )
+    try:
+        next_instance = await store.materialize_next_recurring_post(
+            pattern_id=pattern.id,
+            source_post_id=post.id,
+            next_ordinal=next_ordinal,
+            scheduled_for_utc=next_scheduled_for_utc,
+        )
+    except ResourceLimitError:
+        # Background work: nobody is waiting for this error. End the series
+        # visibly instead of leaving an active pattern that never moves again.
+        await store.delete_recurring_pattern(pattern.id)
+        logger.warning("Recurring pattern %s stopped: user %s is at the active-posts cap", pattern.id, post.user_id)
+        return
     if next_instance is None:
         logger.info("Recurring pattern %s became inactive before materialization", pattern.id)
         return

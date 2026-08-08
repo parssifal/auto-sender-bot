@@ -267,6 +267,7 @@ class RecurringMixin:
         if source_post is None:
             raise ValueError(f"Scheduled post {source_post_id} not found")
 
+        await self._guard_active_posts_cap(source_post.user_id)
         media_items = await self.get_post_media(source_post_id) if source_post.kind == "media" else []
         now = int(time.time())
         next_post_id = uuid.uuid4().hex
@@ -369,6 +370,7 @@ class RecurringMixin:
             raise ValueError("Recurring media post must contain at least one media item")
 
         await self._guard_recurring_cap(user_id)
+        await self._guard_active_posts_cap(user_id)
         now = int(time.time())
         pattern_id = uuid.uuid4().hex
         post_id = uuid.uuid4().hex

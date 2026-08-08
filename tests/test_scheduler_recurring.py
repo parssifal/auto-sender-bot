@@ -421,3 +421,46 @@ async def test_process_due_post_ends_series_when_downtime_consumes_max_occurrenc
         assert pattern.is_active is False
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_ends_series_when_active_posts_cap_is_reached() -> None:
+    """Materialization is background work: there is nobody to hand a
+    ResourceLimitError to, so the series ends visibly instead of stalling
+    forever as an active pattern with no pending instance."""
+    import core.limits as limits
+
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        tz = ZoneInfo("Europe/Moscow")
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=tz).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at + 86400, "Other pending", None)
+        original_post = await store.get_scheduled_post(post_id)
+        assert original_post is not None
+
+        original_cap = limits.MAX_ACTIVE_POSTS_PER_USER
+        limits.MAX_ACTIVE_POSTS_PER_USER = 1
+        try:
+            await _process_due_post(bot=FakeBot(), store=store, post=original_post, now_utc=due_at)
+        finally:
+            limits.MAX_ACTIVE_POSTS_PER_USER = original_cap
+
+        sent_post = await store.get_scheduled_post(post_id)
+        assert sent_post is not None
+        assert sent_post.status == "sent"
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is False
+    finally:
+        await conn.close()

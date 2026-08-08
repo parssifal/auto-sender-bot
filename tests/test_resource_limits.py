@@ -119,3 +119,35 @@ async def test_recurring_cap(store: StateStore, monkeypatch) -> None:
             kind="text", text="b",
         )
     assert exc.value.resource == "recurring"
+
+@pytest.mark.asyncio
+async def test_recurring_series_counts_against_active_posts_cap(store: StateStore, monkeypatch) -> None:
+    monkeypatch.setattr(limits, "MAX_ACTIVE_POSTS_PER_USER", 2)
+    await store.create_scheduled_text_post(USER, CHAT, _future(), "a", None)
+    await store.create_scheduled_text_post(USER, CHAT, _future(), "b", None)
+    with pytest.raises(ResourceLimitError) as exc:
+        await store.create_recurring_series(
+            user_id=USER, chat_id=CHAT, interval_type="daily",
+            time_of_day_minutes=600, timezone="UTC", start_at_utc=_future(),
+            kind="text", text="series",
+        )
+    assert exc.value.resource == "posts"
+
+
+@pytest.mark.asyncio
+async def test_materialization_respects_active_posts_cap(store: StateStore, monkeypatch) -> None:
+    pattern_id, post_id = await store.create_recurring_series(
+        user_id=USER, chat_id=CHAT, interval_type="daily",
+        time_of_day_minutes=600, timezone="UTC", start_at_utc=_future(),
+        kind="text", text="series",
+    )
+    await store.create_scheduled_text_post(USER, CHAT, _future(), "a", None)
+    monkeypatch.setattr(limits, "MAX_ACTIVE_POSTS_PER_USER", 2)
+    with pytest.raises(ResourceLimitError) as exc:
+        await store.materialize_next_recurring_post(
+            pattern_id=pattern_id,
+            source_post_id=post_id,
+            next_ordinal=2,
+            scheduled_for_utc=_future() + 86400,
+        )
+    assert exc.value.resource == "posts"
