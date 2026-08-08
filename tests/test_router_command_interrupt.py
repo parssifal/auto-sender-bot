@@ -235,6 +235,35 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert call.text != tr("ru", "invalid_datetime_format")
 
 
+# T-20: a session resumed in *_confirming after a mid-flow deploy can have flat
+# FSM fields defaulted to None (contexts.py); the confirm handler must not crash
+# on int(None) after it already answered the callback, leaving the user nothing.
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"chat_id": DESTINATION_CHAT_ID, "kind": "text", "text": "hi"},  # lost scheduled_at_utc
+        {"scheduled_at_utc": 4102444800, "kind": "text", "text": "hi"},  # lost chat_id
+    ],
+    ids=["no_scheduled_at", "no_chat_id"],
+)
+@pytest.mark.asyncio
+async def test_confirm_yes_recovers_from_incomplete_session(
+    interrupt_flow: InterruptHarness, data: dict[str, Any]
+) -> None:
+    from telegram.handlers.states import ScheduleStates as _SS
+
+    await interrupt_flow.dispatcher.storage.set_state(interrupt_flow.storage_key, _SS.confirming)
+    await interrupt_flow.dispatcher.storage.set_data(interrupt_flow.storage_key, data)
+
+    # Must not raise (int(None)); must recover gracefully.
+    await interrupt_flow.feed_callback("sconf:yes", update_id=10, message_id=20)
+
+    assert await interrupt_flow.get_state() is None
+    call = interrupt_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "cancelled")
+
+
 # T-19: a forged negative page must be clamped, not walk back forever. On an
 # empty queue the walk-back loop never reaches page 0 from a negative page.
 @pytest.mark.asyncio

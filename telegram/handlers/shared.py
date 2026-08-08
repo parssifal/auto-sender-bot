@@ -772,6 +772,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.message.answer(tr(lang, "post_need_content"), reply_markup=_media_collect_kb(lang))
 
+    async def _abort_incomplete_session(message: Message, state: FSMContext, *, user_id: int, lang: str) -> None:
+        # A mid-flow deploy can leave flat FSM keys defaulted to None (see
+        # contexts.py); bare int(None) below would crash after the callback was
+        # already answered, leaving the user with no feedback. Recover instead.
+        await state.clear()
+        await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, user_id))
+
     async def _send_confirmation(message: Message, state: FSMContext, store_: StateStore, *, user_id: int) -> None:
         lang = await _user_lang(store, user_id)
         current_state = await state.get_state()
@@ -779,6 +786,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         is_repeat = current_state == RepeatStates.collecting_post.state
         is_broadcast = current_state == BroadcastStates.collecting_post.state
         tz_name = await store_.get_user_timezone(user_id) or "UTC"
+        if ctx.scheduled_at_utc is None or (not is_broadcast and ctx.chat_id is None):
+            await _abort_incomplete_session(message, state, user_id=user_id, lang=lang)
+            return
         local_time = _format_local(int(ctx.scheduled_at_utc), tz_name)
         kind = ctx.kind
         if kind == "text":
@@ -852,6 +862,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         await query.answer()
         ctx = await _get_content_ctx(state, current_state)
         user_id = query.from_user.id
+        if ctx.scheduled_at_utc is None:
+            await _abort_incomplete_session(query.message, state, user_id=user_id, lang=lang)
+            return
         scheduled_at_utc = int(ctx.scheduled_at_utc)
         kind = ctx.kind
         tz_name = await store.get_user_timezone(user_id) or "UTC"
@@ -923,6 +936,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         if current_state == RepeatStates.confirming.state:
+            if ctx.chat_id is None:
+                await _abort_incomplete_session(query.message, state, user_id=user_id, lang=lang)
+                return
             chat_id = int(ctx.chat_id)
             ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
             if not ok:
@@ -1028,6 +1044,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             )
             return
 
+        if ctx.chat_id is None:
+            await _abort_incomplete_session(query.message, state, user_id=user_id, lang=lang)
+            return
         chat_id = int(ctx.chat_id)
         ok, err = await _check_user_admin(query.bot, chat_id=chat_id, user_id=user_id, lang=lang)
         if not ok:
