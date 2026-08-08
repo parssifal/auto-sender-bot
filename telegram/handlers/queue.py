@@ -140,7 +140,7 @@ async def _render_queue_page(
     page = max(page, 0)
     while True:
         offset = page * page_size
-        posts = await store.list_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
+        posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
         if posts or page == 0:
             break
         page -= 1

@@ -224,6 +224,55 @@ async def test_list_pending_posts_offset_beyond_end_returns_empty(store: StateSt
     assert result == []
 
 
+class _FakeMessage:
+    def __init__(self) -> None:
+        self.reply_markup = None
+
+    async def answer(self, _text, reply_markup=None):
+        self.reply_markup = reply_markup
+
+    async def edit_text(self, _text, reply_markup=None):
+        self.reply_markup = reply_markup
+
+
+@pytest.mark.asyncio
+async def test_render_queue_page_excludes_recurring_instances(store: StateStore) -> None:
+    from telegram.handlers.queue import _render_queue_page
+
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    editable_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Editable",
+        entities_json=None,
+    )
+    _, recurring_id = await store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc + 3600,
+        kind="text",
+        text="Recurring",
+        entities_json=None,
+    )
+
+    msg = _FakeMessage()
+    await _render_queue_page(store, msg, page=0, user_id=USER_ID)
+
+    all_data = [
+        btn.callback_data
+        for row in msg.reply_markup.inline_keyboard
+        for btn in row
+        if btn.callback_data
+    ]
+    assert f"qview:{editable_id}" in all_data
+    assert f"qcancel:{recurring_id}" not in all_data
+    assert f"qview:{recurring_id}" not in all_data
+
+
 @pytest.mark.asyncio
 async def test_list_editable_pending_posts_offset_skips_earlier_posts(store: StateStore) -> None:
     base_ts = int(datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc).timestamp())
