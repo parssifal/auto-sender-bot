@@ -522,8 +522,8 @@ class PostsMixin:
         await self._conn.commit()
         return cur.rowcount == 1
 
-    @locked_write
-    async def mark_sent(self, post_id: str, sent_at_utc: int) -> None:
+    async def _mark_post_sent(self, post_id: str, sent_at_utc: int) -> None:
+        """Caller owns the transaction (see mark_sent_and_materialize_next)."""
         await self._conn.execute(
             """
             UPDATE scheduled_posts
@@ -532,6 +532,10 @@ class PostsMixin:
             """,
             (sent_at_utc, post_id),
         )
+
+    @locked_write
+    async def mark_sent(self, post_id: str, sent_at_utc: int) -> None:
+        await self._mark_post_sent(post_id, sent_at_utc)
         await self._conn.commit()
 
     @locked_write

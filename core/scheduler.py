@@ -78,13 +78,23 @@ def calculate_next_occurrence(pattern: RecurringPattern, last_timestamp: int) ->
     return int(_build_local_datetime(pattern.timezone, next_day, pattern.time_of_day_minutes).timestamp())
 
 
-async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPostRow, now_utc: int) -> None:
-    instance = await store.get_recurring_instance_by_post_id(post.id)
-    if instance is None:
-        return
+async def _end_recurring_series(store: StateStore, pattern_id: str, post: ScheduledPostRow, sent_at_utc: int) -> None:
+    # Deactivate first: the post is not 'sent' yet, so a crash here replays the
+    # send instead of stranding an active pattern with no successor.
+    await store.delete_recurring_pattern(pattern_id)
+    await store.mark_sent(post_id=post.id, sent_at_utc=sent_at_utc)
 
-    pattern = await store.get_recurring_pattern(instance.pattern_id)
-    if pattern is None or not pattern.is_active:
+
+async def _mark_sent_with_next_recurring(
+    store: StateStore,
+    post: ScheduledPostRow,
+    now_utc: int,
+    sent_at_utc: int,
+) -> None:
+    instance = await store.get_recurring_instance_by_post_id(post.id)
+    pattern = None if instance is None else await store.get_recurring_pattern(instance.pattern_id)
+    if instance is None or pattern is None or not pattern.is_active:
+        await store.mark_sent(post_id=post.id, sent_at_utc=sent_at_utc)
         return
 
     current_ordinal = max(pattern.current_count, instance.ordinal)
@@ -97,26 +107,27 @@ async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPos
         next_scheduled_for_utc = calculate_next_occurrence(pattern, next_scheduled_for_utc)
 
     if pattern.max_occurrences is not None and next_ordinal > pattern.max_occurrences:
-        await store.delete_recurring_pattern(pattern.id)
+        await _end_recurring_series(store, pattern.id, post, sent_at_utc)
         logger.info("Recurring pattern %s completed after ordinal %s", pattern.id, next_ordinal - 1)
         return
 
     if pattern.end_at_utc is not None and next_scheduled_for_utc > pattern.end_at_utc:
-        await store.delete_recurring_pattern(pattern.id)
+        await _end_recurring_series(store, pattern.id, post, sent_at_utc)
         logger.info("Recurring pattern %s completed at end_at=%s", pattern.id, pattern.end_at_utc)
         return
 
     try:
-        next_instance = await store.materialize_next_recurring_post(
+        next_instance = await store.mark_sent_and_materialize_next(
+            post_id=post.id,
+            sent_at_utc=sent_at_utc,
             pattern_id=pattern.id,
-            source_post_id=post.id,
             next_ordinal=next_ordinal,
             scheduled_for_utc=next_scheduled_for_utc,
         )
     except ResourceLimitError:
         # Background work: nobody is waiting for this error. End the series
         # visibly instead of leaving an active pattern that never moves again.
-        await store.delete_recurring_pattern(pattern.id)
+        await _end_recurring_series(store, pattern.id, post, sent_at_utc)
         logger.warning("Recurring pattern %s stopped: user %s is at the active-posts cap", pattern.id, post.user_id)
         return
     if next_instance is None:
@@ -188,11 +199,7 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
         else:
             raise ValueError(f"Unknown post kind: {post.kind}")
 
-        await store.mark_sent(post_id=post.id, sent_at_utc=sent_at_utc)
-        try:
-            await _materialize_next_recurring_post(store=store, post=post, now_utc=now_utc)
-        except Exception:
-            logger.exception("Sent post %s but failed to materialize next recurring occurrence", post.id)
+        await _mark_sent_with_next_recurring(store=store, post=post, now_utc=now_utc, sent_at_utc=sent_at_utc)
         logger.info("Sent post %s to chat %s", post.id, post.chat_id)
     except TelegramRetryAfter as exc:
         next_retry_at = int(time.time()) + int(getattr(exc, "retry_after", 1)) + 1

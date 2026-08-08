@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -419,6 +420,93 @@ async def test_process_due_post_ends_series_when_downtime_consumes_max_occurrenc
         pattern = await store.get_recurring_pattern(pattern_id)
         assert pattern is not None
         assert pattern.is_active is False
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_never_marks_sent_without_next_occurrence() -> None:
+    """'Post is sent' and 'the series continues' must commit together.
+
+    Split across two transactions, a crash in between leaves a sent post, an
+    active pattern and no successor — the series stops forever and nothing can
+    find it again (get_due_recurring_instances only matches pending posts)."""
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("materialization write failed")
+
+        # The store write that creates the next occurrence fails, whatever it is called.
+        store.materialize_next_recurring_post = _boom
+        store.mark_sent_and_materialize_next = _boom
+
+        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+
+        sent_post = await store.get_scheduled_post(post_id)
+        assert sent_post is not None
+        successors = [row for row in await store.list_pending_posts(USER_ID, limit=10) if row.id != post_id]
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert (sent_post.status == "sent") == bool(successors), (
+            f"orphaned series: status={sent_post.status}, "
+            f"successors={len(successors)}, pattern_active={pattern.is_active}"
+        )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_and_materialize_next_rolls_back_as_one_transaction() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        assert await store.claim_post_for_sending(post_id=post_id, now_utc=due_at) is True
+
+        # Ordinal 2 is already taken, so the insert half of the transaction fails.
+        blocker_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at + 86400, "Blocker", None)
+        await store.create_recurring_instance(pattern_id, blocker_id, 2, due_at + 86400)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await store.mark_sent_and_materialize_next(
+                post_id=post_id,
+                sent_at_utc=due_at,
+                pattern_id=pattern_id,
+                next_ordinal=2,
+                scheduled_for_utc=due_at + 86400,
+            )
+
+        claimed_post = await store.get_scheduled_post(post_id)
+        assert claimed_post is not None
+        assert claimed_post.status == "sending"
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.current_count == 1
     finally:
         await conn.close()
 

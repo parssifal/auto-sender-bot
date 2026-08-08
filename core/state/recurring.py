@@ -6,7 +6,7 @@ import uuid
 import core.limits as limits
 from core.limits import ResourceLimitError
 from core.state.base import locked_write
-from core.state.models import RecurringInstance, RecurringPattern, RecurringPatternSummary
+from core.state.models import RecurringInstance, RecurringPattern, RecurringPatternSummary, ScheduledPostRow
 
 
 class RecurringMixin:
@@ -255,6 +255,129 @@ class RecurringMixin:
             created_at=created_at,
         )
 
+    async def _insert_next_recurring_post(
+        self,
+        *,
+        pattern_id: str,
+        source_post: ScheduledPostRow,
+        media_items: list[dict[str, str]],
+        next_ordinal: int,
+        scheduled_for_utc: int,
+        now: int,
+    ) -> str | None:
+        """Insert the next post + instance and bump current_count.
+
+        Caller owns the transaction. Returns the new post id, or None if the
+        pattern is gone or no longer active.
+        """
+        next_post_id = uuid.uuid4().hex
+        pattern_row = await self._execute_fetchone(
+            "SELECT is_active FROM recurring_patterns WHERE id=?",
+            (pattern_id,),
+        )
+        if pattern_row is None or not bool(int(pattern_row["is_active"])):
+            return None
+
+        await self._conn.execute(
+            """
+            INSERT INTO scheduled_posts(
+                id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
+                caption, caption_entities_json, caption_above,
+                attempts, next_retry_at_utc, created_at
+            ) VALUES(?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, NULL, ?)
+            """,
+            (
+                next_post_id,
+                source_post.user_id,
+                source_post.chat_id,
+                scheduled_for_utc,
+                source_post.kind,
+                source_post.text,
+                source_post.entities_json,
+                source_post.caption,
+                source_post.caption_entities_json,
+                source_post.caption_above,
+                now,
+            ),
+        )
+        for idx, item in enumerate(media_items):
+            await self._conn.execute(
+                "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
+                (next_post_id, idx, item["type"], item["file_id"]),
+            )
+
+        await self._conn.execute(
+            """
+            INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (pattern_id, next_post_id, next_ordinal, scheduled_for_utc, now),
+        )
+        cur = await self._conn.execute(
+            """
+            UPDATE recurring_patterns
+            SET current_count=?, updated_at=?
+            WHERE id=? AND is_active=1
+            """,
+            (next_ordinal, now, pattern_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError(f"Recurring pattern {pattern_id} is missing or inactive")
+        return next_post_id
+
+    @locked_write
+    async def mark_sent_and_materialize_next(
+        self,
+        *,
+        post_id: str,
+        sent_at_utc: int,
+        pattern_id: str,
+        next_ordinal: int,
+        scheduled_for_utc: int,
+    ) -> RecurringInstance | None:
+        """Mark the post sent and create the next occurrence in one transaction.
+
+        Two commits would let a crash in between leave a sent post, an active
+        pattern and no successor: the series stops forever and nothing can find
+        it again (get_due_recurring_instances only matches pending posts).
+        """
+        source_post = await self.get_scheduled_post(post_id)
+        if source_post is None:
+            raise ValueError(f"Scheduled post {post_id} not found")
+
+        media_items = await self.get_post_media(post_id) if source_post.kind == "media" else []
+        now = int(time.time())
+
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._mark_post_sent(post_id, sent_at_utc)
+            # Counted with this post already sent, exactly as when the send and
+            # the materialization were two separate transactions.
+            await self._guard_active_posts_cap(source_post.user_id)
+            next_post_id = await self._insert_next_recurring_post(
+                pattern_id=pattern_id,
+                source_post=source_post,
+                media_items=media_items,
+                next_ordinal=next_ordinal,
+                scheduled_for_utc=scheduled_for_utc,
+                now=now,
+            )
+            # The post is sent either way: an inactive pattern is not a failure.
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        if next_post_id is None:
+            return None
+        return RecurringInstance(
+            pattern_id=pattern_id,
+            post_id=next_post_id,
+            ordinal=next_ordinal,
+            scheduled_for_utc=scheduled_for_utc,
+            created_at=now,
+        )
+
     @locked_write
     async def materialize_next_recurring_post(
         self,
@@ -270,64 +393,20 @@ class RecurringMixin:
         await self._guard_active_posts_cap(source_post.user_id)
         media_items = await self.get_post_media(source_post_id) if source_post.kind == "media" else []
         now = int(time.time())
-        next_post_id = uuid.uuid4().hex
 
         await self._conn.execute("BEGIN IMMEDIATE")
         try:
-            pattern_row = await self._execute_fetchone(
-                "SELECT is_active FROM recurring_patterns WHERE id=?",
-                (pattern_id,),
+            next_post_id = await self._insert_next_recurring_post(
+                pattern_id=pattern_id,
+                source_post=source_post,
+                media_items=media_items,
+                next_ordinal=next_ordinal,
+                scheduled_for_utc=scheduled_for_utc,
+                now=now,
             )
-            if pattern_row is None or not bool(int(pattern_row["is_active"])):
+            if next_post_id is None:
                 await self._conn.rollback()
                 return None
-
-            await self._conn.execute(
-                """
-                INSERT INTO scheduled_posts(
-                    id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
-                    caption, caption_entities_json, caption_above,
-                    attempts, next_retry_at_utc, created_at
-                ) VALUES(?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, NULL, ?)
-                """,
-                (
-                    next_post_id,
-                    source_post.user_id,
-                    source_post.chat_id,
-                    scheduled_for_utc,
-                    source_post.kind,
-                    source_post.text,
-                    source_post.entities_json,
-                    source_post.caption,
-                    source_post.caption_entities_json,
-                    source_post.caption_above,
-                    now,
-                ),
-            )
-            for idx, item in enumerate(media_items):
-                await self._conn.execute(
-                    "INSERT INTO scheduled_post_media(post_id, idx, type, file_id) VALUES(?, ?, ?, ?)",
-                    (next_post_id, idx, item["type"], item["file_id"]),
-                )
-
-            await self._conn.execute(
-                """
-                INSERT INTO recurring_instances(pattern_id, post_id, ordinal, scheduled_for_utc, created_at)
-                VALUES(?, ?, ?, ?, ?)
-                """,
-                (pattern_id, next_post_id, next_ordinal, scheduled_for_utc, now),
-            )
-            cur = await self._conn.execute(
-                """
-                UPDATE recurring_patterns
-                SET current_count=?, updated_at=?
-                WHERE id=? AND is_active=1
-                """,
-                (next_ordinal, now, pattern_id),
-            )
-            if cur.rowcount != 1:
-                raise ValueError(f"Recurring pattern {pattern_id} is missing or inactive")
-
             await self._conn.commit()
         except Exception:
             await self._conn.rollback()
