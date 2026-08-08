@@ -6,15 +6,23 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto, InputMediaVideo, MessageEntity
+from pydantic import ValidationError
 
 from core.utils import split_text
+
+
+class InvalidEntitiesError(ValueError):
+    """entities_json that cannot be parsed - a permanent error retrying will never fix."""
 
 
 def _load_entities(entities_json: str | None) -> list[MessageEntity] | None:
     if not entities_json:
         return None
-    data = json.loads(entities_json)
-    return [MessageEntity.model_validate(item) for item in data]
+    try:
+        data = json.loads(entities_json)
+        return [MessageEntity.model_validate(item) for item in data]
+    except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+        raise InvalidEntitiesError(str(exc)) from exc
 
 
 @dataclass(frozen=True)

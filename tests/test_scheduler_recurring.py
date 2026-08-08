@@ -586,3 +586,26 @@ async def test_process_due_post_marks_failed_after_max_attempts() -> None:
         assert await store.count_active_posts(USER_ID) == 0
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_fails_broken_entities_without_retry() -> None:
+    # T-11: a deterministic entities_json parse error can never be fixed by retrying, so
+    # the post must go straight to 'failed' on the first attempt, not retry (up to 6x).
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await _seed_destination(store)
+        due_at = int(time.time()) - 10
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "hi", "not json")
+
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+
+        final = await store.get_scheduled_post(post_id)
+        assert final.status == "failed"
+        assert final.attempts == 1
+    finally:
+        await conn.close()

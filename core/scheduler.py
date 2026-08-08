@@ -17,7 +17,7 @@ from aiogram.exceptions import (
 )
 
 from core.limits import ResourceLimitError
-from core.notifier import send_media_post, send_text
+from core.notifier import InvalidEntitiesError, send_media_post, send_text
 from core.state import RecurringPattern, ScheduledPostRow, StateStore
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,10 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
         await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.warning("Telegram API error for post %s: %s", post.id, exc)
+    except InvalidEntitiesError as exc:
+        # Deterministic content error: retrying can never fix it, so fail immediately.
+        await store.mark_failed(post_id=post.id, error=f"invalid entities: {exc}")
+        logger.warning("Post %s failed: invalid entities_json - %s", post.id, exc)
     except Exception as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
         await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
