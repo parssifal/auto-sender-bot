@@ -211,6 +211,20 @@ async def test_schedule_flow_manual_fallback_from_time_selection_works(schedule_
 
 
 @pytest.mark.asyncio
+async def test_schedule_flow_manual_datetime_in_dst_gap_is_rejected(schedule_flow: ScheduleFlowHarness) -> None:
+    # T-07 (bot text surface): 02:30 on 2026-03-29 does not exist in Europe/Berlin.
+    await schedule_flow.store.set_user_timezone(USER_ID, "Europe/Berlin")
+    await schedule_flow.start_schedule()
+
+    await schedule_flow.feed_message("29.03.2026 02:30", update_id=4, message_id=11)
+
+    assert await schedule_flow.get_state() == ScheduleStates.entering_datetime.state
+    call = schedule_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "datetime_dst_gap")
+
+
+@pytest.mark.asyncio
 async def test_schedule_flow_quick_button_moves_to_collecting_post(schedule_flow: ScheduleFlowHarness) -> None:
     await schedule_flow.start_schedule()
 

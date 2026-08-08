@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from core.utils import MIN_SCHEDULE_LEAD_SECONDS, ParsedScheduleTime
+from core.utils import MIN_SCHEDULE_LEAD_SECONDS, ParsedScheduleTime, reject_nonexistent_local_time
 
 _DEFAULT_WEEKDAY_LABELS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 _DEFAULT_QUICK_OPTION_KEYS = ("1h", "today_20", "tomorrow_9", "next_monday")
@@ -77,7 +77,9 @@ def resolve_quick_option(
     current_local = current_utc.astimezone(tz)
 
     if option == "1h":
-        candidate_local = _ceil_to_next_minute(current_local + timedelta(hours=1))
+        # Add the hour in UTC so it is a real elapsed hour, then convert to local; adding
+        # timedelta to an aware local datetime does wall-clock arithmetic and mishandles DST.
+        candidate_local = _ceil_to_next_minute((current_utc + timedelta(hours=1)).astimezone(tz))
     elif option == "today_20":
         candidate_local = _local_datetime(current_local.date(), hour=20, minute=0, tz=tz)
         if int(candidate_local.astimezone(timezone.utc).timestamp()) <= int(current_utc.timestamp()) + min_lead_seconds:
@@ -264,4 +266,6 @@ def _ceil_to_next_minute(value: datetime) -> datetime:
 
 
 def _local_datetime(day: date, *, hour: int, minute: int, tz: ZoneInfo) -> datetime:
-    return datetime.combine(day, dt_time(hour=hour, minute=minute), tzinfo=tz)
+    local_dt = datetime.combine(day, dt_time(hour=hour, minute=minute), tzinfo=tz)
+    reject_nonexistent_local_time(local_dt)
+    return local_dt

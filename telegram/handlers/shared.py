@@ -14,7 +14,7 @@ from aiogram.types import (
 from core.services import broadcast_svc, draft_svc
 from core.state import StateStore
 from core.time_picker import TimePicker, resolve_quick_option, resolve_selected_time
-from core.utils import ParsedScheduleTime, parse_local_datetime
+from core.utils import NonexistentLocalTimeError, ParsedScheduleTime, parse_local_datetime
 from telegram.i18n import tr
 from telegram.handlers.states import (
     ScheduleStates,
@@ -264,6 +264,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         option = query.data.split(":", 2)[2]
         try:
             parsed = resolve_quick_option(option, tz_name=tz_name)
+        except NonexistentLocalTimeError:
+            await query.answer(tr(lang, "datetime_dst_gap"), show_alert=True)
+            return
         except ValueError:
             await query.answer(tr(lang, "invalid_datetime_format"), show_alert=True)
             return
@@ -411,6 +414,9 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         try:
             hour, minute = _parse_time_token(token)
             parsed = resolve_selected_time(selected_date, hour=hour, minute=minute, tz_name=tz_name)
+        except NonexistentLocalTimeError:
+            await query.answer(tr(lang, "datetime_dst_gap"), show_alert=True)
+            return
         except ValueError:
             await query.answer(tr(lang, "schedule_picker_invalid"), show_alert=True)
             return
@@ -493,6 +499,16 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         data = await state.get_data()
         try:
             parsed: ParsedScheduleTime = parse_local_datetime(message.text, tz_name=tz_name)
+        except NonexistentLocalTimeError:
+            await _prompt_for_datetime(
+                message,
+                lang=lang,
+                tz_name=tz_name,
+                text=tr(lang, "datetime_dst_gap"),
+                data=data,
+                state_name=current_state,
+            )
+            return
         except Exception:
             await _prompt_for_datetime(
                 message,

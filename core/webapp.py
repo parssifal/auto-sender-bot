@@ -12,7 +12,7 @@ from aiohttp import web
 
 from core.services import admin_broadcast_svc
 from core.state import ScheduledPostRow, StateStore
-from core.utils import parse_local_datetime, validate_schedule_time
+from core.utils import NonexistentLocalTimeError, parse_local_datetime, validate_schedule_time
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +304,8 @@ async def start_webapp_server(
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         try:
             parsed = parse_local_datetime(raw, tz_name)
+        except NonexistentLocalTimeError:
+            return web.json_response({"error": "datetime_dst_gap"}, status=400)
         except (ValueError, KeyError):
             return web.json_response({"error": "bad_datetime"}, status=400)
         check = validate_schedule_time(parsed.utc_epoch)
