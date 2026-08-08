@@ -1,7 +1,8 @@
 import aiosqlite
 import pytest
 
-from core.migrate import run_migrations
+from core.migrate import MIGRATIONS_DIR, _split_statements, run_migrations
+from core.state import StateStore
 
 EXPECTED_TABLES = {
     "users", "destinations", "user_destinations",
@@ -57,7 +58,8 @@ async def test_rerun_is_noop_and_versions_stable():
 async def test_baseline_records_versions_without_dropping_data():
     async with aiosqlite.connect(":memory:") as conn:
         conn.row_factory = aiosqlite.Row
-        # Pre-existing (pre-migration) schema + data.
+        # Pre-existing (pre-migration) schema + data. Only a *complete* set of
+        # tables qualifies for baselining, so stub out every one of them.
         await conn.execute(
             "CREATE TABLE users (user_id INTEGER PRIMARY KEY, "
             "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
@@ -65,6 +67,8 @@ async def test_baseline_records_versions_without_dropping_data():
         await conn.execute(
             "CREATE TABLE scheduled_posts (id TEXT PRIMARY KEY)"
         )
+        for name in sorted(EXPECTED_TABLES - {"users", "scheduled_posts"}):
+            await conn.execute(f"CREATE TABLE {name} (id INTEGER PRIMARY KEY)")
         await conn.execute(
             "INSERT INTO users(user_id, created_at, updated_at) VALUES (42, 0, 0)"
         )
@@ -82,6 +86,24 @@ async def test_baseline_records_versions_without_dropping_data():
         # Data intact, no DDL ran over the existing tables.
         row = await conn.execute_fetchall("SELECT user_id FROM users")
         assert [r[0] for r in row] == [42]
+
+
+@pytest.mark.asyncio
+async def test_partial_schema_is_completed_not_baselined():
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        # Live DB that only ever received migrations 001 and 003:
+        # scheduled_posts exists, teams/team_members do not.
+        for name in ("001_users_destinations.sql", "003_posts.sql"):
+            for stmt in _split_statements((MIGRATIONS_DIR / name).read_text()):
+                await conn.execute(stmt)
+        await conn.commit()
+
+        # Must not stamp 1..5 over a half-built schema: the start path would
+        # then fail on `no such table: team_members` with no recovery.
+        await StateStore(conn).migrate()
+
+        assert EXPECTED_TABLES <= await _tables(conn)
 
 
 @pytest.mark.asyncio

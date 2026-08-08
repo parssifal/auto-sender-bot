@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import aiosqlite
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"'`\[]?(\w+)", re.IGNORECASE
+)
 
 
 def _migration_files() -> list[Path]:
@@ -19,11 +24,18 @@ def _split_statements(sql: str) -> list[str]:
     return [s.strip() for s in sql.split(";") if s.strip()]
 
 
-async def _schema_already_present(conn: aiosqlite.Connection) -> bool:
+async def _schema_already_present(
+    conn: aiosqlite.Connection, files: list[Path]
+) -> bool:
+    # Baseline only a *complete* pre-migration schema. A partial one must fall
+    # through to the normal loop, otherwise it gets stamped and never repaired.
+    expected = {
+        m for path in files for m in _CREATE_TABLE_RE.findall(path.read_text())
+    }
     rows = await conn.execute_fetchall(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_posts'"
+        "SELECT name FROM sqlite_master WHERE type='table'"
     )
-    return len(rows) > 0
+    return expected <= {r[0] for r in rows}
 
 
 async def run_migrations(conn: aiosqlite.Connection) -> None:
@@ -43,7 +55,7 @@ async def run_migrations(conn: aiosqlite.Connection) -> None:
     files = _migration_files()
 
     # BASELINE: a live pre-migration DB (tables exist, no version rows yet).
-    if not applied and await _schema_already_present(conn):
+    if not applied and await _schema_already_present(conn, files):
         for path in files:
             await conn.execute(
                 "INSERT INTO schema_migrations VALUES (?, datetime('now'))",
