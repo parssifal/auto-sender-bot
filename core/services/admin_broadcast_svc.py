@@ -24,6 +24,34 @@ def _is_blocked(exc: Exception) -> bool:
     return type(exc).__name__ == "TelegramForbiddenError"
 
 
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Flood-wait delay from aiogram's ``TelegramRetryAfter``, else ``None``.
+
+    Name-matched like ``_is_blocked`` to keep aiogram out of the service imports.
+    """
+    if type(exc).__name__ == "TelegramRetryAfter":
+        return float(getattr(exc, "retry_after", 1))
+    return None
+
+
+async def _deliver_one(send: "Callable[[int], Awaitable[object]]", uid: int) -> str:
+    """Deliver to one recipient, honouring a single flood-wait. Returns the outcome key."""
+    try:
+        await send(uid)
+        return "delivered"
+    except Exception as exc:  # noqa: BLE001 — per-recipient isolation is the point
+        wait = _retry_after_seconds(exc)
+        if wait is None:
+            return "blocked" if _is_blocked(exc) else "failed"
+    # ponytail: blocks the run for `wait` seconds; Telegram's retry_after is small in practice.
+    await asyncio.sleep(wait)
+    try:
+        await send(uid)
+        return "delivered"
+    except Exception as exc:  # noqa: BLE001
+        return "blocked" if _is_blocked(exc) else "failed"
+
+
 async def broadcast_to_all(
     store: StateStore,
     bot: object,
@@ -44,18 +72,12 @@ async def broadcast_to_all(
     _send = send or _default_send
 
     recipients = await store.all_user_ids()
-    delivered = blocked = failed = 0
+    counts = {"delivered": 0, "blocked": 0, "failed": 0}
     for uid in recipients:
-        try:
-            await _send(uid)
-            delivered += 1
-        except Exception as exc:  # noqa: BLE001 — per-recipient isolation is the point
-            if _is_blocked(exc):
-                blocked += 1
-            else:
-                failed += 1
+        counts[await _deliver_one(_send, uid)] += 1
         if throttle:
             await asyncio.sleep(throttle)
+    delivered, blocked, failed = counts["delivered"], counts["blocked"], counts["failed"]
     return {
         "total": len(recipients),
         "delivered": delivered,
