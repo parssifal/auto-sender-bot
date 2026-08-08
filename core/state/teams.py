@@ -3,10 +3,12 @@ from __future__ import annotations
 import time
 import uuid
 
+from core.state.base import locked_write
 from core.state.models import Team, TeamInvite, TeamInviteAcceptance, TeamMember
 
 
 class TeamsMixin:
+    @locked_write
     async def create_team(self, owner_user_id: int, name: str) -> str:
         now = int(time.time())
         team_id = uuid.uuid4().hex
@@ -94,6 +96,7 @@ class TeamsMixin:
         )
         return [self._row_to_team(row) for row in rows]
 
+    @locked_write
     async def upsert_team_member(self, team_id: str, user_id: int, role: str) -> TeamMember:
         team_row = await self._execute_fetchone(
             "SELECT owner_user_id FROM teams WHERE id=?",
@@ -153,6 +156,7 @@ class TeamsMixin:
         )
         return [self._row_to_team_member(row) for row in rows]
 
+    @locked_write
     async def create_team_invite(
         self,
         team_id: str,
@@ -200,6 +204,7 @@ class TeamsMixin:
         )
         return None if row is None else self._row_to_team_invite(row)
 
+    @locked_write
     async def accept_team_invite(self, token: str, user_id: int) -> TeamInviteAcceptance:
         now = int(time.time())
         await self._conn.execute("BEGIN IMMEDIATE")

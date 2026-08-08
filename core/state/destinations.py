@@ -4,10 +4,12 @@ import time
 
 import core.limits as limits
 from core.limits import ResourceLimitError
+from core.state.base import locked_write
 from core.state.models import Destination
 
 
 class DestinationsMixin:
+    @locked_write
     async def upsert_destination(
         self,
         chat_id: int,
@@ -34,6 +36,7 @@ class DestinationsMixin:
         )
         await self._conn.commit()
 
+    @locked_write
     async def link_user_destination(self, user_id: int, chat_id: int, linked_via: str) -> None:
         # Only NEW links count toward the cap; re-linking an existing destination
         # is an upsert (no growth) and must always be allowed.

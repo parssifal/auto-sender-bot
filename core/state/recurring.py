@@ -5,6 +5,7 @@ import uuid
 
 import core.limits as limits
 from core.limits import ResourceLimitError
+from core.state.base import locked_write
 from core.state.models import RecurringInstance, RecurringPattern, RecurringPatternSummary
 
 
@@ -21,6 +22,7 @@ class RecurringMixin:
         if await self.count_user_recurring(user_id) >= limits.MAX_RECURRING_PER_USER:
             raise ResourceLimitError("recurring", limits.MAX_RECURRING_PER_USER)
 
+    @locked_write
     async def create_recurring_pattern(
         self,
         user_id: int,
@@ -158,6 +160,7 @@ class RecurringMixin:
         rows = await self._conn.execute_fetchall(query, tuple(params))
         return [self._row_to_recurring_summary(row) for row in rows]
 
+    @locked_write
     async def update_recurring_count(self, pattern_id: str, new_count: int) -> bool:
         now = int(time.time())
         cur = await self._conn.execute(
@@ -171,6 +174,7 @@ class RecurringMixin:
         await self._conn.commit()
         return cur.rowcount == 1
 
+    @locked_write
     async def delete_recurring_pattern(self, pattern_id: str) -> bool:
         now = int(time.time())
         cur = await self._conn.execute(
@@ -184,6 +188,7 @@ class RecurringMixin:
         await self._conn.commit()
         return cur.rowcount == 1
 
+    @locked_write
     async def cancel_recurring_pattern(self, user_id: int, pattern_id: str) -> bool:
         now = int(time.time())
         await self._conn.execute("BEGIN IMMEDIATE")
@@ -225,6 +230,7 @@ class RecurringMixin:
 
         return True
 
+    @locked_write
     async def create_recurring_instance(
         self,
         pattern_id: str,
@@ -249,6 +255,7 @@ class RecurringMixin:
             created_at=created_at,
         )
 
+    @locked_write
     async def materialize_next_recurring_post(
         self,
         pattern_id: str,
@@ -333,6 +340,7 @@ class RecurringMixin:
             created_at=now,
         )
 
+    @locked_write
     async def create_recurring_series(
         self,
         *,

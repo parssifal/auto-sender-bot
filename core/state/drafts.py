@@ -6,6 +6,7 @@ import uuid
 import core.limits as limits
 from core.limits import ResourceLimitError
 from core.rbac import DraftPermissions, can_create_team_draft, resolve_draft_permissions
+from core.state.base import locked_write
 from core.state.models import DraftRow
 
 
@@ -53,6 +54,7 @@ class DraftsMixin:
             return draft, None
         return draft, await self.get_team_member_role(draft.team_id, user_id)
 
+    @locked_write
     async def create_draft(
         self,
         *,
@@ -257,6 +259,7 @@ class DraftsMixin:
         rows = await self._conn.execute_fetchall(query, tuple(params))
         return [self._row_to_draft(row) for row in rows]
 
+    @locked_write
     async def update_draft(
         self,
         draft_id: str,
@@ -332,6 +335,7 @@ class DraftsMixin:
 
         return True
 
+    @locked_write
     async def delete_draft(self, draft_id: str, user_id: int) -> bool:
         permissions = await self.get_draft_permissions(draft_id, user_id)
         if permissions is None or not permissions.can_delete:
