@@ -104,6 +104,31 @@ async def test_my_queue_returns_only_callers_posts(server, store):
     assert body["posts"][0]["kind"] == "text"
 
 
+@pytest.mark.asyncio
+async def test_my_queue_signals_truncation(server, store):
+    # 51 posts > the 50 limit: the payload must flag that more exist.
+    now = int(time.time())
+    for i in range(51):
+        await store.create_scheduled_text_post(USER_A, CHAT_A, now + 3600 + i, "hi", None)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert len(body["posts"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_my_queue_no_truncation_flag_when_under_limit(server, store):
+    await _mk_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            body = await r.json()
+    assert body["has_more"] is False
+
+
 # --- Task 2: recurring ---
 
 

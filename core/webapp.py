@@ -274,7 +274,10 @@ async def start_webapp_server(
             return web.json_response({"error": "forbidden"}, status=403)
         user_id = int(user["id"])
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        rows = await store.list_editable_pending_posts(user_id, limit=50, offset=0)
+        limit = 50
+        rows = await store.list_editable_pending_posts(user_id, limit=limit + 1, offset=0)
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         posts = [await _post_to_json(store, r) for r in rows]
         return web.json_response(
             {
@@ -282,6 +285,7 @@ async def start_webapp_server(
                 "lang": await store.get_user_language(user_id),
                 "is_admin": user_id in admin_set,
                 "posts": posts,
+                "has_more": has_more,
             }
         )
 

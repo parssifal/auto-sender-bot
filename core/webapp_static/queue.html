@@ -130,6 +130,7 @@ const I18N = {
     m_title:"Перенести пост", m_date:"Дата", m_time:"Время", m_cancel:"Отмена", m_save:"Сохранить",
     confirm_cancel:"Отменить этот пост?", confirm_series:"Отменить всю серию?",
     tz_note:tz=>`Время указано в вашем часовом поясе: ${tz}`,
+    truncated:"Показаны первые 50 постов. Остальные можно посмотреть в боте (/queue).",
     err:e=>"Ошибка: "+e, need_both:"Укажите дату и время",
   },
   en: {
@@ -140,6 +141,7 @@ const I18N = {
     m_title:"Reschedule post", m_date:"Date", m_time:"Time", m_cancel:"Cancel", m_save:"Save",
     confirm_cancel:"Cancel this post?", confirm_series:"Cancel the whole series?",
     tz_note:tz=>`Times shown in your timezone: ${tz}`,
+    truncated:"Showing the first 50 posts. See the rest in the bot (/queue).",
     err:e=>"Error: "+e, need_both:"Pick a date and time",
   },
 };
@@ -186,7 +188,7 @@ function applyStaticLabels(){
   b.textContent = t("tz_note")(TZ); b.hidden = false;
 }
 
-function renderQueue(posts){
+function renderQueue(posts, hasMore){
   const el = document.getElementById("queue-list");
   if(!posts.length){ el.innerHTML = `<div class="card"><div class="empty">${t("empty_q")}</div></div>`; return; }
   el.innerHTML = "";
@@ -201,6 +203,11 @@ function renderQueue(posts){
         <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
       </div>`;
     el.appendChild(card);
+  }
+  if(hasMore){
+    const note = document.createElement("div");
+    note.className = "empty"; note.textContent = t("truncated");
+    el.appendChild(note);
   }
 }
 
@@ -227,7 +234,7 @@ async function loadAll(){
   TZ = q.tz || TZ; LANG = q.lang || LANG;
   applyStaticLabels();
   if(q.is_admin){ document.getElementById("admin-link").hidden = false; }
-  renderQueue(q.posts);
+  renderQueue(q.posts, q.has_more);
   renderRecurring(rec.patterns);
 }
 
