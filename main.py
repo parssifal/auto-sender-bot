@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -38,6 +39,21 @@ async def _supervise(scheduler_task: asyncio.Task, polling_task: asyncio.Task) -
             raise RuntimeError("Scheduler task crashed") from exc
 
 
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
+    """Set ``stop_event`` on SIGTERM/SIGINT, from the moment startup begins.
+
+    aiogram installs its own handlers, but only once polling starts; a signal
+    during migrate()/server startup would otherwise kill the process before the
+    finally-block cleanup (conn.close etc.) runs. add_signal_handler is
+    unavailable on some loops (Windows/limited loops) — degrade gracefully.
+    """
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass
+
+
 async def amain() -> None:
     cfg = load_config()
     configure_logging(cfg.log_level)
@@ -61,6 +77,7 @@ async def amain() -> None:
     bot = Bot(token=cfg.bot_token, session=session)
 
     stop_event = asyncio.Event()
+    _install_signal_handlers(asyncio.get_running_loop(), stop_event)
     scheduler_task = asyncio.create_task(
         scheduler_loop(bot=bot, store=store, stop_event=stop_event, poll_interval_seconds=cfg.scheduler_poll_seconds)
     )
@@ -88,7 +105,11 @@ async def amain() -> None:
         # (reset to Telegram's default commands button when WEBAPP_URL is unset).
         await set_default_menu_button(bot, webapp_url=cfg.webapp_url)
         polling_task = asyncio.create_task(
-            dp.start_polling(bot, polling_timeout=cfg.telegram_polling_timeout_seconds)
+            dp.start_polling(
+                bot,
+                polling_timeout=cfg.telegram_polling_timeout_seconds,
+                handle_signals=False,
+            )
         )
         await _supervise(scheduler_task, polling_task)
     finally:
