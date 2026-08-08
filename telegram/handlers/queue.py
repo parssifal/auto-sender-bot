@@ -26,6 +26,7 @@ async def _render_edit_posts(store: StateStore, message: Message, *, user_id: in
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
@@ -73,6 +74,7 @@ async def _render_delete_posts(store: StateStore, message: Message, *, user_id: 
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
@@ -135,6 +137,7 @@ async def _render_queue_page(
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)

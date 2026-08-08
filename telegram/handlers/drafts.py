@@ -35,6 +35,7 @@ async def _render_drafts(store: StateStore, message: Message, *, user_id: int, s
     lang = await h._user_lang(store, user_id)
     current_scope = kb._normalize_draft_scope(scope)
     page_size = 5
+    page = max(page, 0)
     while True:
         offset = page * page_size
         items = await store.list_drafts(user_id=user_id, scope=current_scope, offset=offset, limit=page_size + 1)

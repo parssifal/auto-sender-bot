@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -232,6 +233,16 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert isinstance(call, SendMessage)
     assert call.text == tr("ru", "queue_empty")
     assert call.text != tr("ru", "invalid_datetime_format")
+
+
+# T-19: a forged negative page must be clamped, not walk back forever. On an
+# empty queue the walk-back loop never reaches page 0 from a negative page.
+@pytest.mark.asyncio
+async def test_negative_queue_page_terminates(interrupt_flow: InterruptHarness) -> None:
+    await asyncio.wait_for(
+        interrupt_flow.feed_callback("qpage:-5", update_id=10, message_id=20),
+        timeout=3,
+    )
 
 
 # T-18: a failed queue cancel must not follow the "not found" alert with "Done".
