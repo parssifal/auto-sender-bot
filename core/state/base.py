@@ -22,6 +22,15 @@ class StateStoreBase:
         await run_migrations(self._conn)
         await self._reconcile_user_columns()
         await self._backfill_team_owners()
+        await self._requeue_stuck_sending()
+
+    async def _requeue_stuck_sending(self) -> None:
+        # Only the scheduler claims posts, and only one process runs it, so any
+        # 'sending' row at startup is a crash between claim and mark_* — it would
+        # otherwise stay invisible, un-cancellable and hold a quota slot forever.
+        # attempts stays as claim left it, so retry counting survives the crash.
+        await self._conn.execute("UPDATE scheduled_posts SET status='pending' WHERE status='sending'")
+        await self._conn.commit()
 
     async def _reconcile_user_columns(self) -> None:
         # Legacy-DB safety net: the baseline path skips DDL, so ensure the

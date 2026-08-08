@@ -207,3 +207,28 @@ async def test_hard_delete_post_rejects_recurring_post(store: StateStore) -> Non
     post = await store.get_scheduled_post(post_id)
     assert deleted is False
     assert post is not None
+
+
+@pytest.mark.asyncio
+async def test_startup_requeues_stuck_sending_post(store: StateStore) -> None:
+    """A crash between claim and mark_* leaves 'sending' forever: invisible to
+    list_due_posts, un-cancellable, and holding a quota slot."""
+    scheduled_at_utc = int(datetime(2020, 1, 1, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Stuck post",
+        entities_json=None,
+    )
+    now_utc = scheduled_at_utc + 60
+    assert await store.claim_post_for_sending(post_id=post_id, now_utc=now_utc) is True
+
+    # Process restarts: same start path main.py runs.
+    await store.migrate()
+
+    post = await store.get_scheduled_post(post_id)
+    assert post is not None and post.status == "pending"
+    assert post.attempts == 1
+    assert post_id in {p.id for p in await store.list_due_posts(now_utc=now_utc)}
+    assert await store.cancel_post(USER_ID, post_id) is True
