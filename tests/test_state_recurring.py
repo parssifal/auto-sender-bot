@@ -372,6 +372,30 @@ async def test_state_store_list_user_recurring_summaries_filters_by_user_and_act
 
 
 @pytest.mark.asyncio
+async def test_state_store_list_user_recurring_summaries_survives_missing_destination() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        pattern_id = await _seed_recurring_pattern(store)
+
+        # Simulate a destination row that has gone missing.
+        await conn.execute("PRAGMA foreign_keys=OFF")
+        await conn.execute("DELETE FROM destinations WHERE chat_id=?", (-1001,))
+        await conn.commit()
+
+        summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+
+        assert len(summaries) == 1
+        summary = summaries[0]
+        assert summary.pattern.id == pattern_id
+        assert summary.destination_title == str(-1001)
+        assert summary.destination_username is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
     conn = await open_db(":memory:")
     try:

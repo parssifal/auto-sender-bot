@@ -123,7 +123,7 @@ class RecurringMixin:
         query = """
             SELECT
                 rp.*,
-                d.title AS destination_title,
+                COALESCE(d.title, CAST(rp.chat_id AS TEXT)) AS destination_title,
                 d.username AS destination_username,
                 (
                     SELECT sp.id
@@ -159,7 +159,7 @@ class RecurringMixin:
                     LIMIT 1
                 ) AS next_post_status
             FROM recurring_patterns rp
-            JOIN destinations d ON d.chat_id = rp.chat_id
+            LEFT JOIN destinations d ON d.chat_id = rp.chat_id
             WHERE rp.user_id=?
         """
         params: list[object] = [user_id]
