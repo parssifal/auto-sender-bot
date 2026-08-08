@@ -463,9 +463,16 @@ class PostsMixin:
             """
             UPDATE scheduled_posts
             SET status='cancelled'
-            WHERE id=? AND user_id=? AND status='pending'
+            WHERE id=?
+              AND user_id=?
+              AND status='pending'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recurring_instances
+                  WHERE post_id=?
+              )
             """,
-            (post_id, user_id),
+            (post_id, user_id, post_id),
         )
         await self._conn.commit()
         return cur.rowcount == 1

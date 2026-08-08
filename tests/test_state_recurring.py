@@ -405,7 +405,12 @@ async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
             entities_json=None,
         )
         await store.create_recurring_instance(active_pattern_id, cancelled_post_id, 3, 1_700_000_050)
-        assert await store.cancel_post(123, cancelled_post_id) is True
+        # cancel_post refuses recurring instances (T-23); mark cancelled directly
+        # to exercise get_due_recurring_instances' status filter.
+        await conn.execute(
+            "UPDATE scheduled_posts SET status='cancelled' WHERE id=?", (cancelled_post_id,)
+        )
+        await conn.commit()
 
         inactive_pattern_id = await _seed_recurring_pattern(store)
         inactive_post_id = await store.create_scheduled_text_post(

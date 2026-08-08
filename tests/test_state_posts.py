@@ -210,6 +210,28 @@ async def test_hard_delete_post_rejects_recurring_post(store: StateStore) -> Non
 
 
 @pytest.mark.asyncio
+async def test_cancel_post_rejects_recurring_instance(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    _, post_id = await store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc,
+        kind="text",
+        text="Recurring post",
+        entities_json=None,
+    )
+
+    cancelled = await store.cancel_post(USER_ID, post_id)
+
+    post = await store.get_scheduled_post(post_id)
+    assert cancelled is False
+    assert post is not None and post.status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_startup_requeues_stuck_sending_post(store: StateStore) -> None:
     """A crash between claim and mark_* leaves 'sending' forever: invisible to
     list_due_posts, un-cancellable, and holding a quota slot."""
