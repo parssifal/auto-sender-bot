@@ -13,6 +13,10 @@ EXPECTED_TABLES = {
 }
 
 
+def _all_migration_versions() -> set[int]:
+    return {int(p.name.split("_", 1)[0]) for p in MIGRATIONS_DIR.glob("*.sql")}
+
+
 async def _tables(conn):
     rows = await conn.execute_fetchall(
         "SELECT name FROM sqlite_master WHERE type='table'"
@@ -36,7 +40,7 @@ async def test_fresh_db_creates_all_tables_and_records_versions():
                 "SELECT version FROM schema_migrations"
             )
         }
-        assert versions == {1, 2, 3, 4, 5}
+        assert versions == _all_migration_versions()
 
 
 @pytest.mark.asyncio
@@ -82,7 +86,7 @@ async def test_baseline_records_versions_without_dropping_data():
                 "SELECT version FROM schema_migrations"
             )
         }
-        assert versions == {1, 2, 3, 4, 5}
+        assert versions == _all_migration_versions()
         # Data intact, no DDL ran over the existing tables.
         row = await conn.execute_fetchall("SELECT user_id FROM users")
         assert [r[0] for r in row] == [42]
