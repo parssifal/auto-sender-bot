@@ -14,7 +14,14 @@ from aiogram.types import Update
 from core.db import open_db
 from core.state import StateStore
 from telegram.i18n import tr
-from telegram.handlers.states import ScheduleStates
+from telegram.handlers.states import (
+    DestinationsStates,
+    DraftStates,
+    EditStates,
+    LanguageStates,
+    ScheduleStates,
+    TimezoneStates,
+)
 from telegram.router import build_router
 
 USER_ID = 1001
@@ -225,3 +232,34 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert isinstance(call, SendMessage)
     assert call.text == tr("ru", "queue_empty")
     assert call.text != tr("ru", "invalid_datetime_format")
+
+
+# T-14: state-scoped message handlers outside shared.py that lacked the
+# _not_command_or_menu filter and swallowed later-router commands as their input.
+# /team_create lives in the last-registered router (teams), so it is swallowed by
+# every one of these states before the fix. cmd_team_create clears state and
+# replies team_create_usage, so a cleared state + that reply proves the interrupt.
+@pytest.mark.parametrize(
+    "state",
+    [
+        EditStates.entering_text,
+        DraftStates.choosing_scope,
+        TimezoneStates.waiting_tz,
+        LanguageStates.waiting_lang,
+        DestinationsStates.waiting_forward,
+    ],
+    ids=lambda s: s.state,
+)
+@pytest.mark.asyncio
+async def test_command_interrupts_state_scoped_handler(
+    interrupt_flow: InterruptHarness, state: Any
+) -> None:
+    await interrupt_flow.dispatcher.storage.set_state(interrupt_flow.storage_key, state)
+
+    await interrupt_flow.feed_message("/team_create", update_id=10, message_id=20)
+
+    # The command must fall through to its own handler, not be swallowed as input.
+    assert await interrupt_flow.get_state() is None
+    call = interrupt_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "team_create_usage")

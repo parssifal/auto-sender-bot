@@ -534,7 +534,7 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
-    @router.message(states.DraftStates.choosing_scope)
+    @router.message(states.DraftStates.choosing_scope, h._not_command_or_menu)
     async def draft_choose_scope(message: Message) -> None:
         lang = await h._user_lang(store, message.from_user.id)
         writable_teams = await store.list_writable_teams(message.from_user.id)

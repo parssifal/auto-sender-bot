@@ -60,7 +60,7 @@ from telegram.handlers.helpers import (
     get_edit_ctx,
     get_repeat_ctx,
     get_schedule_ctx,
-    menu_button_texts,
+    _not_command_or_menu,
     patch_broadcast_ctx,
     patch_content_ctx,
     patch_schedule_ctx,
@@ -105,22 +105,6 @@ async def _datetime_entry_prompt_text(store, state, lang: str, state_name: str) 
         ctx = await get_edit_ctx(state)
         return tr(lang, "edit_time_prompt", post_id=_short_id(str(ctx.edit_post_id or "")))
     return tr(lang, "enter_datetime")
-
-
-# Labels of the reply-keyboard main-menu buttons, in every supported language.
-_MENU_BUTTON_TEXTS = menu_button_texts()
-
-
-def _not_command_or_menu(message: Message) -> bool:
-    """Filter: match only messages that are NOT a bot command or a menu-button label.
-
-    Commands (text starting with "/") and menu-button labels must fall through to
-    the feature routers' stateless command/menu handlers so they interrupt the
-    compose/datetime flow. Media messages have ``text=None`` (caption is separate)
-    and must still be collected, so an empty/None text returns True.
-    """
-    text = message.text or ""
-    return not text.startswith("/") and text not in _MENU_BUTTON_TEXTS
 
 
 def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:

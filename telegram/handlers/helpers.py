@@ -181,6 +181,21 @@ def menu_button_texts() -> frozenset[str]:
     return frozenset(texts)
 
 
+_MENU_BUTTON_TEXTS = menu_button_texts()
+
+
+def _not_command_or_menu(message) -> bool:
+    """Filter: match only messages that are NOT a bot command or a menu-button label.
+
+    Commands (text starting with "/") and menu-button labels must fall through to
+    the feature routers' stateless command/menu handlers so they interrupt any
+    state-scoped compose/settings flow. Media messages have ``text=None`` (caption
+    is separate) and must still be collected, so an empty/None text returns True.
+    """
+    text = message.text or ""
+    return not text.startswith("/") and text not in _MENU_BUTTON_TEXTS
+
+
 def _is_datetime_entry_state(state_name: str | None) -> bool:
     return state_name in {
         ScheduleStates.entering_datetime.state,

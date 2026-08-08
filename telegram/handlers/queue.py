@@ -564,7 +564,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await h._main_menu_for(store, query.from_user.id))
 
-    @router.message(states.EditStates.entering_text)
+    @router.message(states.EditStates.entering_text, h._not_command_or_menu)
     async def edit_enter_text(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
