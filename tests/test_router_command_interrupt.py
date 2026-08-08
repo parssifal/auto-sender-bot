@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,7 +15,14 @@ from aiogram.types import Update
 from core.db import open_db
 from core.state import StateStore
 from telegram.i18n import tr
-from telegram.handlers.states import ScheduleStates
+from telegram.handlers.states import (
+    DestinationsStates,
+    DraftStates,
+    EditStates,
+    LanguageStates,
+    ScheduleStates,
+    TimezoneStates,
+)
 from telegram.router import build_router
 
 USER_ID = 1001
@@ -225,3 +233,134 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert isinstance(call, SendMessage)
     assert call.text == tr("ru", "queue_empty")
     assert call.text != tr("ru", "invalid_datetime_format")
+
+
+# T-20: a session resumed in *_confirming after a mid-flow deploy can have flat
+# FSM fields defaulted to None (contexts.py); the confirm handler must not crash
+# on int(None) after it already answered the callback, leaving the user nothing.
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"chat_id": DESTINATION_CHAT_ID, "kind": "text", "text": "hi"},  # lost scheduled_at_utc
+        {"scheduled_at_utc": 4102444800, "kind": "text", "text": "hi"},  # lost chat_id
+    ],
+    ids=["no_scheduled_at", "no_chat_id"],
+)
+@pytest.mark.asyncio
+async def test_confirm_yes_recovers_from_incomplete_session(
+    interrupt_flow: InterruptHarness, data: dict[str, Any]
+) -> None:
+    from telegram.handlers.states import ScheduleStates as _SS
+
+    await interrupt_flow.dispatcher.storage.set_state(interrupt_flow.storage_key, _SS.confirming)
+    await interrupt_flow.dispatcher.storage.set_data(interrupt_flow.storage_key, data)
+
+    # Must not raise (int(None)); must recover gracefully.
+    await interrupt_flow.feed_callback("sconf:yes", update_id=10, message_id=20)
+
+    assert await interrupt_flow.get_state() is None
+    call = interrupt_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "cancelled")
+
+
+# T-19: a forged negative page must be clamped, not walk back forever. On an
+# empty queue the walk-back loop never reaches page 0 from a negative page.
+@pytest.mark.asyncio
+async def test_negative_queue_page_terminates(interrupt_flow: InterruptHarness) -> None:
+    await asyncio.wait_for(
+        interrupt_flow.feed_callback("qpage:-5", update_id=10, message_id=20),
+        timeout=3,
+    )
+
+
+# T-18: a failed queue cancel must not follow the "not found" alert with "Done".
+@pytest.mark.asyncio
+async def test_failed_queue_cancel_sends_no_done(interrupt_flow: InterruptHarness) -> None:
+    await interrupt_flow.feed_callback("qcancel:does-not-exist", update_id=10, message_id=20)
+
+    done = tr("ru", "done")
+    assert not any(
+        isinstance(c, SendMessage) and c.text == done for c in interrupt_flow.bot.calls
+    )
+
+
+# T-17: /queue and /drafts mid-compose must clear the FSM state, or the next
+# plain message is silently swallowed as post text.
+@pytest.mark.parametrize("command", ["/queue", "/drafts"])
+@pytest.mark.asyncio
+async def test_list_command_clears_state(interrupt_flow: InterruptHarness, command: str) -> None:
+    await interrupt_flow.reach_collecting_post()
+
+    await interrupt_flow.feed_message(command, update_id=10, message_id=20)
+
+    assert await interrupt_flow.get_state() is None
+
+
+# T-16: a stale sdsel: destination button must be ignored outside
+# ScheduleStates.choosing_destination, not hijack the current flow.
+@pytest.mark.asyncio
+async def test_stale_dest_select_ignored_off_choosing_destination(
+    interrupt_flow: InterruptHarness,
+) -> None:
+    await interrupt_flow.reach_collecting_post()
+
+    await interrupt_flow.feed_callback(
+        f"sdsel:{DESTINATION_CHAT_ID}", update_id=10, message_id=20
+    )
+
+    # The stale button must not jump the compose flow into datetime entry.
+    assert await interrupt_flow.get_state() == ScheduleStates.collecting_post.state
+
+
+# T-15: /timezone in a group chat must not leave TimezoneStates armed on the
+# group's (chat, user) key, or every later group message gets timezone_invalid.
+@pytest.mark.asyncio
+async def test_timezone_command_leaves_no_state_in_group(interrupt_flow: InterruptHarness) -> None:
+    group_chat_id = -5000
+    group_key = StorageKey(bot_id=BOT_ID, chat_id=group_chat_id, user_id=USER_ID)
+    payload = {
+        "update_id": 30,
+        "message": {
+            "message_id": 40,
+            "date": 1_700_000_000,
+            "chat": {"id": group_chat_id, "type": "group", "title": "grp"},
+            "from": {"id": USER_ID, "is_bot": False, "first_name": "Test"},
+            "text": "/timezone",
+            "entities": [{"type": "bot_command", "offset": 0, "length": 9}],
+        },
+    }
+    await interrupt_flow.dispatcher.feed_update(interrupt_flow.bot, Update.model_validate(payload))
+
+    assert await interrupt_flow.dispatcher.storage.get_state(group_key) is None
+
+
+# T-14: state-scoped message handlers outside shared.py that lacked the
+# _not_command_or_menu filter and swallowed later-router commands as their input.
+# /team_create lives in the last-registered router (teams), so it is swallowed by
+# every one of these states before the fix. cmd_team_create clears state and
+# replies team_create_usage, so a cleared state + that reply proves the interrupt.
+@pytest.mark.parametrize(
+    "state",
+    [
+        EditStates.entering_text,
+        DraftStates.choosing_scope,
+        TimezoneStates.waiting_tz,
+        LanguageStates.waiting_lang,
+        DestinationsStates.waiting_forward,
+    ],
+    ids=lambda s: s.state,
+)
+@pytest.mark.asyncio
+async def test_command_interrupts_state_scoped_handler(
+    interrupt_flow: InterruptHarness, state: Any
+) -> None:
+    await interrupt_flow.dispatcher.storage.set_state(interrupt_flow.storage_key, state)
+
+    await interrupt_flow.feed_message("/team_create", update_id=10, message_id=20)
+
+    # The command must fall through to its own handler, not be swallowed as input.
+    assert await interrupt_flow.get_state() is None
+    call = interrupt_flow.last_call()
+    assert isinstance(call, SendMessage)
+    assert call.text == tr("ru", "team_create_usage")

@@ -26,6 +26,7 @@ async def _render_edit_posts(store: StateStore, message: Message, *, user_id: in
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
@@ -73,6 +74,7 @@ async def _render_delete_posts(store: StateStore, message: Message, *, user_id: 
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
@@ -135,6 +137,7 @@ async def _render_queue_page(
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
+    page = max(page, 0)
     while True:
         offset = page * page_size
         posts = await store.list_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
@@ -564,7 +567,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.message.answer(tr(lang, "edit_post_missing"), reply_markup=await h._main_menu_for(store, query.from_user.id))
 
-    @router.message(states.EditStates.entering_text)
+    @router.message(states.EditStates.entering_text, h._not_command_or_menu)
     async def edit_enter_text(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
@@ -584,6 +587,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     @router.message(Command("queue"))
     async def cmd_queue(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        await state.clear()
         await _render_queue_page(store, message, page=0, user_id=message.from_user.id, webapp_url=webapp_url)
 
     @router.callback_query(F.data.startswith("qpage:"))
@@ -604,6 +608,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         post_id = query.data.split(":")[1]
         ok = await store.cancel_post(user_id=query.from_user.id, post_id=post_id)
         await query.answer(tr(lang, "queue_cancel_ok") if ok else tr(lang, "queue_cancel_missing"), show_alert=False)
+        if not ok:
+            return
         await query.message.answer(tr(lang, "done"), reply_markup=await h._main_menu_for(store, query.from_user.id))
 
     return router

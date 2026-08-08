@@ -35,6 +35,7 @@ async def _render_drafts(store: StateStore, message: Message, *, user_id: int, s
     lang = await h._user_lang(store, user_id)
     current_scope = kb._normalize_draft_scope(scope)
     page_size = 5
+    page = max(page, 0)
     while True:
         offset = page * page_size
         items = await store.list_drafts(user_id=user_id, scope=current_scope, offset=offset, limit=page_size + 1)
@@ -215,8 +216,9 @@ def build_router(store: StateStore) -> Router:
     router = Router(name="drafts")
 
     @router.message(Command("drafts"))
-    async def cmd_drafts(message: Message) -> None:
+    async def cmd_drafts(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
+        await state.clear()
         await _render_drafts(store, message, user_id=message.from_user.id, scope="all", page=0, edit=False)
 
     @router.message(Command("draft_create"))
@@ -534,7 +536,7 @@ def build_router(store: StateStore) -> Router:
             )
             return
 
-    @router.message(states.DraftStates.choosing_scope)
+    @router.message(states.DraftStates.choosing_scope, h._not_command_or_menu)
     async def draft_choose_scope(message: Message) -> None:
         lang = await h._user_lang(store, message.from_user.id)
         writable_teams = await store.list_writable_teams(message.from_user.id)

@@ -38,7 +38,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     async def cmd_timezone(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
-        await state.set_state(states.TimezoneStates.waiting_tz)
         if message.chat.type != "private":
             await message.answer(
                 tr(lang, "timezone_private_only"),
@@ -46,13 +45,14 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
                 reply_markup=await h._main_menu_for(store, message.from_user.id),
             )
             return
+        await state.set_state(states.TimezoneStates.waiting_tz)
         await message.answer(
             tr(lang, "timezone_prompt"),
             parse_mode="Markdown",
             reply_markup=kb._timezone_setup_kb(lang),
         )
 
-    @router.message(states.TimezoneStates.waiting_tz)
+    @router.message(states.TimezoneStates.waiting_tz, h._not_command_or_menu)
     async def set_timezone(message: Message, state: FSMContext) -> None:
         lang = await h._user_lang(store, message.from_user.id)
         location = message.location
@@ -107,7 +107,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         await state.set_state(states.LanguageStates.waiting_lang)
         await message.answer(tr(lang, "language_prompt"), reply_markup=kb._language_kb())
 
-    @router.message(states.LanguageStates.waiting_lang)
+    @router.message(states.LanguageStates.waiting_lang, h._not_command_or_menu)
     async def set_language(message: Message, state: FSMContext, bot: Bot) -> None:
         chosen = resolve_language_choice((message.text or "").strip())
         current_lang = await h._user_lang(store, message.from_user.id)
@@ -179,7 +179,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         await state.set_state(states.DestinationsStates.waiting_forward)
         await message.answer(tr(lang, "link_forward_prompt"))
 
-    @router.message(states.DestinationsStates.waiting_forward)
+    @router.message(states.DestinationsStates.waiting_forward, h._not_command_or_menu)
     async def handle_link_forward(message: Message, state: FSMContext) -> None:
         lang = await h._user_lang(store, message.from_user.id)
         # Support both legacy forward_from_chat and new forward_origin structures.
