@@ -352,3 +352,72 @@ async def test_process_due_post_skips_cancelled_recurring_post_loaded_before_sto
         assert pattern.is_active is False
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_skips_occurrences_missed_during_downtime() -> None:
+    """Downtime must not turn a daily series into a burst: the next occurrence is
+    rolled forward past `now`, and the skipped ones count against max_occurrences."""
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        tz = ZoneInfo("Europe/Moscow")
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=tz).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        original_post = await store.get_scheduled_post(post_id)
+        assert original_post is not None
+
+        # The bot was down for a month; the tick happens on 2026-04-02 12:00.
+        now_utc = int(datetime(2026, 4, 2, 12, 0, tzinfo=tz).timestamp())
+        await _process_due_post(bot=FakeBot(), store=store, post=original_post, now_utc=now_utc)
+
+        pending_posts = await store.list_pending_posts(USER_ID, limit=50)
+        assert len(pending_posts) == 1
+        assert pending_posts[0].scheduled_at_utc == int(datetime(2026, 4, 3, 9, 30, tzinfo=tz).timestamp())
+
+        next_instance = await store.get_recurring_instance_by_post_id(pending_posts[0].id)
+        assert next_instance is not None
+        assert next_instance.ordinal == 32
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_ends_series_when_downtime_consumes_max_occurrences() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        tz = ZoneInfo("Europe/Moscow")
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=tz).timestamp())
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+            max_occurrences=5,
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        original_post = await store.get_scheduled_post(post_id)
+        assert original_post is not None
+
+        now_utc = int(datetime(2026, 4, 2, 12, 0, tzinfo=tz).timestamp())
+        await _process_due_post(bot=FakeBot(), store=store, post=original_post, now_utc=now_utc)
+
+        assert await store.list_pending_posts(USER_ID, limit=50) == []
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is False
+    finally:
+        await conn.close()

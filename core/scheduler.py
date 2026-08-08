@@ -77,7 +77,7 @@ def calculate_next_occurrence(pattern: RecurringPattern, last_timestamp: int) ->
     return int(_build_local_datetime(pattern.timezone, next_day, pattern.time_of_day_minutes).timestamp())
 
 
-async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPostRow) -> None:
+async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPostRow, now_utc: int) -> None:
     instance = await store.get_recurring_instance_by_post_id(post.id)
     if instance is None:
         return
@@ -88,12 +88,18 @@ async def _materialize_next_recurring_post(store: StateStore, post: ScheduledPos
 
     current_ordinal = max(pattern.current_count, instance.ordinal)
     next_ordinal = current_ordinal + 1
+    next_scheduled_for_utc = calculate_next_occurrence(pattern, instance.scheduled_for_utc)
+    # Downtime must not fire a burst: skip every occurrence that is already past
+    # and count it as consumed, so a pause cannot stretch the series either.
+    while next_scheduled_for_utc <= now_utc:
+        next_ordinal += 1
+        next_scheduled_for_utc = calculate_next_occurrence(pattern, next_scheduled_for_utc)
+
     if pattern.max_occurrences is not None and next_ordinal > pattern.max_occurrences:
         await store.delete_recurring_pattern(pattern.id)
-        logger.info("Recurring pattern %s completed after ordinal %s", pattern.id, current_ordinal)
+        logger.info("Recurring pattern %s completed after ordinal %s", pattern.id, next_ordinal - 1)
         return
 
-    next_scheduled_for_utc = calculate_next_occurrence(pattern, instance.scheduled_for_utc)
     if pattern.end_at_utc is not None and next_scheduled_for_utc > pattern.end_at_utc:
         await store.delete_recurring_pattern(pattern.id)
         logger.info("Recurring pattern %s completed at end_at=%s", pattern.id, pattern.end_at_utc)
@@ -176,7 +182,7 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
 
         await store.mark_sent(post_id=post.id, sent_at_utc=sent_at_utc)
         try:
-            await _materialize_next_recurring_post(store=store, post=post)
+            await _materialize_next_recurring_post(store=store, post=post, now_utc=now_utc)
         except Exception:
             logger.exception("Sent post %s but failed to materialize next recurring occurrence", post.id)
         logger.info("Sent post %s to chat %s", post.id, post.chat_id)
