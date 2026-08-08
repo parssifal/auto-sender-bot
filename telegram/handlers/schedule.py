@@ -32,6 +32,10 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data.startswith("sdpage:"))
     async def cb_dest_page(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != states.ScheduleStates.choosing_destination.state:
+            await query.answer()
+            return
+
         page = int(query.data.split(":")[1])
         await h.patch_schedule_ctx(state, dest_page=page)
         await query.answer()
@@ -39,6 +43,10 @@ def build_router(store: StateStore) -> Router:
 
     @router.callback_query(F.data.startswith("sdsel:"))
     async def cb_dest_select(query: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != states.ScheduleStates.choosing_destination.state:
+            await query.answer()
+            return
+
         lang = await h._user_lang(store, query.from_user.id)
         tz_name = await store.get_user_timezone(query.from_user.id)
         if not tz_name:

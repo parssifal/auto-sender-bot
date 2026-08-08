@@ -234,6 +234,22 @@ async def test_command_interrupts_entering_datetime(interrupt_flow: InterruptHar
     assert call.text != tr("ru", "invalid_datetime_format")
 
 
+# T-16: a stale sdsel: destination button must be ignored outside
+# ScheduleStates.choosing_destination, not hijack the current flow.
+@pytest.mark.asyncio
+async def test_stale_dest_select_ignored_off_choosing_destination(
+    interrupt_flow: InterruptHarness,
+) -> None:
+    await interrupt_flow.reach_collecting_post()
+
+    await interrupt_flow.feed_callback(
+        f"sdsel:{DESTINATION_CHAT_ID}", update_id=10, message_id=20
+    )
+
+    # The stale button must not jump the compose flow into datetime entry.
+    assert await interrupt_flow.get_state() == ScheduleStates.collecting_post.state
+
+
 # T-15: /timezone in a group chat must not leave TimezoneStates armed on the
 # group's (chat, user) key, or every later group message gets timezone_invalid.
 @pytest.mark.asyncio
