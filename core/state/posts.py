@@ -6,6 +6,7 @@ from typing import Iterable
 
 import core.limits as limits
 from core.limits import ResourceLimitError
+from core.state.base import locked_write
 from core.state.models import ScheduledPostRow
 
 
@@ -23,6 +24,7 @@ class PostsMixin:
         if await self.count_active_posts(user_id) >= limits.MAX_ACTIVE_POSTS_PER_USER:
             raise ResourceLimitError("posts", limits.MAX_ACTIVE_POSTS_PER_USER)
 
+    @locked_write
     async def create_scheduled_text_post(
         self,
         user_id: int,
@@ -45,6 +47,7 @@ class PostsMixin:
         await self._conn.commit()
         return post_id
 
+    @locked_write
     async def create_scheduled_media_post(
         self,
         user_id: int,
@@ -71,6 +74,7 @@ class PostsMixin:
         await self._conn.commit()
         return post_id
 
+    @locked_write
     async def create_broadcast_posts(
         self,
         *,
@@ -262,6 +266,7 @@ class PostsMixin:
         )
         return None if row is None else self._row_to_post(row)
 
+    @locked_write
     async def update_scheduled_post(self, post_id: str, user_id: int, updates: dict[str, object]) -> bool:
         if not updates:
             raise ValueError("updates must not be empty")
@@ -452,6 +457,7 @@ class PostsMixin:
             updates,
         )
 
+    @locked_write
     async def cancel_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
             """
@@ -464,6 +470,7 @@ class PostsMixin:
         await self._conn.commit()
         return cur.rowcount == 1
 
+    @locked_write
     async def hard_delete_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
             """
@@ -500,6 +507,7 @@ class PostsMixin:
         )
         return [self._row_to_post(r) for r in rows]
 
+    @locked_write
     async def claim_post_for_sending(self, post_id: str, now_utc: int) -> bool:
         cur = await self._conn.execute(
             """
@@ -514,7 +522,8 @@ class PostsMixin:
         await self._conn.commit()
         return cur.rowcount == 1
 
-    async def mark_sent(self, post_id: str, sent_at_utc: int) -> None:
+    async def _mark_post_sent(self, post_id: str, sent_at_utc: int) -> None:
+        """Caller owns the transaction (see mark_sent_and_materialize_next)."""
         await self._conn.execute(
             """
             UPDATE scheduled_posts
@@ -523,8 +532,13 @@ class PostsMixin:
             """,
             (sent_at_utc, post_id),
         )
+
+    @locked_write
+    async def mark_sent(self, post_id: str, sent_at_utc: int) -> None:
+        await self._mark_post_sent(post_id, sent_at_utc)
         await self._conn.commit()
 
+    @locked_write
     async def mark_retry(self, post_id: str, next_retry_at_utc: int, error: str) -> None:
         await self._conn.execute(
             """
@@ -536,6 +550,7 @@ class PostsMixin:
         )
         await self._conn.commit()
 
+    @locked_write
     async def mark_failed(self, post_id: str, error: str) -> None:
         await self._conn.execute(
             """

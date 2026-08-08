@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import time
 
+from core.state.base import locked_write
+
 
 class UsersMixin:
+    @locked_write
     async def ensure_user(
         self,
         user_id: int,
@@ -31,6 +34,7 @@ class UsersMixin:
         )
         return None if row is None else row["timezone"]
 
+    @locked_write
     async def set_user_timezone(self, user_id: int, tz_name: str) -> None:
         now = int(time.time())
         await self._conn.execute(
@@ -46,6 +50,7 @@ class UsersMixin:
         )
         return None if row is None else row["language"]
 
+    @locked_write
     async def set_user_language(self, user_id: int, language: str) -> None:
         now = int(time.time())
         await self._conn.execute(
