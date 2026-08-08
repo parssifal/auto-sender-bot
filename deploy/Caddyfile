@@ -21,6 +21,18 @@
 
 	encode gzip zstd
 
+	# Security headers (defence-in-depth; static pages already escape output).
+	# CSP is scoped to what the Mini App actually loads (see core/webapp_static):
+	#   - script-src: self + inline scripts + Telegram's telegram-web-app.js
+	#   - style-src:  self + inline <style> blocks
+	#   - connect-src/img-src: same-origin /api/* (img also allows data: URIs)
+	#   - base-uri 'none' and frame-ancestors restrict base tags / embedding to
+	#     Telegram's webview only.
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors https://*.telegram.org"
+		X-Content-Type-Options "nosniff"
+	}
+
 	# Caddy already forwards Host + X-Forwarded-* to the upstream by default,
 	# so a plain reverse_proxy is enough.
 	reverse_proxy 127.0.0.1:8081
