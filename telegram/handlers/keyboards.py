@@ -186,50 +186,6 @@ def _confirm_kb(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-def _queue_cancel_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in posts:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=tr(lang, "btn_queue_cancel", label=item["label"]),
-                    callback_data=f"qcancel:{item['id']}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _queue_edit_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in posts:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=tr(lang, "btn_edit_post", label=item["label"]),
-                    callback_data=f"qedit:{item['id']}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _queue_delete_kb(posts: list[dict[str, str]], lang: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in posts:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=tr(lang, "btn_delete_post", label=item["label"]),
-                    callback_data=f"qdelask:{item['id']}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in posts:
