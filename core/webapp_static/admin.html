@@ -6,23 +6,35 @@
 <title>Панель бота</title>
 <style>
   :root{
-    --bg:#ffffff; --group-bg:#eef0f3; --card:#ffffff; --text:#0b0b0f;
-    --hint:#8a8f98; --accent:#3390ec; --separator:rgba(0,0,0,.07);
-    --c1:#5b6cf0; --c2:#2fb6a8; --c3:#f5a524; --c4:#f2557a; --c5:#9b6dff;
+    --bg:#eaeef6; --group-bg:#f4f6fb; --card:#ffffff; --text:#0d1220;
+    --hint:#6b7488; --faint:#9aa3b5; --accent:#4f7ffa; --separator:rgba(13,18,32,.08);
+    --line:rgba(13,18,32,.08); --line-strong:rgba(13,18,32,.14);
+    --jet-1:#4f7ffa; --jet-2:#22cdb0;
+    --c1:#4f7ffa; --c2:#12b39a; --c3:#f5a524; --c4:#f2445f; --c5:#22cdb0;
+    --shadow:0 1px 2px rgba(13,18,32,.05), 0 8px 24px -12px rgba(20,40,90,.18);
     --radius:18px; --gap:12px; --pad:16px;
-    --num:"ui-rounded","SF Pro Rounded",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --num:"SF Pro Rounded","ui-rounded",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
   @media (prefers-color-scheme: dark){
     :root{
-      --bg:#17212b; --group-bg:#0e1621; --card:#232e3c; --text:#f4f6f8;
-      --hint:#8596a8; --accent:#64a9ee; --separator:rgba(255,255,255,.08);
+      --bg:#0d1320; --group-bg:#0f1826; --card:#171f2e; --text:#eaf0f8;
+      --hint:#8a97ab; --faint:#5c6a80; --accent:#6ea0ff; --separator:rgba(255,255,255,.08);
+      --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+      --jet-1:#6ea0ff; --jet-2:#3fe0c4;
+      --c1:#6ea0ff; --c2:#2ad3b8; --c3:#ffb347; --c4:#ff6076; --c5:#3fe0c4;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -14px rgba(0,0,0,.7);
     }
   }
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
-    background:var(--group-bg); color:var(--text); font-family:var(--sans);
+    background:
+      radial-gradient(120% 50% at 88% -6%, color-mix(in srgb, var(--jet-2) 12%, transparent), transparent 60%),
+      radial-gradient(120% 50% at 6% -4%, color-mix(in srgb, var(--jet-1) 14%, transparent), transparent 55%),
+      var(--bg);
+    background-attachment:fixed;
+    color:var(--text); font-family:var(--sans);
     -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
     padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom));
   }
@@ -49,19 +61,20 @@
   .ghost-btn:active{background:var(--separator)}
   .ghost-btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
   .backlink{
-    appearance:none; border:0; background:var(--separator); color:var(--text);
-    font-size:13px; font-weight:700; padding:7px 12px; border-radius:12px;
-    cursor:pointer; white-space:nowrap;
+    appearance:none; border:1px solid var(--line-strong); background:var(--card); color:var(--text);
+    font-size:13px; font-weight:700; padding:7px 13px; border-radius:999px;
+    cursor:pointer; white-space:nowrap; box-shadow:var(--shadow);
   }
   .backlink:active{opacity:.7}
 
-  .card{background:var(--card); border-radius:var(--radius); padding:var(--pad)}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:var(--pad); box-shadow:var(--shadow)}
   section{margin-bottom:var(--gap)}
 
   /* Hero — the pulse */
   .hero{position:relative; overflow:hidden; padding-bottom:0}
   .hero .eyebrow{position:relative; z-index:2}
-  .hero-num{font-family:var(--num); font-weight:800; font-size:46px; line-height:1.02; margin:6px 0 2px; position:relative; z-index:2}
+  .hero-num{font-family:var(--num); font-weight:800; font-size:46px; line-height:1.02; margin:6px 0 2px; position:relative; z-index:2;
+    color:transparent; background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); -webkit-background-clip:text; background-clip:text; width:max-content}
   .hero-sub{font-size:13px; color:var(--hint); position:relative; z-index:2}
   .hero-sub b{color:var(--c2); font-weight:700}
   .hero-sub b.down{color:var(--c4)}
@@ -69,7 +82,7 @@
 
   /* KPI grid */
   .kpis{display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); margin-bottom:var(--gap)}
-  .kpi{background:var(--card); border-radius:var(--radius); padding:14px var(--pad)}
+  .kpi{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px var(--pad); box-shadow:var(--shadow)}
   .kpi .v{font-family:var(--num); font-weight:800; font-size:28px; line-height:1.1; margin-top:8px}
   .kpi .d{font-size:12px; color:var(--hint); margin-top:3px}
   .kpi .d b{color:var(--c2)}
@@ -123,7 +136,7 @@
   }
   .find input:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:transparent}
   .find button{
-    appearance:none; border:0; background:var(--accent); color:#fff; font-weight:700; font-size:15px;
+    appearance:none; border:0; background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); color:#fff; font-weight:700; font-size:15px;
     border-radius:12px; padding:0 18px; cursor:pointer;
   }
   .find button:active{opacity:.85}

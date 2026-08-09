@@ -6,74 +6,183 @@
 <title>Мои посты</title>
 <style>
   :root{
-    --bg:#ffffff; --group-bg:#eef0f3; --card:#ffffff; --text:#0b0b0f;
-    --hint:#8a8f98; --accent:#3390ec; --separator:rgba(0,0,0,.07);
-    --danger:#f2557a; --ok:#2fb6a8;
-    --radius:18px; --gap:12px; --pad:16px;
-    --num:"ui-rounded","SF Pro Rounded",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --bg:#eaeef6; --surface:#ffffff; --surface-2:#f4f6fb;
+    --ink:#0d1220; --muted:#6b7488; --faint:#9aa3b5;
+    --line:rgba(13,18,32,.08); --line-strong:rgba(13,18,32,.14);
+    --accent:#4f7ffa; --jet-1:#4f7ffa; --jet-2:#22cdb0;
+    --danger:#f2445f; --good:#12b39a; --ring-track:rgba(13,18,32,.09);
+    --shadow:0 1px 2px rgba(13,18,32,.05), 0 8px 24px -12px rgba(20,40,90,.18);
+    --radius:20px; --r-md:16px; --r-sm:12px; --pad:16px;
+    --num:"SF Pro Rounded","ui-rounded",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
   @media (prefers-color-scheme: dark){
     :root{
-      --bg:#17212b; --group-bg:#0e1621; --card:#232e3c; --text:#f4f6f8;
-      --hint:#8596a8; --accent:#64a9ee; --separator:rgba(255,255,255,.08);
+      --bg:#0d1320; --surface:#171f2e; --surface-2:#0f1826;
+      --ink:#eaf0f8; --muted:#8a97ab; --faint:#5c6a80;
+      --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+      --accent:#6ea0ff; --jet-1:#6ea0ff; --jet-2:#3fe0c4;
+      --danger:#ff6076; --good:#2ad3b8; --ring-track:rgba(255,255,255,.10);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -14px rgba(0,0,0,.7);
     }
   }
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
-    background:var(--group-bg); color:var(--text); font-family:var(--sans);
+    background:
+      radial-gradient(120% 55% at 85% -8%, color-mix(in srgb, var(--jet-2) 13%, transparent), transparent 60%),
+      radial-gradient(120% 55% at 10% -5%, color-mix(in srgb, var(--jet-1) 15%, transparent), transparent 55%),
+      var(--bg);
+    background-attachment:fixed; color:var(--ink); font-family:var(--sans);
     -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
-    padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom));
+    padding:env(safe-area-inset-top) 0 calc(28px + env(safe-area-inset-bottom));
   }
-  #app{max-width:560px; margin:0 auto; padding:0 var(--pad)}
-  .topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 14px}
-  .topbar h1{font-size:20px; font-weight:800; margin:0; letter-spacing:-.01em}
-  .topbar .live{font-size:11px; font-weight:700; color:var(--hint); letter-spacing:.06em; text-transform:uppercase}
-  .topbar-actions{display:flex; align-items:center; gap:10px; flex:none}
-  .adminlink{
-    appearance:none; border:0; border-radius:12px; padding:7px 13px; font-size:13px;
-    font-weight:700; cursor:pointer; background:var(--accent); color:#fff; white-space:nowrap;
-  }
-  .adminlink:active{opacity:.7}
-  .eyebrow{font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--hint); margin:0 2px 8px}
-  section{margin-bottom:22px}
-  .card{background:var(--card); border-radius:var(--radius); padding:var(--pad); margin-bottom:var(--gap)}
-  .row{display:flex; align-items:baseline; justify-content:space-between; gap:10px}
-  .row b{font-size:15px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .row .when{font-family:var(--num); font-size:13px; color:var(--accent); font-weight:700; flex:none}
-  .meta{font-size:13px; color:var(--hint); margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-  .actions{display:flex; gap:8px; margin-top:14px}
-  button.act{
-    appearance:none; border:0; border-radius:12px; padding:9px 14px; font-size:14px;
-    font-weight:600; cursor:pointer; background:var(--separator); color:var(--text);
-  }
-  button.act:active{opacity:.7}
-  button.act.danger{color:#fff; background:var(--danger)}
-  button.act.primary{color:#fff; background:var(--accent)}
-  .empty{color:var(--hint); font-size:14px; text-align:center; padding:22px 0}
-  .banner{background:var(--card); border-radius:var(--radius); padding:12px var(--pad); font-size:13px; color:var(--hint); margin-bottom:var(--gap)}
+  #app{max-width:600px; margin:0 auto; padding:0 var(--pad)}
 
-  /* Reschedule modal */
-  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:24px; z-index:10}
-  .overlay.open{display:flex}
-  .modal{background:var(--card); border-radius:var(--radius); padding:20px; width:100%; max-width:360px}
-  .modal h3{margin:0 0 14px; font-size:17px}
-  .field{display:flex; flex-direction:column; gap:6px; margin-bottom:14px}
-  .field label{font-size:12px; color:var(--hint); font-weight:600}
-  .field input{
-    appearance:none; border:1px solid var(--separator); background:var(--group-bg); color:var(--text);
-    border-radius:12px; padding:11px 12px; font-size:15px; font-family:var(--num);
-  }
-  .modal .actions{justify-content:flex-end}
+  .topbar{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 2px 14px}
+  .brand{display:flex; align-items:center; gap:10px; min-width:0}
+  .glyph{width:34px; height:34px; border-radius:11px; flex:none; display:grid; place-items:center; color:#fff;
+    background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); box-shadow:0 6px 16px -6px color-mix(in srgb,var(--jet-1) 60%, transparent)}
+  .glyph svg{width:19px; height:19px}
+  .brand h1{font-size:19px; font-weight:800; margin:0; letter-spacing:-.02em; line-height:1}
+  .brand .sub{font-size:11.5px; color:var(--muted); font-weight:600; margin-top:3px}
+  .topbar-actions{display:flex; align-items:center; gap:9px; flex:none}
+  .live{font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent);
+    border:1px solid color-mix(in srgb,var(--accent) 40%, transparent); border-radius:999px; padding:4px 8px}
+  .adminlink{appearance:none; border:0; border-radius:999px; padding:8px 14px; font-size:12.5px; font-weight:800;
+    cursor:pointer; color:#fff; background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); white-space:nowrap}
+  .adminlink:active{transform:scale(.94)}
+
+  .banner{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:11px 14px;
+    font-size:12.5px; color:var(--muted); margin-bottom:16px; box-shadow:var(--shadow)}
+  .eyebrow{font-size:11px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; color:var(--muted); margin:0 4px 12px}
+  section{margin-bottom:24px}
+  section[hidden]{display:none}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:var(--pad); box-shadow:var(--shadow)}
+  .empty{color:var(--muted); font-size:14px; text-align:center; padding:22px 0}
+
+  /* Hero — next dispatch */
+  .hero{position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:24px; cursor:pointer}
+  .hero::before{content:""; position:absolute; inset:0; border-radius:inherit; padding:1px;
+    background:linear-gradient(135deg, color-mix(in srgb,var(--jet-1) 55%,transparent), transparent 45%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude; pointer-events:none}
+  .hero-eyebrow{display:flex; align-items:center; gap:7px; font-size:11px; font-weight:800;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:16px}
+  .hero-eyebrow .dot{width:7px; height:7px; border-radius:50%; background:var(--good); animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--good) 55%,transparent)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  .hero-body{display:flex; align-items:center; gap:20px}
+  .ring{--pct:20; position:relative; width:104px; height:104px; flex:none; border-radius:50%;
+    background:radial-gradient(closest-side, var(--surface) 71%, transparent 72% 100%),
+      conic-gradient(from -90deg, var(--jet-1), var(--jet-2) calc(var(--pct)*1%), var(--ring-track) 0);
+    display:grid; place-items:center; transition:background .9s ease}
+  .ring .rtime{font-family:var(--num); font-weight:800; font-size:26px; line-height:1; letter-spacing:-.02em}
+  .ring .runit{font-size:10.5px; font-weight:700; color:var(--muted); letter-spacing:.06em; text-transform:uppercase; margin-top:3px}
+  .hero-info{min-width:0; flex:1}
+  .hero-dest{font-size:17px; font-weight:800; letter-spacing:-.01em; margin:0 0 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .hero-when{font-family:var(--num); font-size:14px; font-weight:700; margin-bottom:10px}
+  .hero-when .at{color:var(--muted); font-weight:600}
+  .kindchip{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; padding:5px 10px; border-radius:999px; background:var(--surface-2); color:var(--muted)}
+  .kindchip svg{width:13px; height:13px}
+
+  .actions{display:flex; gap:9px; margin-top:16px}
+  button.act{appearance:none; border:0; border-radius:var(--r-sm); padding:11px 15px; font-size:14px; font-weight:700;
+    cursor:pointer; background:var(--surface-2); color:var(--ink); font-family:var(--sans); transition:transform .12s}
+  button.act:active{transform:scale(.96)}
+  button.act.primary{color:#fff; background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); flex:1}
+  button.act.danger{color:var(--danger); background:transparent; border:1px solid color-mix(in srgb,var(--danger) 32%,transparent)}
+
+  /* Timeline */
+  .daygroup{margin-bottom:6px}
+  .daylabel{font-size:12px; font-weight:800; color:var(--ink); margin:14px 4px 10px; letter-spacing:-.01em; display:flex; align-items:center; gap:8px}
+  .daylabel .rel{font-weight:600; color:var(--faint); font-size:11.5px}
+  .tl{position:relative; padding-left:26px}
+  .tl::before{content:""; position:absolute; left:8px; top:6px; bottom:6px; width:2px; background:linear-gradient(var(--line-strong), var(--line))}
+  .node{position:relative; margin-bottom:11px}
+  .node::before{content:""; position:absolute; left:-26px; top:20px; transform:translateX(1.5px); width:11px; height:11px;
+    border-radius:50%; background:var(--surface); border:2.5px solid var(--line-strong)}
+  .node.soon::before{border-color:var(--jet-1); background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); box-shadow:0 0 0 4px color-mix(in srgb,var(--jet-1) 16%,transparent)}
+  .item{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:14px 15px; box-shadow:var(--shadow); cursor:pointer; transition:transform .14s}
+  .item:active{transform:scale(.99)}
+  .item-top{display:flex; align-items:center; justify-content:space-between; gap:12px}
+  .item-lead{display:flex; align-items:center; gap:10px; min-width:0}
+  .item-ico{width:32px; height:32px; border-radius:9px; flex:none; display:grid; place-items:center; background:var(--surface-2); color:var(--muted)}
+  .item-ico svg{width:16px; height:16px}
+  .item-dest{font-size:15px; font-weight:700; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .item-time{font-family:var(--num); font-size:14px; font-weight:800; flex:none;
+    color:transparent; background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); -webkit-background-clip:text; background-clip:text}
+  .item-meta{font-size:12.5px; color:var(--muted); margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .item-actions{display:flex; gap:8px; margin-top:12px}
+  button.tinybtn{appearance:none; border:0; border-radius:10px; padding:8px 13px; font-size:13px; font-weight:700; cursor:pointer;
+    background:var(--surface-2); color:var(--ink); font-family:var(--sans); transition:transform .12s}
+  button.tinybtn:active{transform:scale(.94)}
+  button.tinybtn.danger{color:var(--danger)}
+
+  /* Recurring */
+  .recur{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:14px 15px; box-shadow:var(--shadow); margin-bottom:10px}
+  .recur-head{display:flex; align-items:center; gap:14px}
+  .recur .tinybtn{margin-top:12px}
+  .cadence{flex:none; width:50px; height:50px; border-radius:14px; display:grid; place-items:center; background:var(--surface-2)}
+  .cadence svg{width:23px; height:23px; color:var(--accent)}
+  .recur-info{flex:1; min-width:0}
+  .recur-dest{font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .recur-cad{display:inline-flex; align-items:center; font-family:var(--num); font-size:12.5px; font-weight:800; color:var(--ink);
+    margin-top:5px; padding:3px 9px; border-radius:999px; background:color-mix(in srgb,var(--accent) 12%, transparent)}
+  .recur-next{font-size:12px; color:var(--muted); margin-top:6px}
+
+  .reveal{opacity:0; transform:translateY(9px); animation:rise .45s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes rise{to{opacity:1; transform:none}}
+
+  /* Bottom-sheet modals (reschedule + preview) */
+  .overlay{position:fixed; inset:0; background:rgba(6,10,20,.5); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+    display:flex; align-items:flex-end; justify-content:center; opacity:0; pointer-events:none; transition:opacity .25s; z-index:20}
+  .overlay.open{opacity:1; pointer-events:auto}
+  .modal{background:var(--surface); border-radius:22px 22px 0 0; padding:8px 20px calc(22px + env(safe-area-inset-bottom));
+    width:100%; max-width:600px; transform:translateY(103%); transition:transform .3s cubic-bezier(.2,.8,.2,1);
+    box-shadow:0 -20px 50px -20px rgba(0,0,0,.5); max-height:88vh; overflow-y:auto}
+  .overlay.open .modal{transform:none}
+  .modal::before{content:""; display:block; width:38px; height:4px; border-radius:99px; background:var(--line-strong); margin:8px auto 16px}
+  .modal h3{margin:0 0 14px; font-size:18px; font-weight:800; letter-spacing:-.01em}
+  .field{display:flex; flex-direction:column; gap:7px; margin-bottom:14px}
+  .field label{font-size:12px; color:var(--muted); font-weight:700}
+  .field input{appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
+    border-radius:12px; padding:12px 13px; font-size:16px; font-family:var(--num); font-weight:700}
+  .field input:focus{outline:2px solid var(--accent); outline-offset:1px}
+  .modal .actions{justify-content:flex-end; margin-top:18px}
   .err{color:var(--danger); font-size:13px; min-height:18px; margin-bottom:8px}
+
+  /* Post preview */
+  .card[data-open]{cursor:pointer}
+  .modal.wide{max-width:600px}
+  .pv-when{font-family:var(--num); font-size:12px; color:var(--accent); font-weight:800; margin:-6px 0 14px}
+  .film{display:flex; gap:9px; overflow-x:auto; margin:0 -20px 14px; padding:0 20px 6px; -webkit-overflow-scrolling:touch}
+  .frame{position:relative; flex:none; width:170px; aspect-ratio:4/5; border-radius:14px; overflow:hidden; background:var(--surface-2); display:grid; place-items:center}
+  .frame.single{width:100%; aspect-ratio:16/10}
+  .frame img{width:100%; height:100%; object-fit:cover; display:block}
+  .frame .tico{width:36px; height:36px; color:var(--muted)}
+  .frame .tlabel{position:absolute; left:8px; top:8px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:#fff; background:rgba(0,0,0,.5); border-radius:6px; padding:2px 6px}
+  .frame .fname{position:absolute; left:8px; right:8px; bottom:8px; font-size:11px; color:#fff; background:rgba(0,0,0,.5); border-radius:6px; padding:2px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .pv-text{font-size:14.5px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word}
+  .pv-text.empty{color:var(--muted); font-style:italic}
+  .pv-text a{color:var(--accent)}
+  .pv-text code{font-family:ui-monospace,Menlo,monospace; font-size:.9em; background:var(--surface-2); padding:1px 4px; border-radius:5px}
+  .pv-loading{color:var(--muted); font-size:13px; padding:12px 0}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none !important; transition:none !important}
+    .reveal{opacity:1; transform:none}
+  }
 </style>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 <div id="app">
   <div class="topbar">
-    <h1 id="t-title">Мои посты</h1>
+    <div class="brand">
+      <span class="glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M22 2 11 13" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2 15 22l-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg></span>
+      <div><h1 id="t-title">Мои посты</h1><div class="sub" id="t-sub">Очередь постов</div></div>
+    </div>
     <div class="topbar-actions">
       <span class="live" id="t-demo" hidden>demo</span>
       <button class="adminlink" id="admin-link" hidden>Админ-панель</button>
@@ -82,13 +191,15 @@
 
   <div class="banner" id="tz-banner" hidden></div>
 
-  <section>
-    <p class="eyebrow" id="t-queue">Запланированные</p>
+  <div id="hero-slot"></div>
+
+  <section id="sec-queue">
+    <p class="eyebrow" id="t-queue">Очередь отправки</p>
     <div id="queue-list"></div>
   </section>
 
-  <section>
-    <p class="eyebrow" id="t-recurring">Повторяющиеся</p>
+  <section id="sec-recurring">
+    <p class="eyebrow" id="t-recurring">По расписанию</p>
     <div id="recurring-list"></div>
   </section>
 </div>
@@ -112,6 +223,18 @@
   </div>
 </div>
 
+<div class="overlay" id="detail">
+  <div class="modal wide">
+    <h3 id="pv-title">Пост</h3>
+    <div class="pv-when" id="pv-when"></div>
+    <div id="pv-media"></div>
+    <div class="pv-text" id="pv-text"></div>
+    <div class="actions">
+      <button class="act" id="pv-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const tg = window.Telegram?.WebApp;
 const initData = tg?.initData || "";
@@ -120,29 +243,38 @@ tg?.expand?.();
 const AUTH = { "Authorization": "tma " + initData };
 let TZ = "UTC", LANG = "ru";
 let rescheduleId = null;
+let heroTimer = null;
 
 const I18N = {
   ru: {
-    title:"Мои посты", queue:"Запланированные", recurring:"Повторяющиеся", admin_btn:"Админ-панель",
+    title:"Мои посты", sub:"Очередь постов", queue:"Очередь отправки", recurring:"По расписанию", admin_btn:"Админ-панель",
+    hero_eyebrow:"Ближайший вылет",
     empty_q:"Нет запланированных постов", empty_r:"Нет повторяющихся",
     resched:"Перенести", cancel:"Отменить", cancel_series:"Отменить серию",
-    kind_text:"Текст", kind_media:n=>`Медиа × ${n}`, next:"Следующий",
+    kind_text:"Текст", kind_media:n=>`Медиа × ${n}`, next:"Следующий вылет",
+    today:"Сегодня", tomorrow:"Завтра", in_days:n=>`через ${n} ${plural(n,["день","дня","дней"])}`,
     m_title:"Перенести пост", m_date:"Дата", m_time:"Время", m_cancel:"Отмена", m_save:"Сохранить",
     confirm_cancel:"Отменить этот пост?", confirm_series:"Отменить всю серию?",
     tz_note:tz=>`Время указано в вашем часовом поясе: ${tz}`,
     truncated:"Показаны первые 50 постов. Остальные можно посмотреть в боте (/queue).",
     err:e=>"Ошибка: "+e, need_both:"Укажите дату и время",
+    close:"Закрыть", no_caption:"Без подписи", loading:"Загрузка…",
+    kind_video:"Видео", kind_doc:"Файл",
   },
   en: {
-    title:"My posts", queue:"Scheduled", recurring:"Recurring", admin_btn:"Admin panel",
+    title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
+    hero_eyebrow:"Next dispatch",
     empty_q:"No scheduled posts", empty_r:"No recurring patterns",
     resched:"Reschedule", cancel:"Cancel", cancel_series:"Cancel series",
-    kind_text:"Text", kind_media:n=>`Media × ${n}`, next:"Next",
+    kind_text:"Text", kind_media:n=>`Media × ${n}`, next:"Next dispatch",
+    today:"Today", tomorrow:"Tomorrow", in_days:n=>`in ${n} ${plural(n,["day","days"])}`,
     m_title:"Reschedule post", m_date:"Date", m_time:"Time", m_cancel:"Cancel", m_save:"Save",
     confirm_cancel:"Cancel this post?", confirm_series:"Cancel the whole series?",
     tz_note:tz=>`Times shown in your timezone: ${tz}`,
     truncated:"Showing the first 50 posts. See the rest in the bot (/queue).",
     err:e=>"Error: "+e, need_both:"Pick a date and time",
+    close:"Close", no_caption:"No caption", loading:"Loading…",
+    kind_video:"Video", kind_doc:"File",
   },
 };
 const INTERVAL = {
@@ -152,6 +284,16 @@ const INTERVAL = {
 const t = k => (I18N[LANG] || I18N.en)[k];
 const intervalLabel = it => (INTERVAL[LANG] || INTERVAL.en)[it] || it;
 
+function plural(n, forms){
+  if(LANG==="ru"){
+    const n10=n%10, n100=n%100;
+    if(n10===1 && n100!==11) return forms[0];
+    if(n10>=2 && n10<=4 && (n100<10 || n100>=20)) return forms[1];
+    return forms[2];
+  }
+  return n===1 ? forms[0] : forms[1];
+}
+
 function pad(n){return String(n).padStart(2,"0");}
 function fmtLocal(epoch){
   if(!epoch) return "—";
@@ -159,8 +301,43 @@ function fmtLocal(epoch){
     timeZone:TZ, day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit",
   }).format(new Date(epoch*1000));
 }
-// Split an epoch into the <input type=date>/<input type=time> values for TZ.
-// hourCycle (not hour12) so midnight is "00", not "24".
+function timeOnly(epoch){
+  return new Intl.DateTimeFormat(LANG==="ru"?"ru-RU":"en-GB",{ timeZone:TZ, hour:"2-digit", minute:"2-digit" }).format(new Date(epoch*1000));
+}
+// yyyy-mm-dd for an epoch as seen in the user's TZ, for day-bucketing.
+function tzDateStr(epoch){
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA",{
+    timeZone:TZ, year:"numeric", month:"2-digit", day:"2-digit",
+  }).formatToParts(new Date(epoch*1000)).map(x=>[x.type,x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+function dayDiff(epoch){
+  const nowDay = tzDateStr(Math.floor(Date.now()/1000));
+  return Math.round((Date.parse(tzDateStr(epoch)+"T00:00:00Z") - Date.parse(nowDay+"T00:00:00Z"))/86400000);
+}
+function dayLabel(epoch){
+  const d = dayDiff(epoch);
+  if(d<=0) return { label:t("today"), rel:"" };
+  if(d===1) return { label:t("tomorrow"), rel:"" };
+  const label = new Intl.DateTimeFormat(LANG==="ru"?"ru-RU":"en-GB",{ timeZone:TZ, day:"numeric", month:"long" }).format(new Date(epoch*1000));
+  return { label, rel:t("in_days")(d) };
+}
+// Countdown split; UTC-based remaining, so it is timezone-independent.
+function relBig(sec){
+  const s=Math.max(0,sec), d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60);
+  if(d>=1) return { n:d, u:plural(d, LANG==="ru"?["день","дня","дней"]:["day","days"]) };
+  if(h>=1) return { n:h, u:plural(h, LANG==="ru"?["час","часа","часов"]:["hour","hours"]) };
+  return { n:m, u:LANG==="ru"?"мин":"min" };
+}
+function relText(sec){
+  const s=Math.max(0,sec), d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60);
+  const b=relBig(s), prefix = LANG==="ru"?"через ":"in ";
+  let sub="";
+  if(d>=1) sub = ` ${h} ${LANG==="ru"?"ч":"h"}`;
+  else if(h>=1) sub = ` ${m} ${LANG==="ru"?"мин":"min"}`;
+  return prefix + b.n + " " + b.u + sub;
+}
+
 function localInputParts(epoch){
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA",{
     timeZone:TZ, year:"numeric", month:"2-digit", day:"2-digit",
@@ -183,8 +360,16 @@ async function api(path,opts){
   return r.json();
 }
 
+const IC_TEXT = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const IC_MEDIA = '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="9.5" r="1.8" stroke="currentColor" stroke-width="2"/><path d="m4 17 5-5 5 4 3-3 3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const IC_DAILY = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const IC_CAL = '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2"/><path d="M3 9h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+function kindIcon(kind){ return kind==="text" ? IC_TEXT : IC_MEDIA; }
+function cadenceIcon(it){ return it==="daily" ? IC_DAILY : IC_CAL; }
+
 function applyStaticLabels(){
   document.getElementById("t-title").textContent = t("title");
+  document.getElementById("t-sub").textContent = t("sub");
   document.getElementById("admin-link").textContent = t("admin_btn");
   document.getElementById("t-queue").textContent = t("queue");
   document.getElementById("t-recurring").textContent = t("recurring");
@@ -193,46 +378,126 @@ function applyStaticLabels(){
   document.getElementById("m-time-l").textContent = t("m_time");
   document.getElementById("m-cancel").textContent = t("m_cancel");
   document.getElementById("m-save").textContent = t("m_save");
+  document.getElementById("pv-close").textContent = t("close");
   const b = document.getElementById("tz-banner");
   b.textContent = t("tz_note")(TZ); b.hidden = false;
 }
 
+function heroHtml(p){
+  const kind = p.kind==="text"
+    ? `<span class="kindchip">${IC_TEXT}${t("kind_text")}</span>`
+    : `<span class="kindchip">${IC_MEDIA}${t("kind_media")(p.media_count)}</span>`;
+  return `<div class="hero reveal" data-open="${p.id}" data-title="${escapeHtml(p.destination_title)}">
+    <div class="hero-eyebrow"><span class="dot"></span>${t("hero_eyebrow")}</div>
+    <div class="hero-body">
+      <div class="ring" id="hero-ring"><div style="text-align:center">
+        <div class="rtime" id="hero-big">—</div><div class="runit" id="hero-unit"></div>
+      </div></div>
+      <div class="hero-info">
+        <p class="hero-dest">${escapeHtml(p.destination_title)}</p>
+        <div class="hero-when" id="hero-rel"></div>
+        ${kind}
+      </div>
+    </div>
+    <div class="actions">
+      <button class="act primary" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
+      <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
+    </div>
+  </div>`;
+}
+
+function startCountdown(p){
+  clearInterval(heroTimer);
+  const tick = ()=>{
+    const relEl = document.getElementById("hero-rel");
+    const bigEl = document.getElementById("hero-big");
+    const unitEl = document.getElementById("hero-unit");
+    const ringEl = document.getElementById("hero-ring");
+    if(!relEl) { clearInterval(heroTimer); return; }
+    const sec = p.scheduled_at_utc - Math.floor(Date.now()/1000);
+    const b = relBig(sec);
+    bigEl.textContent = b.n; unitEl.textContent = b.u;
+    relEl.innerHTML = `${relText(sec)} <span class="at">· ${timeOnly(p.scheduled_at_utc)}</span>`;
+    // Ring fills as the send moment approaches within a 24h horizon.
+    const pct = Math.max(4, Math.min(100, 100 - (sec/86400)*100));
+    ringEl.style.setProperty("--pct", pct.toFixed(0));
+  };
+  tick();
+  heroTimer = setInterval(tick, 1000);
+}
+
+function timelineItemHtml(p){
+  const soon = (p.scheduled_at_utc - Math.floor(Date.now()/1000)) < 3*3600;
+  const kind = p.kind==="text" ? t("kind_text") : t("kind_media")(p.media_count);
+  return `<div class="node ${soon?"soon":""}">
+    <div class="item" data-open="${p.id}" data-title="${escapeHtml(p.destination_title)}">
+      <div class="item-top">
+        <span class="item-lead"><span class="item-ico">${kindIcon(p.kind)}</span><span class="item-dest">${escapeHtml(p.destination_title)}</span></span>
+        <span class="item-time">${timeOnly(p.scheduled_at_utc)}</span>
+      </div>
+      <div class="item-meta">${kind}${p.preview?" · "+escapeHtml(p.preview):""}</div>
+      <div class="item-actions">
+        <button class="tinybtn" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
+        <button class="tinybtn danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderQueue(posts, hasMore){
-  const el = document.getElementById("queue-list");
-  if(!posts.length){ el.innerHTML = `<div class="card"><div class="empty">${t("empty_q")}</div></div>`; return; }
-  el.innerHTML = "";
-  for(const p of posts){
-    const kind = p.kind==="text" ? t("kind_text") : t("kind_media")(p.media_count);
-    const card = document.createElement("div"); card.className="card";
-    card.innerHTML = `
-      <div class="row"><b>${escapeHtml(p.destination_title)}</b><span class="when">${fmtLocal(p.scheduled_at_utc)}</span></div>
-      <div class="meta">${kind}${p.preview?" · "+escapeHtml(p.preview):""}</div>
-      <div class="actions">
-        <button class="act primary" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
-        <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
-      </div>`;
-    el.appendChild(card);
+  const heroSlot = document.getElementById("hero-slot");
+  const list = document.getElementById("queue-list");
+  const sec = document.getElementById("sec-queue");
+  clearInterval(heroTimer);
+  if(!posts.length){
+    heroSlot.innerHTML = `<div class="card"><div class="empty">${t("empty_q")}</div></div>`;
+    sec.hidden = true;
+    return;
   }
-  if(hasMore){
-    const note = document.createElement("div");
-    note.className = "empty"; note.textContent = t("truncated");
-    el.appendChild(note);
+  const [head, ...rest] = posts;
+  heroSlot.innerHTML = heroHtml(head);
+  startCountdown(head);
+
+  if(!rest.length && !hasMore){ sec.hidden = true; return; }
+  sec.hidden = false;
+  // Group the remaining posts by their dispatch day (chronological order is
+  // real information: it is the order they fly).
+  const groups = [];
+  for(const p of rest){
+    const dl = dayLabel(p.scheduled_at_utc);
+    let g = groups.find(x=>x.label===dl.label);
+    if(!g){ g = { label:dl.label, rel:dl.rel, items:[] }; groups.push(g); }
+    g.items.push(p);
   }
+  let html = "";
+  for(const g of groups){
+    html += `<div class="daygroup"><div class="daylabel">${escapeHtml(g.label)}${g.rel?`<span class="rel">${escapeHtml(g.rel)}</span>`:""}</div><div class="tl">`;
+    for(const p of g.items) html += timelineItemHtml(p);
+    html += `</div></div>`;
+  }
+  if(hasMore) html += `<div class="empty">${t("truncated")}</div>`;
+  list.innerHTML = html;
 }
 
 function renderRecurring(patterns){
   const el = document.getElementById("recurring-list");
-  if(!patterns.length){ el.innerHTML = `<div class="card"><div class="empty">${t("empty_r")}</div></div>`; return; }
+  const sec = document.getElementById("sec-recurring");
+  if(!patterns.length){ sec.hidden = false; el.innerHTML = `<div class="card"><div class="empty">${t("empty_r")}</div></div>`; return; }
+  sec.hidden = false;
   el.innerHTML = "";
   for(const p of patterns){
     const tod = pad(Math.floor(p.time_of_day_minutes/60))+":"+pad(p.time_of_day_minutes%60);
-    const card = document.createElement("div"); card.className="card";
+    const card = document.createElement("div"); card.className="recur";
     card.innerHTML = `
-      <div class="row"><b>${escapeHtml(p.destination_title)}</b><span class="when">${intervalLabel(p.interval_type)} · ${tod}</span></div>
-      <div class="meta">${t("next")}: ${fmtLocal(p.next_scheduled_at_utc)}</div>
-      <div class="actions">
-        <button class="act danger" data-act="rec-cancel" data-id="${p.id}">${t("cancel_series")}</button>
-      </div>`;
+      <div class="recur-head">
+        <div class="cadence">${cadenceIcon(p.interval_type)}</div>
+        <div class="recur-info">
+          <div class="recur-dest">${escapeHtml(p.destination_title)}</div>
+          <span class="recur-cad">${intervalLabel(p.interval_type)} · ${tod}</span>
+          <div class="recur-next">${t("next")} — ${fmtLocal(p.next_scheduled_at_utc)}</div>
+        </div>
+      </div>
+      <button class="tinybtn danger" data-act="rec-cancel" data-id="${p.id}">${t("cancel_series")}</button>`;
     el.appendChild(card);
   }
 }
@@ -265,6 +530,7 @@ function openModal(id, epoch){
 }
 function closeModal(){ modal.classList.remove("open"); rescheduleId = null; }
 document.getElementById("m-cancel").addEventListener("click", closeModal);
+modal.addEventListener("click", (e)=>{ if(e.target === modal) closeModal(); });
 document.getElementById("m-save").addEventListener("click", async ()=>{
   const date = document.getElementById("m-date").value;
   const time = document.getElementById("m-time").value;
@@ -280,8 +546,105 @@ document.getElementById("m-save").addEventListener("click", async ()=>{
   }catch(e){ errEl.textContent = t("err")(e.message); }
 });
 
+// Post preview
+const detail = document.getElementById("detail");
+let objectUrls = [];
+function safeUrl(u){ return /^(https?:|tg:)/i.test(u||"") ? u : "#"; }
+function entityTag(e){
+  switch(e.type){
+    case "bold": return ["<b>","</b>"];
+    case "italic": return ["<i>","</i>"];
+    case "underline": return ["<u>","</u>"];
+    case "strikethrough": return ["<s>","</s>"];
+    case "code": case "pre": return ["<code>","</code>"];
+    case "blockquote": return ["<blockquote>","</blockquote>"];
+    case "text_link": return e.url ? [`<a href="${escapeHtml(safeUrl(e.url))}" target="_blank" rel="noopener noreferrer">`,"</a>"] : null;
+    default: return null;
+  }
+}
+// ponytail: boundary insertion; relies on Telegram's properly-nested entities.
+// Iterating by UTF-16 index keeps surrogate-pair emoji intact on rejoin.
+function renderEntities(text, entities){
+  if(!text) return "";
+  if(!entities || !entities.length) return escapeHtml(text);
+  const opens = {}, closes = {};
+  for(const e of entities){
+    const tag = entityTag(e); if(!tag) continue;
+    (opens[e.offset] = opens[e.offset] || []).push(tag[0]);
+    (closes[e.offset + e.length] = closes[e.offset + e.length] || []).unshift(tag[1]);
+  }
+  let out = "";
+  for(let i=0;i<=text.length;i++){
+    if(closes[i]) out += closes[i].join("");
+    if(i<text.length){
+      if(opens[i]) out += opens[i].join("");
+      out += escapeHtml(text[i]);
+    }
+  }
+  return out;
+}
+const SVG_VIDEO = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+const SVG_DOC = '<path d="M14 3v5h5M6 3h8l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>';
+function frameTile(icon, label){
+  return `<div class="frame"><span class="tlabel">${escapeHtml(label)}</span><svg class="tico" viewBox="0 0 24 24" fill="none">${icon}</svg></div>`;
+}
+async function loadPhoto(img, postId, idx){
+  try{
+    const r = await fetch(`/api/my/post/${postId}/media/${idx}`, { headers: AUTH });
+    if(!r.ok) throw new Error(r.status);
+    const url = URL.createObjectURL(await r.blob());
+    objectUrls.push(url);
+    img.src = url;
+  }catch{ img.parentElement.textContent = "—"; }
+}
+async function openDetail(id, title){
+  document.getElementById("pv-title").textContent = title || "";
+  document.getElementById("pv-when").textContent = "";
+  const mediaEl = document.getElementById("pv-media");
+  const textEl = document.getElementById("pv-text");
+  mediaEl.innerHTML = "";
+  textEl.className = "pv-text"; textEl.innerHTML = `<div class="pv-loading">${t("loading")}</div>`;
+  detail.classList.add("open");
+  let d;
+  try{ d = await api(`/api/my/post/${id}`); }
+  catch(e){ textEl.innerHTML = `<div class="pv-loading">${t("err")(e.message)}</div>`; return; }
+  document.getElementById("pv-when").textContent = fmtLocal(d.scheduled_at_utc);
+  if(d.media && d.media.length){
+    const single = d.media.length === 1;
+    const film = document.createElement("div"); film.className = "film";
+    for(const m of d.media){
+      if(m.type === "photo"){
+        const f = document.createElement("div"); f.className = "frame" + (single?" single":"");
+        const img = document.createElement("img"); f.appendChild(img); film.appendChild(f);
+        loadPhoto(img, id, m.idx);
+      }else if(m.type === "video" || m.type === "animation"){
+        film.insertAdjacentHTML("beforeend", frameTile(SVG_VIDEO, t("kind_video")));
+      }else{
+        film.insertAdjacentHTML("beforeend", frameTile(SVG_DOC, t("kind_doc")));
+      }
+    }
+    mediaEl.appendChild(film);
+  }
+  const body = d.kind === "media" ? d.caption : d.text;
+  const ents = d.kind === "media" ? d.caption_entities : d.entities;
+  if(body){ textEl.innerHTML = renderEntities(body, ents); }
+  else { textEl.className = "pv-text empty"; textEl.textContent = t("no_caption"); }
+}
+function closeDetail(){
+  detail.classList.remove("open");
+  for(const u of objectUrls) URL.revokeObjectURL(u);
+  objectUrls = [];
+}
+document.getElementById("pv-close").addEventListener("click", closeDetail);
+detail.addEventListener("click", (e)=>{ if(e.target === detail) closeDetail(); });
+
 document.addEventListener("click", async (e)=>{
-  const btn = e.target.closest("button[data-act]"); if(!btn) return;
+  const btn = e.target.closest("button[data-act]");
+  if(!btn){
+    const card = e.target.closest("[data-open]");
+    if(card) openDetail(card.dataset.open, card.dataset.title);
+    return;
+  }
   const id = btn.dataset.id, act = btn.dataset.act;
   try{
     if(act==="resched"){ openModal(id, btn.dataset.when); return; }
@@ -302,16 +665,17 @@ function renderDemo(){
   applyStaticLabels();
   const now = Math.floor(Date.now()/1000);
   renderQueue([
-    {id:"demo1",destination_title:"Demo Channel",scheduled_at_utc:now+7200,kind:"text",media_count:0,preview:"Пример текстового поста"},
-    {id:"demo2",destination_title:"News",scheduled_at_utc:now+86400,kind:"media",media_count:3,preview:"Фотоальбом"},
-  ]);
+    {id:"demo1",destination_title:"Крипта на завтрак",scheduled_at_utc:now+6300,kind:"text",media_count:0,preview:"Утренний дайджест рынка"},
+    {id:"demo2",destination_title:"News Channel",scheduled_at_utc:now+18000,kind:"media",media_count:3,preview:"Фотоотчёт с конференции"},
+    {id:"demo3",destination_title:"Личный блог",scheduled_at_utc:now+90000,kind:"text",media_count:0,preview:"Пятничная подборка ссылок"},
+  ], false);
   renderRecurring([
-    {id:"demoR",destination_title:"Demo Channel",interval_type:"daily",time_of_day_minutes:540,next_scheduled_at_utc:now+86400},
+    {id:"demoR",destination_title:"Крипта на завтрак",interval_type:"daily",time_of_day_minutes:540,next_scheduled_at_utc:now+90000},
   ]);
 }
 
 loadAll().catch(err=>{
-  document.getElementById("queue-list").innerHTML =
+  document.getElementById("hero-slot").innerHTML =
     `<div class="card"><div class="empty">${t("err")(err.message)}</div></div>`;
 });
 </script>

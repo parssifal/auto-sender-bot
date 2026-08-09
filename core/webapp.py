@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import OrderedDict
@@ -18,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 DAY = 86_400
 _STATIC_DIR = Path(__file__).parent / "webapp_static"
+
+# Content types for proxied Telegram media. Telegram photos are always JPEG;
+# other kinds fall back to a generic binary type.
+_MEDIA_CONTENT_TYPES = {
+    "photo": "image/jpeg",
+    "video": "video/mp4",
+    "animation": "video/mp4",
+    "audio": "audio/mpeg",
+    "voice": "audio/ogg",
+    "document": "application/octet-stream",
+}
 
 # --- Hardening defaults ---------------------------------------------------- #
 # JSON payloads handled here are tiny; cap the raw request body well below
@@ -356,6 +368,75 @@ async def start_webapp_server(
             return web.json_response({"error": "not_found"}, status=404)
         return web.json_response({"ok": True})
 
+    def _parse_entities(raw: str | None) -> list | None:
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+
+    async def api_my_post_detail(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        post_id = request.match_info["id"]
+        row = await store.get_scheduled_post(post_id)
+        # Ownership is the trust boundary: a missing post and someone else's
+        # post are indistinguishable to the caller (both 404, no enumeration).
+        if row is None or row.user_id != user_id:
+            return web.json_response({"error": "not_found"}, status=404)
+        media = await store.get_post_media(post_id) if row.kind == "media" else []
+        return web.json_response(
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "scheduled_at_utc": row.scheduled_at_utc,
+                "text": row.text,
+                "entities": _parse_entities(row.entities_json),
+                "caption": row.caption,
+                "caption_entities": _parse_entities(row.caption_entities_json),
+                "media": [{"idx": i, "type": m["type"]} for i, m in enumerate(media)],
+            }
+        )
+
+    async def api_my_post_media(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        post_id = request.match_info["id"]
+        try:
+            idx = int(request.match_info["idx"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "bad_request"}, status=400)
+        row = await store.get_scheduled_post(post_id)
+        if row is None or row.user_id != user_id:
+            return web.json_response({"error": "not_found"}, status=404)
+        media = await store.get_post_media(post_id)
+        if idx < 0 or idx >= len(media):
+            return web.json_response({"error": "not_found"}, status=404)
+        if bot is None:
+            return web.json_response({"error": "bot_unavailable"}, status=503)
+        item = media[idx]
+        # Download server-side so the bot token never reaches the client; the
+        # WebView fetches this via an authorised request and object-URLs it.
+        try:
+            file = await bot.get_file(item["file_id"])
+            data = await bot.download_file(file.file_path)
+        except Exception:
+            logger.warning("media download failed for post %s idx %s", post_id, idx)
+            return web.json_response({"error": "media_unavailable"}, status=502)
+        if hasattr(data, "read"):
+            data = data.read()
+        ctype = _MEDIA_CONTENT_TYPES.get(item["type"], "application/octet-stream")
+        return web.Response(
+            body=data,
+            content_type=ctype,
+            headers={"Cache-Control": "private, max-age=3600, immutable"},
+        )
+
     async def api_stats(request: web.Request) -> web.Response:
         if _require_admin(request) is None:
             return web.json_response({"error": "forbidden"}, status=403)
@@ -404,6 +485,8 @@ async def start_webapp_server(
     app.router.add_get("/app", app_index)
     app.router.add_get("/api/my/queue", api_my_queue)
     app.router.add_get("/api/my/recurring", api_my_recurring)
+    app.router.add_get("/api/my/post/{id}", api_my_post_detail)
+    app.router.add_get("/api/my/post/{id}/media/{idx}", api_my_post_media)
     app.router.add_post("/api/my/post/{id}/reschedule", api_my_reschedule)
     app.router.add_post("/api/my/post/{id}/cancel", api_my_cancel)
     app.router.add_post("/api/my/recurring/{id}/cancel", api_my_recurring_cancel)
