@@ -51,6 +51,26 @@ def _load_dotenv(path: str = ".env") -> None:
             os.environ[key] = value
 
 
+def _env_num(name: str, default: float, cast):
+    """Read a positive int/float env var, falling back to ``default``.
+
+    Folds the getenv -> cast -> raise -> ``> 0`` check that five settings shared
+    verbatim (and where the SCHEDULER_POLL_SECONDS ``> 0`` guard once went missing).
+    """
+    raw = os.getenv(name)
+    if not raw:
+        value = default
+    else:
+        try:
+            value = cast(raw)
+        except ValueError as exc:
+            kind = "an integer" if cast is int else "a number"
+            raise RuntimeError(f"{name} must be {kind}") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be > 0")
+    return value
+
+
 def load_config() -> Config:
     _load_dotenv()
 
@@ -65,45 +85,10 @@ def load_config() -> Config:
     healthcheck_host = os.getenv("HEALTHCHECK_HOST", "127.0.0.1").strip() or "127.0.0.1"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    healthcheck_port_raw = os.getenv("HEALTHCHECK_PORT")
-    healthcheck_port = 8080
-    if healthcheck_port_raw:
-        try:
-            healthcheck_port = int(healthcheck_port_raw)
-        except ValueError as exc:
-            raise RuntimeError("HEALTHCHECK_PORT must be an integer") from exc
-    if healthcheck_port <= 0:
-        raise RuntimeError("HEALTHCHECK_PORT must be > 0")
-
-    poll_seconds_raw = os.getenv("SCHEDULER_POLL_SECONDS")
-    scheduler_poll_seconds = 2.0
-    if poll_seconds_raw:
-        try:
-            scheduler_poll_seconds = float(poll_seconds_raw)
-        except ValueError as exc:
-            raise RuntimeError("SCHEDULER_POLL_SECONDS must be a number") from exc
-    if scheduler_poll_seconds <= 0:
-        raise RuntimeError("SCHEDULER_POLL_SECONDS must be > 0")
-
-    polling_timeout_raw = os.getenv("TELEGRAM_POLLING_TIMEOUT_SECONDS")
-    telegram_polling_timeout_seconds = 30
-    if polling_timeout_raw:
-        try:
-            telegram_polling_timeout_seconds = int(polling_timeout_raw)
-        except ValueError as exc:
-            raise RuntimeError("TELEGRAM_POLLING_TIMEOUT_SECONDS must be an integer") from exc
-    if telegram_polling_timeout_seconds <= 0:
-        raise RuntimeError("TELEGRAM_POLLING_TIMEOUT_SECONDS must be > 0")
-
-    http_timeout_raw = os.getenv("TELEGRAM_HTTP_TIMEOUT_SECONDS")
-    telegram_http_timeout_seconds = 75.0
-    if http_timeout_raw:
-        try:
-            telegram_http_timeout_seconds = float(http_timeout_raw)
-        except ValueError as exc:
-            raise RuntimeError("TELEGRAM_HTTP_TIMEOUT_SECONDS must be a number") from exc
-    if telegram_http_timeout_seconds <= 0:
-        raise RuntimeError("TELEGRAM_HTTP_TIMEOUT_SECONDS must be > 0")
+    healthcheck_port = _env_num("HEALTHCHECK_PORT", 8080, int)
+    scheduler_poll_seconds = _env_num("SCHEDULER_POLL_SECONDS", 2.0, float)
+    telegram_polling_timeout_seconds = _env_num("TELEGRAM_POLLING_TIMEOUT_SECONDS", 30, int)
+    telegram_http_timeout_seconds = _env_num("TELEGRAM_HTTP_TIMEOUT_SECONDS", 75.0, float)
 
     admin_ids_raw = os.getenv("ADMIN_IDS") or os.getenv("BOT_ADMIN_IDS") or ""
     admin_ids: list[int] = []
@@ -121,15 +106,7 @@ def load_config() -> Config:
         webapp_url = webapp_url.strip() or None
     webapp_host = os.getenv("WEBAPP_HOST", "0.0.0.0").strip() or "0.0.0.0"
 
-    webapp_port_raw = os.getenv("WEBAPP_PORT")
-    webapp_port = 8081
-    if webapp_port_raw:
-        try:
-            webapp_port = int(webapp_port_raw)
-        except ValueError as exc:
-            raise RuntimeError("WEBAPP_PORT must be an integer") from exc
-    if webapp_port <= 0:
-        raise RuntimeError("WEBAPP_PORT must be > 0")
+    webapp_port = _env_num("WEBAPP_PORT", 8081, int)
 
     return Config(
         bot_token=bot_token,
