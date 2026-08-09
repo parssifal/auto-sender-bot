@@ -211,48 +211,43 @@ def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _edit_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+def _posts_paged_kb(
+    posts: list[dict[str, str]],
+    page: int,
+    has_more: bool,
+    lang: str,
+    *,
+    item_key: str,
+    select_prefix: str,
+    page_prefix: str,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in posts:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=tr(lang, "btn_edit_post", label=item["label"]),
-                    callback_data=f"qedit:{item['id']}",
+                    text=tr(lang, item_key, label=item["label"]),
+                    callback_data=f"{select_prefix}:{item['id']}",
                 )
             ]
         )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"epage:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{page_prefix}:{page - 1}"))
     if has_more:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"epage:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{page_prefix}:{page + 1}"))
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _edit_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
+    return _posts_paged_kb(posts, page, has_more, lang, item_key="btn_edit_post", select_prefix="qedit", page_prefix="epage")
 
 
 def _delete_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for item in posts:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=tr(lang, "btn_delete_post", label=item["label"]),
-                    callback_data=f"qdelask:{item['id']}",
-                )
-            ]
-        )
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"delpage:{page - 1}"))
-    if has_more:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"delpage:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton(text=tr(lang, "btn_cancel"), callback_data="scancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _posts_paged_kb(posts, page, has_more, lang, item_key="btn_delete_post", select_prefix="qdelask", page_prefix="delpage")
 
 
 def _edit_field_kb(*, post_id: str, lang: str) -> InlineKeyboardMarkup:
