@@ -46,7 +46,7 @@ from telegram.handlers.helpers import (
     _prompt_draft_scope,
     _prompt_for_datetime,
     _render_broadcast_destinations,
-    _resolve_broadcast_destinations,
+    _require_tz,
     _resolve_broadcast_destination_lines,
     _resolve_caption_above,
     _save_scheduled_post_media,
@@ -67,6 +67,20 @@ from telegram.handlers.helpers import (
 )
 from telegram.handlers.teams import _handle_team_invite_start
 from telegram.menu_button import set_user_menu_button
+
+
+_PICKER_SIBLING = {
+    RepeatStates.entering_datetime.state: RepeatStates.selecting_time,
+    RepeatStates.selecting_time.state: RepeatStates.entering_datetime,
+    DraftStates.entering_datetime.state: DraftStates.selecting_time,
+    DraftStates.selecting_time.state: DraftStates.entering_datetime,
+    BroadcastStates.entering_datetime.state: BroadcastStates.selecting_time,
+    BroadcastStates.selecting_time.state: BroadcastStates.entering_datetime,
+    EditStates.entering_datetime.state: EditStates.selecting_time,
+    EditStates.selecting_time.state: EditStates.entering_datetime,
+    ScheduleStates.entering_datetime.state: ScheduleStates.selecting_time,
+    ScheduleStates.selecting_time.state: ScheduleStates.entering_datetime,
+}
 
 
 async def _get_content_ctx(state, current_state):
@@ -105,6 +119,72 @@ async def _datetime_entry_prompt_text(store, state, lang: str, state_name: str) 
         ctx = await get_edit_ctx(state)
         return tr(lang, "edit_time_prompt", post_id=_short_id(str(ctx.edit_post_id or "")))
     return tr(lang, "enter_datetime")
+
+
+async def _apply_parsed_datetime(
+    store,
+    message,
+    state,
+    *,
+    user_id: int,
+    current_state: str | None,
+    parsed: ParsedScheduleTime,
+    lang: str,
+) -> None:
+    """Route a resolved schedule time to the flow that owns ``current_state``.
+
+    Reached from three picker entries — quick button, time button, typed text —
+    which each ran an identical five-way dispatch on the flow's
+    entering_datetime/selecting_time states. ``current_state`` is always one of
+    the active flow's two picker states, so membership covers both.
+    """
+    if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
+        await _move_repeat_to_destination_selection(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+        )
+        return
+    if current_state in {DraftStates.entering_datetime.state, DraftStates.selecting_time.state}:
+        await _move_draft_publish_to_confirmation(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+        )
+        return
+    if current_state in {EditStates.entering_datetime.state, EditStates.selecting_time.state}:
+        await _save_scheduled_post_time(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+        )
+        return
+    if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
+        await _move_to_post_collection(
+            message,
+            state,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            collecting_state=BroadcastStates.collecting_post,
+            lang=lang,
+        )
+        return
+    await _move_to_post_collection(
+        message,
+        state,
+        scheduled_at_utc=parsed.utc_epoch,
+        scheduled_local=str(parsed.local_dt),
+        collecting_state=ScheduleStates.collecting_post,
+        lang=lang,
+    )
 
 
 def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
@@ -153,11 +233,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         token = query.data.split(":", 2)[2]
@@ -188,11 +265,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         token = query.data.split(":", 2)[2]
@@ -209,16 +283,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             calendar_year=selected_date.year,
             calendar_month=selected_date.month,
         )
-        if current_state == RepeatStates.entering_datetime.state:
-            next_state = RepeatStates.selecting_time
-        elif current_state == DraftStates.entering_datetime.state:
-            next_state = DraftStates.selecting_time
-        elif current_state == BroadcastStates.entering_datetime.state:
-            next_state = BroadcastStates.selecting_time
-        elif current_state == EditStates.entering_datetime.state:
-            next_state = EditStates.selecting_time
-        else:
-            next_state = ScheduleStates.selecting_time
+        next_state = _PICKER_SIBLING.get(current_state, ScheduleStates.selecting_time)
         await state.set_state(next_state)
         await query.answer()
         await _edit_datetime_prompt(
@@ -238,11 +303,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         option = query.data.split(":", 2)[2]
@@ -262,51 +324,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        if current_state == RepeatStates.entering_datetime.state:
-            await _move_repeat_to_destination_selection(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == DraftStates.entering_datetime.state:
-            await _move_draft_publish_to_confirmation(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == EditStates.entering_datetime.state:
-            await _save_scheduled_post_time(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-        if current_state == BroadcastStates.entering_datetime.state:
-            await _move_to_post_collection(
-                query.message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             query.message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=query.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
@@ -318,27 +342,15 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is not None:
             await patch_content_ctx(state, current_state, calendar_year=selected_date.year, calendar_month=selected_date.month)
-        if current_state == RepeatStates.selecting_time.state:
-            previous_state = RepeatStates.entering_datetime
-        elif current_state == DraftStates.selecting_time.state:
-            previous_state = DraftStates.entering_datetime
-        elif current_state == BroadcastStates.selecting_time.state:
-            previous_state = BroadcastStates.entering_datetime
-        elif current_state == EditStates.selecting_time.state:
-            previous_state = EditStates.entering_datetime
-        else:
-            previous_state = ScheduleStates.entering_datetime
+        previous_state = _PICKER_SIBLING.get(current_state, ScheduleStates.entering_datetime)
         await state.set_state(previous_state)
         data = await state.get_data()
         text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
@@ -360,26 +372,14 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         lang = await _user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is None:
-            if current_state == RepeatStates.selecting_time.state:
-                previous_state = RepeatStates.entering_datetime
-            elif current_state == DraftStates.selecting_time.state:
-                previous_state = DraftStates.entering_datetime
-            elif current_state == BroadcastStates.selecting_time.state:
-                previous_state = BroadcastStates.entering_datetime
-            elif current_state == EditStates.selecting_time.state:
-                previous_state = EditStates.entering_datetime
-            else:
-                previous_state = ScheduleStates.entering_datetime
+            previous_state = _PICKER_SIBLING.get(current_state, ScheduleStates.entering_datetime)
             await state.set_state(previous_state)
             data = await state.get_data()
             text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
@@ -412,51 +412,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        if current_state == RepeatStates.selecting_time.state:
-            await _move_repeat_to_destination_selection(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == DraftStates.selecting_time.state:
-            await _move_draft_publish_to_confirmation(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == EditStates.selecting_time.state:
-            await _save_scheduled_post_time(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-        if current_state == BroadcastStates.selecting_time.state:
-            await _move_to_post_collection(
-                query.message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             query.message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=query.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
@@ -473,10 +435,8 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     async def schedule_enter_datetime(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await _user_lang(store, message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id)
-        if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, message.from_user.id))
-            await state.clear()
+        tz_name = await _require_tz(store, message, message.from_user.id, lang, state=state)
+        if tz_name is None:
             return
 
         current_state = await state.get_state()
@@ -516,55 +476,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             )
             return
 
-        if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
-            await _move_repeat_to_destination_selection(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-
-        if current_state in {DraftStates.entering_datetime.state, DraftStates.selecting_time.state}:
-            await _move_draft_publish_to_confirmation(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-
-        if current_state in {EditStates.entering_datetime.state, EditStates.selecting_time.state}:
-            await _save_scheduled_post_time(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-
-        if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
-            await _move_to_post_collection(
-                message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=message.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
@@ -674,18 +592,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         await query.answer()
-        if current_state == RepeatStates.collecting_post.state:
-            collecting_state = RepeatStates.collecting_post
-        elif current_state == BroadcastStates.collecting_post.state:
-            collecting_state = BroadcastStates.collecting_post
-        elif current_state == EditStates.collecting_media.state:
-            collecting_state = EditStates.collecting_media
-        elif current_state == DraftStates.editing_post.state:
-            collecting_state = DraftStates.editing_post
-        elif current_state == DraftStates.collecting_post.state:
-            collecting_state = DraftStates.collecting_post
-        else:
-            collecting_state = ScheduleStates.collecting_post
         await patch_content_ctx(
             state,
             current_state,
@@ -700,7 +606,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             draft_entities_json=None,
             text_before_media=False,
         )
-        await state.set_state(collecting_state)
         await query.message.answer(tr(lang, "media_cleared"), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:done")
@@ -886,7 +791,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         tz_name = await store.get_user_timezone(user_id) or "UTC"
 
         if current_state == BroadcastStates.confirming.state:
-            resolved_destinations = await _resolve_broadcast_destinations(
+            resolved_destinations = await broadcast_svc.resolve_valid_destinations(
                 store,
                 user_id,
                 _normalize_selected_chat_ids(ctx.selected_chat_ids),

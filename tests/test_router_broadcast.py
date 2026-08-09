@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from aiogram import Bot, Dispatcher
+from aiogram import Dispatcher
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, SendMessage
@@ -19,6 +19,8 @@ from telegram.i18n import tr
 from telegram.handlers.states import BroadcastStates
 from telegram.router import build_router
 
+from conftest import FakeBot as _FakeBot
+
 USER_ID = 1001
 PRIVATE_CHAT_ID = USER_ID
 BOT_ID = 42
@@ -26,15 +28,7 @@ DESTINATION_CHAT_IDS = [-2001, -2002]
 ALL_DESTINATION_CHAT_IDS = [-2001, -2002, -2003, -2004, -2005, -2006]
 
 
-class FakeBot(Bot):
-    def __init__(self) -> None:
-        super().__init__(f"{BOT_ID}:TEST")
-        self.calls: list[Any] = []
-
-    async def __call__(self, method: Any, request_timeout: int | None = None) -> Any:
-        self.calls.append(method)
-        return True
-
+class FakeBot(_FakeBot):
     async def me(self):
         return type("Me", (), {"id": BOT_ID})()
 

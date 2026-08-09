@@ -35,13 +35,11 @@ async def _render_drafts(store: StateStore, message: Message, *, user_id: int, s
     lang = await h._user_lang(store, user_id)
     current_scope = kb._normalize_draft_scope(scope)
     page_size = 5
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        items = await store.list_drafts(user_id=user_id, scope=current_scope, offset=offset, limit=page_size + 1)
-        if items or page == 0:
-            break
-        page -= 1
+    items, page = await h._page_back_to_content(
+        lambda offset: store.list_drafts(user_id=user_id, scope=current_scope, offset=offset, limit=page_size + 1),
+        page,
+        page_size,
+    )
 
     has_more = len(items) > page_size
     items = items[:page_size]
@@ -186,9 +184,8 @@ async def _start_draft_edit(store: StateStore, message: Message, state: FSMConte
 
 async def _start_draft_publish(store: StateStore, message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
     lang = await h._user_lang(store, user_id)
-    tz_name = await store.get_user_timezone(user_id)
-    if not tz_name:
-        await message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, user_id))
+    tz_name = await h._require_tz(store, message, user_id, lang)
+    if tz_name is None:
         return
 
     where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
@@ -466,14 +463,9 @@ def build_router(store: StateStore) -> Router:
             await _start_draft_publish(store, query.message, state, user_id=query.from_user.id, draft=draft)
             return
 
-        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
-        allowed = False
-        if permissions is not None:
-            allowed = action == "delete" and permissions.can_delete
-        await query.answer(
-            tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
-            show_alert=True,
-        )
+        # Only dact:edit and dact:publish are ever produced (delete uses ddelask:);
+        # any other action is a forged callback - just acknowledge it.
+        await query.answer()
 
     @router.callback_query(F.data.startswith("ddpage:"))
     async def cb_draft_create_dest_page(query: CallbackQuery, state: FSMContext) -> None:

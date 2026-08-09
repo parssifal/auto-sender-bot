@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import time
 from typing import Awaitable, Callable, TypeVar
 
 import aiosqlite
@@ -25,8 +24,7 @@ def locked_write(method: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitabl
     connection per worker if throughput ever matters.
 
     ``asyncio.Lock`` is NOT reentrant: never decorate a method that awaits another
-    decorated method (the thin delegators ``update_editable_post_time``,
-    ``update_editable_post_content`` and ``hard_delete_pending_post`` stay
+    decorated method (the thin delegator ``update_editable_post_time`` stays
     undecorated for that reason). Read-only methods stay unlocked — locked writes
     call them internally.
     """
@@ -54,7 +52,6 @@ class StateStoreBase:
     async def migrate(self) -> None:
         await run_migrations(self._conn)
         await self._reconcile_user_columns()
-        await self._backfill_team_owners()
         await self._requeue_stuck_sending()
 
     async def _requeue_stuck_sending(self) -> None:
@@ -78,32 +75,3 @@ class StateStoreBase:
             await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
         await self._conn.commit()
 
-    async def _backfill_team_owners(self) -> None:
-        now = int(time.time())
-        await self._conn.execute(
-            """
-            UPDATE team_members
-            SET role='owner', updated_at=?
-            WHERE (team_id, user_id) IN (
-                SELECT id, owner_user_id
-                FROM teams
-            )
-              AND role <> 'owner'
-            """,
-            (now,),
-        )
-        await self._conn.execute(
-            """
-            INSERT INTO team_members(team_id, user_id, role, created_at, updated_at)
-            SELECT t.id, t.owner_user_id, 'owner', ?, ?
-            FROM teams t
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM team_members tm
-                WHERE tm.team_id = t.id
-                  AND tm.user_id = t.owner_user_id
-            )
-            """,
-            (now, now),
-        )
-        await self._conn.commit()

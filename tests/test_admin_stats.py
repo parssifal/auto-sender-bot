@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
-from core.db import open_db
 from core.state import StateStore
 
 NOW = 1_800_000_000  # fixed "current" epoch for deterministic windows
@@ -11,15 +9,6 @@ DAY = 86_400
 CHAT_A = -2001
 CHAT_B = -2002
 CHAT_C = -2003
-
-
-@pytest_asyncio.fixture
-async def store() -> StateStore:
-    conn = await open_db(":memory:")
-    state = StateStore(conn)
-    await state.migrate()
-    yield state
-    await conn.close()
 
 
 async def _set_user_created_at(store: StateStore, user_id: int, ts: int) -> None:

@@ -62,47 +62,41 @@ async def _seed_recurring_pattern(
 
 
 @pytest.mark.asyncio
-async def test_weekdays_mask_rejected_for_non_weekdays_intervals() -> None:
+async def test_weekdays_mask_rejected_for_non_weekdays_intervals(store) -> None:
     # weekdays_mask is only honoured by interval_type='weekdays' (scheduler.py:84).
     # A mask on daily/weekly is stored but silently ignored, so reject it at the
     # boundary instead of leaving a dead contract.
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        await store.ensure_user(123)
-        await store.upsert_destination(
-            -1001, "channel", "Dest", "dest", "administrator", True,
-        )
-        for interval in ("daily", "weekly"):
-            with pytest.raises(ValueError, match="weekdays_mask"):
-                await store.create_recurring_pattern(
-                    user_id=123, chat_id=-1001, interval_type=interval,
-                    weekdays_mask=31, time_of_day_minutes=600,
-                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
-                )
-            with pytest.raises(ValueError, match="weekdays_mask"):
-                await store.create_recurring_series(
-                    user_id=123, chat_id=-1001, interval_type=interval,
-                    weekdays_mask=31, time_of_day_minutes=600,
-                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
-                    kind="text", text="x", entities_json=None,
-                )
-        # Legitimate uses still work: weekdays+mask, and weekly with no mask.
-        wk = await store.create_recurring_pattern(
-            user_id=123, chat_id=-1001, interval_type="weekdays",
-            weekdays_mask=31, time_of_day_minutes=600,
-            timezone="Europe/Moscow", start_at_utc=1_700_000_000,
-        )
-        assert wk
-        weekly = await store.create_recurring_pattern(
-            user_id=123, chat_id=-1001, interval_type="weekly",
-            time_of_day_minutes=600, timezone="Europe/Moscow",
-            start_at_utc=1_700_000_000,
-        )
-        assert weekly
-    finally:
-        await conn.close()
+    await store.ensure_user(123)
+    await store.upsert_destination(
+        -1001, "channel", "Dest", "dest", "administrator", True,
+    )
+    for interval in ("daily", "weekly"):
+        with pytest.raises(ValueError, match="weekdays_mask"):
+            await store.create_recurring_pattern(
+                user_id=123, chat_id=-1001, interval_type=interval,
+                weekdays_mask=31, time_of_day_minutes=600,
+                timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+            )
+        with pytest.raises(ValueError, match="weekdays_mask"):
+            await store.create_recurring_series(
+                user_id=123, chat_id=-1001, interval_type=interval,
+                weekdays_mask=31, time_of_day_minutes=600,
+                timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+                kind="text", text="x", entities_json=None,
+            )
+    # Legitimate uses still work: weekdays+mask, and weekly with no mask.
+    wk = await store.create_recurring_pattern(
+        user_id=123, chat_id=-1001, interval_type="weekdays",
+        weekdays_mask=31, time_of_day_minutes=600,
+        timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+    )
+    assert wk
+    weekly = await store.create_recurring_pattern(
+        user_id=123, chat_id=-1001, interval_type="weekly",
+        time_of_day_minutes=600, timezone="Europe/Moscow",
+        start_at_utc=1_700_000_000,
+    )
+    assert weekly
 
 
 @pytest.mark.asyncio
@@ -210,165 +204,141 @@ async def test_state_store_migrate_is_idempotent_for_recurring_patterns_and_inst
 
 
 @pytest.mark.asyncio
-async def test_state_store_recurring_instances_enforce_unique_post_mapping() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        pattern_id = await _seed_recurring_pattern(store)
-        post_id = await store.create_scheduled_text_post(
-            user_id=123,
-            chat_id=-1001,
-            scheduled_at_utc=1_700_000_000,
-            text="Recurring payload",
-            entities_json=None,
-        )
-        await store.create_recurring_instance(pattern_id, post_id, 1, 1_700_000_000)
+async def test_state_store_recurring_instances_enforce_unique_post_mapping(store) -> None:
+    pattern_id = await _seed_recurring_pattern(store)
+    post_id = await store.create_scheduled_text_post(
+        user_id=123,
+        chat_id=-1001,
+        scheduled_at_utc=1_700_000_000,
+        text="Recurring payload",
+        entities_json=None,
+    )
+    await store.create_recurring_instance(pattern_id, post_id, 1, 1_700_000_000)
 
-        with pytest.raises(sqlite3.IntegrityError):
-            await store.create_recurring_instance(pattern_id, post_id, 2, 1_700_000_000)
-    finally:
-        await conn.close()
+    with pytest.raises(sqlite3.IntegrityError):
+        await store.create_recurring_instance(pattern_id, post_id, 2, 1_700_000_000)
 
 
 @pytest.mark.asyncio
-async def test_state_store_recurring_pattern_crud_uses_public_methods() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        pattern_id = await _seed_recurring_pattern(store)
+async def test_state_store_recurring_pattern_crud_uses_public_methods(store) -> None:
+    pattern_id = await _seed_recurring_pattern(store)
 
-        pattern = await store.get_recurring_pattern(pattern_id)
-        assert pattern is not None
-        assert pattern.id == pattern_id
-        assert pattern.user_id == 123
-        assert pattern.chat_id == -1001
-        assert pattern.interval_type == "weekdays"
-        assert pattern.weekdays_mask == 31
-        assert pattern.time_of_day_minutes == 9 * 60 + 30
-        assert pattern.timezone == "Europe/Moscow"
-        assert pattern.max_occurrences == 10
-        assert pattern.current_count == 1
-        assert pattern.is_active is True
+    pattern = await store.get_recurring_pattern(pattern_id)
+    assert pattern is not None
+    assert pattern.id == pattern_id
+    assert pattern.user_id == 123
+    assert pattern.chat_id == -1001
+    assert pattern.interval_type == "weekdays"
+    assert pattern.weekdays_mask == 31
+    assert pattern.time_of_day_minutes == 9 * 60 + 30
+    assert pattern.timezone == "Europe/Moscow"
+    assert pattern.max_occurrences == 10
+    assert pattern.current_count == 1
+    assert pattern.is_active is True
 
-        active_patterns = await store.list_user_recurring(123)
-        assert [item.id for item in active_patterns] == [pattern_id]
+    active_patterns = await store.list_user_recurring(123)
+    assert [item.id for item in active_patterns] == [pattern_id]
 
-        assert await store.update_recurring_count(pattern_id, 3) is True
-        assert await store.update_recurring_count("missing-pattern", 1) is False
-        updated_pattern = await store.get_recurring_pattern(pattern_id)
-        assert updated_pattern is not None
-        assert updated_pattern.current_count == 3
+    assert await store.update_recurring_count(pattern_id, 3) is True
+    assert await store.update_recurring_count("missing-pattern", 1) is False
+    updated_pattern = await store.get_recurring_pattern(pattern_id)
+    assert updated_pattern is not None
+    assert updated_pattern.current_count == 3
 
-        assert await store.delete_recurring_pattern(pattern_id) is True
-        assert await store.delete_recurring_pattern(pattern_id) is False
+    assert await store.delete_recurring_pattern(pattern_id) is True
+    assert await store.delete_recurring_pattern(pattern_id) is False
 
-        deleted_pattern = await store.get_recurring_pattern(pattern_id)
-        assert deleted_pattern is not None
-        assert deleted_pattern.is_active is False
+    deleted_pattern = await store.get_recurring_pattern(pattern_id)
+    assert deleted_pattern is not None
+    assert deleted_pattern.is_active is False
 
-        assert await store.list_user_recurring(123) == []
-        inactive_patterns = await store.list_user_recurring(123, include_inactive=True)
-        assert [item.id for item in inactive_patterns] == [pattern_id]
-    finally:
-        await conn.close()
+    assert await store.list_user_recurring(123) == []
+    inactive_patterns = await store.list_user_recurring(123, include_inactive=True)
+    assert [item.id for item in inactive_patterns] == [pattern_id]
 
 
 @pytest.mark.asyncio
-async def test_state_store_list_user_recurring_summaries_returns_next_pending_post() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        await store.ensure_user(123)
-        await store.upsert_destination(
-            -1001,
-            "channel",
-            "Recurring destination",
-            "recurring_destination",
-            "administrator",
-            True,
-        )
-        pattern_id, post_id = await store.create_recurring_series(
-            user_id=123,
-            chat_id=-1001,
-            interval_type="daily",
-            time_of_day_minutes=9 * 60 + 30,
-            timezone="Europe/Moscow",
-            start_at_utc=1_700_000_000,
-            kind="text",
-            text="Recurring payload",
-            entities_json=None,
-        )
+async def test_state_store_list_user_recurring_summaries_returns_next_pending_post(store) -> None:
+    await store.ensure_user(123)
+    await store.upsert_destination(
+        -1001,
+        "channel",
+        "Recurring destination",
+        "recurring_destination",
+        "administrator",
+        True,
+    )
+    pattern_id, post_id = await store.create_recurring_series(
+        user_id=123,
+        chat_id=-1001,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_700_000_000,
+        kind="text",
+        text="Recurring payload",
+        entities_json=None,
+    )
 
-        summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
-        assert len(summaries) == 1
-        summary = summaries[0]
-        assert summary.pattern.id == pattern_id
-        assert summary.destination_title == "Recurring destination"
-        assert summary.destination_username == "recurring_destination"
-        assert summary.next_post_id == post_id
-        assert summary.next_scheduled_at_utc == 1_700_000_000
-        assert summary.next_post_status == "pending"
-    finally:
-        await conn.close()
+    summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.pattern.id == pattern_id
+    assert summary.destination_title == "Recurring destination"
+    assert summary.destination_username == "recurring_destination"
+    assert summary.next_post_id == post_id
+    assert summary.next_scheduled_at_utc == 1_700_000_000
+    assert summary.next_post_status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_state_store_list_user_recurring_summaries_filters_by_user_and_active_state() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        active_pattern_id = await _seed_recurring_pattern(store)
-        active_post_id = await store.create_scheduled_text_post(
-            user_id=123,
-            chat_id=-1001,
-            scheduled_at_utc=1_700_000_000,
-            text="Recurring payload",
-            entities_json=None,
-        )
-        await store.create_recurring_instance(active_pattern_id, active_post_id, 1, 1_700_000_000)
+async def test_state_store_list_user_recurring_summaries_filters_by_user_and_active_state(store) -> None:
+    active_pattern_id = await _seed_recurring_pattern(store)
+    active_post_id = await store.create_scheduled_text_post(
+        user_id=123,
+        chat_id=-1001,
+        scheduled_at_utc=1_700_000_000,
+        text="Recurring payload",
+        entities_json=None,
+    )
+    await store.create_recurring_instance(active_pattern_id, active_post_id, 1, 1_700_000_000)
 
-        await store.ensure_user(999)
-        other_pattern_id = await store.create_recurring_pattern(
-            user_id=999,
-            chat_id=-1001,
-            interval_type="weekly",
-            weekdays_mask=None,
-            time_of_day_minutes=9 * 60 + 30,
-            timezone="Europe/Moscow",
-            start_at_utc=1_700_000_500,
-        )
-        other_post_id = await store.create_scheduled_text_post(
-            user_id=999,
-            chat_id=-1001,
-            scheduled_at_utc=1_700_000_500,
-            text="Other payload",
-            entities_json=None,
-        )
-        await store.create_recurring_instance(other_pattern_id, other_post_id, 1, 1_700_000_500)
+    await store.ensure_user(999)
+    other_pattern_id = await store.create_recurring_pattern(
+        user_id=999,
+        chat_id=-1001,
+        interval_type="weekly",
+        weekdays_mask=None,
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_700_000_500,
+    )
+    other_post_id = await store.create_scheduled_text_post(
+        user_id=999,
+        chat_id=-1001,
+        scheduled_at_utc=1_700_000_500,
+        text="Other payload",
+        entities_json=None,
+    )
+    await store.create_recurring_instance(other_pattern_id, other_post_id, 1, 1_700_000_500)
 
-        inactive_pattern_id = await _seed_recurring_pattern(store)
-        inactive_post_id = await store.create_scheduled_text_post(
-            user_id=123,
-            chat_id=-1001,
-            scheduled_at_utc=1_700_000_900,
-            text="Inactive payload",
-            entities_json=None,
-        )
-        await store.create_recurring_instance(inactive_pattern_id, inactive_post_id, 1, 1_700_000_900)
-        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=inactive_pattern_id) is True
+    inactive_pattern_id = await _seed_recurring_pattern(store)
+    inactive_post_id = await store.create_scheduled_text_post(
+        user_id=123,
+        chat_id=-1001,
+        scheduled_at_utc=1_700_000_900,
+        text="Inactive payload",
+        entities_json=None,
+    )
+    await store.create_recurring_instance(inactive_pattern_id, inactive_post_id, 1, 1_700_000_900)
+    assert await store.cancel_recurring_pattern(user_id=123, pattern_id=inactive_pattern_id) is True
 
-        active_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
-        assert [item.pattern.id for item in active_summaries] == [active_pattern_id]
+    active_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+    assert [item.pattern.id for item in active_summaries] == [active_pattern_id]
 
-        all_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10, include_inactive=True)
-        assert {item.pattern.id for item in all_summaries} == {active_pattern_id, inactive_pattern_id}
-        assert {item.pattern.user_id for item in all_summaries} == {123}
-    finally:
-        await conn.close()
+    all_summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10, include_inactive=True)
+    assert {item.pattern.id for item in all_summaries} == {active_pattern_id, inactive_pattern_id}
+    assert {item.pattern.user_id for item in all_summaries} == {123}
 
 
 @pytest.mark.asyncio
@@ -458,143 +428,125 @@ async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_state_store_create_recurring_series_persists_media_pattern_post_and_instance() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        await store.ensure_user(123)
-        await store.upsert_destination(
-            -1001,
-            "channel",
-            "Recurring destination",
-            "recurring_destination",
-            "administrator",
-            True,
-        )
+async def test_state_store_create_recurring_series_persists_media_pattern_post_and_instance(store) -> None:
+    await store.ensure_user(123)
+    await store.upsert_destination(
+        -1001,
+        "channel",
+        "Recurring destination",
+        "recurring_destination",
+        "administrator",
+        True,
+    )
 
-        pattern_id, post_id = await store.create_recurring_series(
-            user_id=123,
-            chat_id=-1001,
-            interval_type="weekly",
-            time_of_day_minutes=9 * 60 + 30,
-            timezone="Europe/Moscow",
-            start_at_utc=1_700_000_000,
-            kind="media",
-            caption="Recurring media",
-            caption_entities_json=None,
-            caption_above=True,
-            media_items=[{"type": "photo", "file_id": "photo-1"}, {"type": "video", "file_id": "video-2"}],
-        )
+    pattern_id, post_id = await store.create_recurring_series(
+        user_id=123,
+        chat_id=-1001,
+        interval_type="weekly",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_700_000_000,
+        kind="media",
+        caption="Recurring media",
+        caption_entities_json=None,
+        caption_above=True,
+        media_items=[{"type": "photo", "file_id": "photo-1"}, {"type": "video", "file_id": "video-2"}],
+    )
 
-        pattern = await store.get_recurring_pattern(pattern_id)
-        assert pattern is not None
-        assert pattern.interval_type == "weekly"
-        assert pattern.current_count == 1
-        assert pattern.is_active is True
+    pattern = await store.get_recurring_pattern(pattern_id)
+    assert pattern is not None
+    assert pattern.interval_type == "weekly"
+    assert pattern.current_count == 1
+    assert pattern.is_active is True
 
-        post = await store.get_scheduled_post(post_id)
-        assert post is not None
-        assert post.kind == "media"
-        assert post.caption == "Recurring media"
-        assert post.caption_above == 1
-        assert post.scheduled_at_utc == 1_700_000_000
-        assert await store.get_post_media(post_id) == [
-            {"type": "photo", "file_id": "photo-1"},
-            {"type": "video", "file_id": "video-2"},
-        ]
+    post = await store.get_scheduled_post(post_id)
+    assert post is not None
+    assert post.kind == "media"
+    assert post.caption == "Recurring media"
+    assert post.caption_above == 1
+    assert post.scheduled_at_utc == 1_700_000_000
+    assert await store.get_post_media(post_id) == [
+        {"type": "photo", "file_id": "photo-1"},
+        {"type": "video", "file_id": "video-2"},
+    ]
 
-        instance = await store.get_recurring_instance_by_post_id(post_id)
-        assert instance is not None
-        assert instance.pattern_id == pattern_id
-        assert instance.ordinal == 1
-        assert instance.scheduled_for_utc == 1_700_000_000
-    finally:
-        await conn.close()
+    instance = await store.get_recurring_instance_by_post_id(post_id)
+    assert instance is not None
+    assert instance.pattern_id == pattern_id
+    assert instance.ordinal == 1
+    assert instance.scheduled_for_utc == 1_700_000_000
 
 
 @pytest.mark.asyncio
-async def test_state_store_cancel_recurring_pattern_deactivates_and_cancels_pending_post() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        await store.ensure_user(123)
-        await store.upsert_destination(
-            -1001,
-            "channel",
-            "Recurring destination",
-            "recurring_destination",
-            "administrator",
-            True,
-        )
+async def test_state_store_cancel_recurring_pattern_deactivates_and_cancels_pending_post(store) -> None:
+    await store.ensure_user(123)
+    await store.upsert_destination(
+        -1001,
+        "channel",
+        "Recurring destination",
+        "recurring_destination",
+        "administrator",
+        True,
+    )
 
-        pattern_id, post_id = await store.create_recurring_series(
-            user_id=123,
-            chat_id=-1001,
-            interval_type="daily",
-            time_of_day_minutes=9 * 60 + 30,
-            timezone="Europe/Moscow",
-            start_at_utc=1_700_000_000,
-            kind="text",
-            text="Recurring payload",
-            entities_json=None,
-        )
+    pattern_id, post_id = await store.create_recurring_series(
+        user_id=123,
+        chat_id=-1001,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_700_000_000,
+        kind="text",
+        text="Recurring payload",
+        entities_json=None,
+    )
 
-        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+    assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
 
-        pattern = await store.get_recurring_pattern(pattern_id)
-        assert pattern is not None
-        assert pattern.is_active is False
+    pattern = await store.get_recurring_pattern(pattern_id)
+    assert pattern is not None
+    assert pattern.is_active is False
 
-        post = await store.get_scheduled_post(post_id)
-        assert post is not None
-        assert post.status == "cancelled"
+    post = await store.get_scheduled_post(post_id)
+    assert post is not None
+    assert post.status == "cancelled"
 
-        assert await store.list_pending_posts(123, limit=10) == []
-    finally:
-        await conn.close()
+    assert await store.list_pending_posts(123, limit=10) == []
 
 
 @pytest.mark.asyncio
-async def test_state_store_cancel_recurring_pattern_is_idempotent_and_owner_scoped() -> None:
-    conn = await open_db(":memory:")
-    try:
-        store = StateStore(conn)
-        await store.migrate()
-        await store.ensure_user(123)
-        await store.ensure_user(999)
-        await store.upsert_destination(
-            -1001,
-            "channel",
-            "Recurring destination",
-            "recurring_destination",
-            "administrator",
-            True,
-        )
+async def test_state_store_cancel_recurring_pattern_is_idempotent_and_owner_scoped(store) -> None:
+    await store.ensure_user(123)
+    await store.ensure_user(999)
+    await store.upsert_destination(
+        -1001,
+        "channel",
+        "Recurring destination",
+        "recurring_destination",
+        "administrator",
+        True,
+    )
 
-        pattern_id, _ = await store.create_recurring_series(
-            user_id=123,
-            chat_id=-1001,
-            interval_type="weekly",
-            time_of_day_minutes=9 * 60 + 30,
-            timezone="Europe/Moscow",
-            start_at_utc=1_700_000_000,
-            kind="text",
-            text="Recurring payload",
-            entities_json=None,
-        )
+    pattern_id, _ = await store.create_recurring_series(
+        user_id=123,
+        chat_id=-1001,
+        interval_type="weekly",
+        time_of_day_minutes=9 * 60 + 30,
+        timezone="Europe/Moscow",
+        start_at_utc=1_700_000_000,
+        kind="text",
+        text="Recurring payload",
+        entities_json=None,
+    )
 
-        assert await store.cancel_recurring_pattern(user_id=999, pattern_id=pattern_id) is False
-        foreign_pattern = await store.get_recurring_pattern(pattern_id)
-        assert foreign_pattern is not None
-        assert foreign_pattern.is_active is True
+    assert await store.cancel_recurring_pattern(user_id=999, pattern_id=pattern_id) is False
+    foreign_pattern = await store.get_recurring_pattern(pattern_id)
+    assert foreign_pattern is not None
+    assert foreign_pattern.is_active is True
 
-        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
-        assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+    assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
+    assert await store.cancel_recurring_pattern(user_id=123, pattern_id=pattern_id) is True
 
-        stopped_pattern = await store.get_recurring_pattern(pattern_id)
-        assert stopped_pattern is not None
-        assert stopped_pattern.is_active is False
-    finally:
-        await conn.close()
+    stopped_pattern = await store.get_recurring_pattern(pattern_id)
+    assert stopped_pattern is not None
+    assert stopped_pattern.is_active is False

@@ -121,7 +121,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Name: {team_name}\n"
             "- Role: {role}"
         ),
-        "team_members_usage": "Usage: /team_members <team_id>",
         "team_members_none": "You do not have teams yet.",
         "team_members_choose": "Your teams:\n\n{lines}\n\nRun /team_members <team_id>.",
         "team_members_choose_item": "team={team_id} - {team_name} - {role}",
@@ -206,15 +205,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_weekday_fri": "Fr",
         "schedule_weekday_sat": "Sa",
         "schedule_weekday_sun": "Su",
-        "schedule_kind_prompt": "What do you want to schedule?",
-        "schedule_text_prompt": "Send message text in one message.",
-        "schedule_media_prompt": "Send photo/video (single media or album 2-10). Send caption as text (can be after media).",
         "schedule_post_prompt": (
             "Send a post: text, photo, or video.\n"
             "If text is sent before media, it will be above media; if after media, below media.\n"
             "Tap \"Done\" when your post is ready."
         ),
-        "schedule_unknown_type": "Unknown type.",
         "text_required": "Text is required.",
         "confirm_template": "Confirm:\n- Where: {where}\n- When: {local_time} ({tz_name})\n- Type: {kind}\n",
         "kind_text": "text",
@@ -231,7 +226,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "media_cleared": "Draft cleared. Send text/photo/video again.",
         "post_need_content": "Send text or at least one photo/video first.",
         "media_need_at_least_one": "Send at least one photo/video first.",
-        "caption_position_prompt": "Where should the caption be?",
         "scheduled_ok": "Done! Scheduled for {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
             "Send next date and time for the same destination ({where}) in format DD.MM.YYYY HH:MM,\n"
@@ -360,14 +354,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_option_hi": "हिन्दी",
         "language_option_zh": "中文",
         "language_option_ja": "日本語",
-        "btn_text": "Text",
-        "btn_media": "Media (photo/video)",
         "btn_cancel": "Cancel",
         "btn_done": "Done",
         "btn_clear": "Clear",
         "btn_back": "Back",
-        "btn_caption_above": "Caption above",
-        "btn_caption_below": "Caption below",
         "btn_confirm": "Confirm",
         "btn_queue_cancel": "Cancel {label}",
         "btn_edit_post": "Edit {label}",
@@ -501,7 +491,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Название: {team_name}\n"
             "- Роль: {role}"
         ),
-        "team_members_usage": "Использование: /team_members <team_id>",
         "team_members_none": "У вас пока нет команд.",
         "team_members_choose": "Ваши команды:\n\n{lines}\n\nЗапустите /team_members <team_id>.",
         "team_members_choose_item": "team={team_id} - {team_name} - {role}",
@@ -586,15 +575,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "schedule_weekday_fri": "Пт",
         "schedule_weekday_sat": "Сб",
         "schedule_weekday_sun": "Вс",
-        "schedule_kind_prompt": "Что вы хотите запланировать?",
-        "schedule_text_prompt": "Отправьте текст сообщения одним сообщением.",
-        "schedule_media_prompt": "Отправьте фото/видео (можно несколько или альбом 2–10). Подпись отправьте текстом (можно после медиа).",
         "schedule_post_prompt": (
             "Отправьте пост: текст, фото или видео.\n"
             "Если текст отправлен до медиа — он будет сверху, если после медиа — снизу.\n"
             "Когда пост готов, нажмите «Готово»."
         ),
-        "schedule_unknown_type": "Неизвестный тип.",
         "text_required": "Нужен текст.",
         "confirm_template": "Подтвердите:\n- Куда: {where}\n- Когда: {local_time} ({tz_name})\n- Тип: {kind}\n",
         "kind_text": "текст",
@@ -611,7 +596,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "media_cleared": "Черновик очищен. Отправьте текст/фото/видео заново.",
         "post_need_content": "Сначала отправьте текст или хотя бы одно фото/видео.",
         "media_need_at_least_one": "Сначала отправьте хотя бы одно фото/видео.",
-        "caption_position_prompt": "Где должна быть подпись?",
         "scheduled_ok": "Ок! Запланировано на {local_time} ({tz_name}). id={post_id}",
         "schedule_next_prompt": (
             "Введите следующую дату и время для этого же канала/чата ({where}) в формате ДД.ММ.ГГГГ ЧЧ:ММ,\n"
@@ -740,14 +724,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_option_hi": "हिन्दी",
         "language_option_zh": "中文",
         "language_option_ja": "日本語",
-        "btn_text": "Текст",
-        "btn_media": "Медиа (фото/видео)",
         "btn_cancel": "Отмена",
         "btn_done": "Готово",
         "btn_clear": "Очистить",
         "btn_back": "Назад",
-        "btn_caption_above": "Подпись сверху",
-        "btn_caption_below": "Подпись снизу",
         "btn_confirm": "Подтвердить",
         "btn_queue_cancel": "Отменить {label}",
         "btn_edit_post": "Изменить {label}",

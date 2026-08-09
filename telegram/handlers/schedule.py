@@ -20,9 +20,7 @@ def build_router(store: StateStore) -> Router:
     async def cmd_schedule(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id)
-        if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, message.from_user.id))
+        if await h._require_tz(store, message, message.from_user.id, lang) is None:
             return
 
         await state.clear()
@@ -48,11 +46,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         lang = await h._user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await h._require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         chat_id = int(query.data.split(":")[1])

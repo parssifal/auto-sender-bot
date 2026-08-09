@@ -1,19 +1,7 @@
 import pytest
-import pytest_asyncio
 from aiogram.exceptions import TelegramForbiddenError
 
-from core.db import open_db
 from core.services import admin_broadcast_svc
-from core.state import StateStore
-
-
-@pytest_asyncio.fixture
-async def store():
-    conn = await open_db(":memory:")
-    state = StateStore(conn)
-    await state.migrate()
-    yield state
-    await conn.close()
 
 
 class _FakeBot:  # never actually called when send is injected

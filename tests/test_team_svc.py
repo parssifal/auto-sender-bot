@@ -1,17 +1,5 @@
 import pytest
-import pytest_asyncio
-from core.db import open_db
 from core.services import team_svc
-from core.state import StateStore
-
-
-@pytest_asyncio.fixture
-async def store():
-    conn = await open_db(":memory:")
-    state = StateStore(conn)
-    await state.migrate()
-    yield state
-    await conn.close()
 
 
 @pytest.mark.asyncio

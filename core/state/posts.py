@@ -201,27 +201,6 @@ class PostsMixin:
                 (post_id, idx, str(item["type"]), str(item["file_id"])),
             )
 
-    def _normalize_scheduled_payload(
-        self,
-        *,
-        kind: str,
-        text: str | None,
-        entities_json: str | None,
-        caption: str | None,
-        caption_entities_json: str | None,
-        caption_above: bool | None,
-        media_items: list[dict[str, str]] | None,
-    ) -> tuple[str | None, str | None, str | None, str | None, int | None, list[dict[str, str]]]:
-        return self._normalize_draft_payload(
-            kind=kind,
-            text=text,
-            entities_json=entities_json,
-            caption=caption,
-            caption_entities_json=caption_entities_json,
-            caption_above=caption_above,
-            media_items=media_items,
-        )
-
     @staticmethod
     def _editable_post_update_keys() -> set[str]:
         return {
@@ -319,7 +298,7 @@ class PostsMixin:
                     if any(key in updates for key in {"caption", "caption_entities_json", "caption_above", "media_items"}):
                         raise ValueError("Text scheduled post cannot include media fields")
                     normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
-                        self._normalize_scheduled_payload(
+                        self._normalize_draft_payload(
                             kind="text",
                             text=(
                                 str(updates["text"])
@@ -339,7 +318,7 @@ class PostsMixin:
                     if any(key in updates for key in {"text", "entities_json"}):
                         raise ValueError("Media scheduled post must use caption fields instead of text fields")
                     normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
-                        self._normalize_scheduled_payload(
+                        self._normalize_draft_payload(
                             kind="media",
                             text=None,
                             entities_json=None,
@@ -426,42 +405,6 @@ class PostsMixin:
             {"scheduled_at_utc": scheduled_at_utc},
         )
 
-    async def update_editable_post_content(
-        self,
-        post_id: str,
-        user_id: int,
-        *,
-        kind: str,
-        text: str | None = None,
-        entities_json: str | None = None,
-        caption: str | None = None,
-        caption_entities_json: str | None = None,
-        caption_above: bool | None = None,
-        media_items: list[dict[str, str]] | None = None,
-    ) -> bool:
-        if kind == "text":
-            updates: dict[str, object] = {
-                "kind": kind,
-                "text": text,
-                "entities_json": entities_json,
-            }
-        elif kind == "media":
-            updates = {
-                "kind": kind,
-                "caption": caption,
-                "caption_entities_json": caption_entities_json,
-                "caption_above": caption_above,
-            }
-            if media_items is not None:
-                updates["media_items"] = media_items
-        else:
-            raise ValueError(f"Unsupported scheduled post kind: {kind}")
-        return await self.update_scheduled_post(
-            post_id,
-            user_id,
-            updates,
-        )
-
     @locked_write
     async def cancel_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
@@ -500,9 +443,6 @@ class PostsMixin:
         )
         await self._conn.commit()
         return cur.rowcount == 1
-
-    async def hard_delete_pending_post(self, user_id: int, post_id: str) -> bool:
-        return await self.hard_delete_post(user_id, post_id)
 
     async def list_due_posts(self, now_utc: int, limit: int = 10) -> list["ScheduledPostRow"]:
         rows = await self._conn.execute_fetchall(

@@ -60,12 +60,6 @@ def build_admin_router(
         await state.set_state(AdminBroadcastStates.collecting)
         await message.answer(tr(lang, "admin_broadcast_prompt"))
 
-    @router.message(AdminBroadcastStates.collecting, Command("cancel"))
-    async def abc_cancel_collect(message: Message, state: FSMContext) -> None:
-        lang = await store.get_user_language(message.from_user.id)
-        await state.clear()
-        await message.answer(tr(lang, "admin_broadcast_cancelled"))
-
     @router.message(AdminBroadcastStates.collecting)
     async def abc_collect(message: Message, state: FSMContext) -> None:
         lang = await store.get_user_language(message.from_user.id)

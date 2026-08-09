@@ -13,13 +13,11 @@ from telegram.handlers import states, keyboards as kb, helpers as h
 async def _render_repeats(store: StateStore, message: Message, *, user_id: int, page: int, edit: bool) -> None:
     lang = await h._user_lang(store, user_id)
     page_size = 5
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        items = await store.list_user_recurring_summaries(user_id=user_id, offset=offset, limit=page_size + 1)
-        if items or page == 0:
-            break
-        page -= 1
+    items, page = await h._page_back_to_content(
+        lambda offset: store.list_user_recurring_summaries(user_id=user_id, offset=offset, limit=page_size + 1),
+        page,
+        page_size,
+    )
 
     has_more = len(items) > page_size
     items = items[:page_size]
@@ -65,9 +63,7 @@ def build_router(store: StateStore) -> Router:
     async def cmd_repeat(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
         lang = await h._user_lang(store, message.from_user.id)
-        tz_name = await store.get_user_timezone(message.from_user.id)
-        if not tz_name:
-            await message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, message.from_user.id))
+        if await h._require_tz(store, message, message.from_user.id, lang) is None:
             return
 
         await state.clear()
@@ -152,11 +148,8 @@ def build_router(store: StateStore) -> Router:
             return
 
         lang = await h._user_lang(store, query.from_user.id)
-        tz_name = await store.get_user_timezone(query.from_user.id)
-        if not tz_name:
-            await query.answer()
-            await query.message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, query.from_user.id))
-            await state.clear()
+        tz_name = await h._require_tz(store, query.message, query.from_user.id, lang, query=query, state=state)
+        if tz_name is None:
             return
 
         interval_type = query.data.split(":")[1]

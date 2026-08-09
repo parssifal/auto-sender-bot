@@ -1,18 +1,6 @@
 import pytest
-import pytest_asyncio
 
-from core.db import open_db
 from core.services import broadcast_svc
-from core.state import StateStore
-
-
-@pytest_asyncio.fixture
-async def store():
-    conn = await open_db(":memory:")            # sets row_factory=Row + foreign_keys ON
-    state = StateStore(conn)
-    await state.migrate()
-    yield state
-    await conn.close()
 
 
 async def _seed_dest(store, user_id, chat_id, title, username):
