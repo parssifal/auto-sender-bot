@@ -7,7 +7,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
-from aiogram.types import Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup
 
 from core.limits import ResourceLimitError
 from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F401  # re-export for existing callers
@@ -403,6 +403,33 @@ async def _user_lang(store: StateStore, user_id: int) -> str:
 
 async def _main_menu_for(store: StateStore, user_id: int) -> ReplyKeyboardMarkup:
     return _main_menu_kb(await _user_lang(store, user_id))
+
+
+async def _require_tz(
+    store: StateStore,
+    target: Message,
+    user_id: int,
+    lang: str,
+    *,
+    query: CallbackQuery | None = None,
+    state: FSMContext | None = None,
+) -> str | None:
+    """Return the user's timezone, or prompt them to set one and return None.
+
+    Folds the 14 copies of the 'no timezone yet' guard. When unset, ``query`` is
+    answered first (callback entries) and ``state`` cleared afterwards (mid-flow
+    entries), preserving each caller's original ordering; pass only the pieces
+    the caller actually did.
+    """
+    tz_name = await store.get_user_timezone(user_id)
+    if tz_name:
+        return tz_name
+    if query is not None:
+        await query.answer()
+    await target.answer(tr(lang, "timezone_required"), reply_markup=await _main_menu_for(store, user_id))
+    if state is not None:
+        await state.clear()
+    return None
 
 
 async def _render_destinations(

@@ -233,9 +233,8 @@ async def _start_scheduled_post_time_edit(
     post: ScheduledPostRow,
 ) -> None:
     lang = await h._user_lang(store, user_id)
-    tz_name = await store.get_user_timezone(user_id)
-    if not tz_name:
-        await message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, user_id))
+    tz_name = await h._require_tz(store, message, user_id, lang)
+    if tz_name is None:
         return
 
     summary = await h._build_scheduled_post_summary(store, post, lang=lang)

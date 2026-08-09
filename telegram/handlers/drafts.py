@@ -186,9 +186,8 @@ async def _start_draft_edit(store: StateStore, message: Message, state: FSMConte
 
 async def _start_draft_publish(store: StateStore, message: Message, state: FSMContext, *, user_id: int, draft: DraftRow) -> None:
     lang = await h._user_lang(store, user_id)
-    tz_name = await store.get_user_timezone(user_id)
-    if not tz_name:
-        await message.answer(tr(lang, "timezone_required"), reply_markup=await h._main_menu_for(store, user_id))
+    tz_name = await h._require_tz(store, message, user_id, lang)
+    if tz_name is None:
         return
 
     where = await store.get_destination_title(draft.chat_id) or str(draft.chat_id)
