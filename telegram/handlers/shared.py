@@ -593,18 +593,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             return
 
         await query.answer()
-        if current_state == RepeatStates.collecting_post.state:
-            collecting_state = RepeatStates.collecting_post
-        elif current_state == BroadcastStates.collecting_post.state:
-            collecting_state = BroadcastStates.collecting_post
-        elif current_state == EditStates.collecting_media.state:
-            collecting_state = EditStates.collecting_media
-        elif current_state == DraftStates.editing_post.state:
-            collecting_state = DraftStates.editing_post
-        elif current_state == DraftStates.collecting_post.state:
-            collecting_state = DraftStates.collecting_post
-        else:
-            collecting_state = ScheduleStates.collecting_post
         await patch_content_ctx(
             state,
             current_state,
@@ -619,7 +607,6 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             draft_entities_json=None,
             text_before_media=False,
         )
-        await state.set_state(collecting_state)
         await query.message.answer(tr(lang, "media_cleared"), reply_markup=_media_collect_kb(lang))
 
     @router.callback_query(F.data == "smedia:done")
