@@ -79,3 +79,14 @@ def test_queue_page_has_role_gated_admin_link() -> None:
     assert "q.is_admin" in html
     # …and navigates to the admin dashboard at "/".
     assert 'location.href = "/"' in html
+
+
+def test_queue_page_has_post_preview() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # Clicking a post opens a preview sheet fed by the per-post detail endpoint.
+    assert 'id="detail"' in html
+    assert "/api/my/post/" in html
+    # Photos are fetched as authorised blobs (the <img> tag cannot send the
+    # initData header) and the object URLs are revoked to avoid leaks.
+    assert "createObjectURL" in html
+    assert "revokeObjectURL" in html

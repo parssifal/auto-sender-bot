@@ -315,3 +315,140 @@ async def test_my_queue_reports_admin_flag(store):
 
     assert await _is_admin_for((999,)) is False
     assert await _is_admin_for((USER_A,)) is True
+
+
+# --- Task: post detail + media preview ---
+
+
+class _FakeFile:
+    def __init__(self, path: str) -> None:
+        self.file_path = path
+
+
+class _FakeBot:
+    """Minimal duck-typed stand-in for aiogram's Bot media API."""
+
+    def __init__(self) -> None:
+        self.get_file_calls: list[str] = []
+
+    async def get_file(self, file_id: str) -> _FakeFile:
+        self.get_file_calls.append(file_id)
+        return _FakeFile(f"photos/{file_id}.jpg")
+
+    async def download_file(self, file_path: str):
+        import io
+
+        return io.BytesIO(b"BYTES-" + file_path.encode())
+
+
+@pytest_asyncio.fixture
+async def server_with_bot(store: StateStore):
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,),
+        bot=_FakeBot(),
+    )
+    yield srv
+    await srv.close()
+
+
+async def _mk_media_post(store: StateStore, user_id: int) -> str:
+    at = int(time.time()) + 3600
+    return await store.create_scheduled_media_post(
+        user_id, CHAT_A, at,
+        caption="look",
+        caption_entities_json=json.dumps([{"type": "bold", "offset": 0, "length": 4}]),
+        caption_above=None,
+        media_items=[
+            {"type": "photo", "file_id": "FID0"},
+            {"type": "video", "file_id": "FID1"},
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_detail_requires_auth(server):
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/post/whatever")) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_post_detail_returns_content_and_media_for_owner(server, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server.url(f"/api/my/post/{pid}"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert body["kind"] == "media"
+    assert body["caption"] == "look"
+    assert body["caption_entities"] == [{"type": "bold", "offset": 0, "length": 4}]
+    assert body["media"] == [
+        {"idx": 0, "type": "photo"},
+        {"idx": 1, "type": "video"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_post_detail_hidden_from_non_owner(server, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server.url(f"/api/my/post/{pid}"),
+                         headers={"Authorization": _init_data(USER_B)}) as r:
+            assert r.status == 404
+
+
+@pytest.mark.asyncio
+async def test_post_detail_unknown_id_404(server):
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/post/nope"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 404
+
+
+@pytest.mark.asyncio
+async def test_post_media_streams_bytes_for_owner(server_with_bot, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server_with_bot.url(f"/api/my/post/{pid}/media/0"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            assert r.content_type == "image/jpeg"
+            data = await r.read()
+    assert data == b"BYTES-photos/FID0.jpg"
+
+
+@pytest.mark.asyncio
+async def test_post_media_hidden_from_non_owner(server_with_bot, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server_with_bot.url(f"/api/my/post/{pid}/media/0"),
+                         headers={"Authorization": _init_data(USER_B)}) as r:
+            assert r.status == 404
+
+
+@pytest.mark.asyncio
+async def test_post_media_out_of_range_404(server_with_bot, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server_with_bot.url(f"/api/my/post/{pid}/media/9"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 404
+
+
+@pytest.mark.asyncio
+async def test_post_media_bad_index_400(server_with_bot, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server_with_bot.url(f"/api/my/post/{pid}/media/x"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 400
+
+
+@pytest.mark.asyncio
+async def test_post_media_without_bot_returns_503(server, store):
+    pid = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server.url(f"/api/my/post/{pid}/media/0"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 503
