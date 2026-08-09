@@ -70,6 +70,20 @@ from telegram.handlers.teams import _handle_team_invite_start
 from telegram.menu_button import set_user_menu_button
 
 
+_PICKER_SIBLING = {
+    RepeatStates.entering_datetime.state: RepeatStates.selecting_time,
+    RepeatStates.selecting_time.state: RepeatStates.entering_datetime,
+    DraftStates.entering_datetime.state: DraftStates.selecting_time,
+    DraftStates.selecting_time.state: DraftStates.entering_datetime,
+    BroadcastStates.entering_datetime.state: BroadcastStates.selecting_time,
+    BroadcastStates.selecting_time.state: BroadcastStates.entering_datetime,
+    EditStates.entering_datetime.state: EditStates.selecting_time,
+    EditStates.selecting_time.state: EditStates.entering_datetime,
+    ScheduleStates.entering_datetime.state: ScheduleStates.selecting_time,
+    ScheduleStates.selecting_time.state: ScheduleStates.entering_datetime,
+}
+
+
 async def _get_content_ctx(state, current_state):
     """Return the flow-correct typed context for whichever flow owns ``current_state``.
 
@@ -270,16 +284,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             calendar_year=selected_date.year,
             calendar_month=selected_date.month,
         )
-        if current_state == RepeatStates.entering_datetime.state:
-            next_state = RepeatStates.selecting_time
-        elif current_state == DraftStates.entering_datetime.state:
-            next_state = DraftStates.selecting_time
-        elif current_state == BroadcastStates.entering_datetime.state:
-            next_state = BroadcastStates.selecting_time
-        elif current_state == EditStates.entering_datetime.state:
-            next_state = EditStates.selecting_time
-        else:
-            next_state = ScheduleStates.selecting_time
+        next_state = _PICKER_SIBLING.get(current_state, ScheduleStates.selecting_time)
         await state.set_state(next_state)
         await query.answer()
         await _edit_datetime_prompt(
@@ -346,16 +351,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         selected_date = _selected_date_from_state(data)
         if selected_date is not None:
             await patch_content_ctx(state, current_state, calendar_year=selected_date.year, calendar_month=selected_date.month)
-        if current_state == RepeatStates.selecting_time.state:
-            previous_state = RepeatStates.entering_datetime
-        elif current_state == DraftStates.selecting_time.state:
-            previous_state = DraftStates.entering_datetime
-        elif current_state == BroadcastStates.selecting_time.state:
-            previous_state = BroadcastStates.entering_datetime
-        elif current_state == EditStates.selecting_time.state:
-            previous_state = EditStates.entering_datetime
-        else:
-            previous_state = ScheduleStates.entering_datetime
+        previous_state = _PICKER_SIBLING.get(current_state, ScheduleStates.entering_datetime)
         await state.set_state(previous_state)
         data = await state.get_data()
         text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
@@ -384,16 +380,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         data = await state.get_data()
         selected_date = _selected_date_from_state(data)
         if selected_date is None:
-            if current_state == RepeatStates.selecting_time.state:
-                previous_state = RepeatStates.entering_datetime
-            elif current_state == DraftStates.selecting_time.state:
-                previous_state = DraftStates.entering_datetime
-            elif current_state == BroadcastStates.selecting_time.state:
-                previous_state = BroadcastStates.entering_datetime
-            elif current_state == EditStates.selecting_time.state:
-                previous_state = EditStates.entering_datetime
-            else:
-                previous_state = ScheduleStates.entering_datetime
+            previous_state = _PICKER_SIBLING.get(current_state, ScheduleStates.entering_datetime)
             await state.set_state(previous_state)
             data = await state.get_data()
             text = await _datetime_entry_prompt_text(store, state, lang, previous_state.state)
