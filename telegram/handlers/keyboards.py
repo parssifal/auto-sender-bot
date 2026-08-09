@@ -212,13 +212,31 @@ def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang
 
 
 def _preview_nav_kb(post_ids: list[str], index: int) -> InlineKeyboardMarkup | None:
-    """⬅️/➡️ row for stepping through the queue straight from a preview."""
-    row: list[InlineKeyboardButton] = []
-    if index > 0:
-        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"qview:{post_ids[index - 1]}"))
-    if index < len(post_ids) - 1:
-        row.append(InlineKeyboardButton(text="➡️", callback_data=f"qview:{post_ids[index + 1]}"))
-    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
+    """⬅️ n/N ➡️ row for stepping through the queue straight from a preview.
+
+    Edges keep an inert placeholder instead of dropping the button, so the
+    counter stays centred and the row does not jump around while paging.
+    """
+    if len(post_ids) < 2:
+        return None
+
+    def cell(target_index: int, label: str) -> InlineKeyboardButton:
+        if 0 <= target_index < len(post_ids):
+            return InlineKeyboardButton(text=label, callback_data=f"qview:{post_ids[target_index]}")
+        return InlineKeyboardButton(text="·", callback_data=TimePicker.NOOP_CALLBACK)
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                cell(index - 1, "⬅️"),
+                InlineKeyboardButton(
+                    text=f"{index + 1} / {len(post_ids)}",
+                    callback_data=TimePicker.NOOP_CALLBACK,
+                ),
+                cell(index + 1, "➡️"),
+            ]
+        ]
+    )
 
 
 def _posts_paged_kb(

@@ -13,6 +13,7 @@ from aiogram.types import Update
 
 from core.db import open_db
 from core.state import StateStore
+from core.time_picker import TimePicker
 from telegram.router import build_router
 
 USER_ID = 1001
@@ -169,17 +170,35 @@ async def test_preview_has_queue_navigation_buttons(preview_flow) -> None:
         for i in range(3)
     ]
 
-    def nav_callbacks(flow) -> list[str]:
+    def nav_row(flow) -> list[tuple[str, str]]:
         info = next(m for m in flow["bot"].calls if isinstance(m, SendMessage) and m.reply_markup is not None)
-        return [b.callback_data for row in info.reply_markup.inline_keyboard for b in row]
+        (row,) = info.reply_markup.inline_keyboard
+        return [(b.text, b.callback_data) for b in row]
+
+    noop = TimePicker.NOOP_CALLBACK
 
     await _feed_qview(preview_flow, ids[0], update_id=1)
-    assert nav_callbacks(preview_flow) == [f"qview:{ids[1]}"]  # first post: forward only
+    assert nav_row(preview_flow) == [("·", noop), ("1 / 3", noop), ("➡️", f"qview:{ids[1]}")]
 
     preview_flow["bot"].calls.clear()
     await _feed_qview(preview_flow, ids[1], update_id=2)
-    assert nav_callbacks(preview_flow) == [f"qview:{ids[0]}", f"qview:{ids[2]}"]
+    assert nav_row(preview_flow) == [
+        ("⬅️", f"qview:{ids[0]}"),
+        ("2 / 3", noop),
+        ("➡️", f"qview:{ids[2]}"),
+    ]
 
     preview_flow["bot"].calls.clear()
     await _feed_qview(preview_flow, ids[2], update_id=3)
-    assert nav_callbacks(preview_flow) == [f"qview:{ids[1]}"]  # last post: back only
+    assert nav_row(preview_flow) == [("⬅️", f"qview:{ids[1]}"), ("3 / 3", noop), ("·", noop)]
+
+
+@pytest.mark.asyncio
+async def test_single_post_preview_has_no_nav_row(preview_flow) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    only_post = await preview_flow["store"].create_scheduled_text_post(
+        user_id=USER_ID, chat_id=DESTINATION_CHAT_ID, scheduled_at_utc=scheduled_at_utc,
+        text="Only post", entities_json=None,
+    )
+    await _feed_qview(preview_flow, only_post, update_id=1)
+    assert all(m.reply_markup is None for m in preview_flow["bot"].calls if isinstance(m, SendMessage))
