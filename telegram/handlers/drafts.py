@@ -463,14 +463,9 @@ def build_router(store: StateStore) -> Router:
             await _start_draft_publish(store, query.message, state, user_id=query.from_user.id, draft=draft)
             return
 
-        permissions = await store.get_draft_permissions(draft_id, query.from_user.id)
-        allowed = False
-        if permissions is not None:
-            allowed = action == "delete" and permissions.can_delete
-        await query.answer(
-            tr(lang, "draft_action_unavailable") if allowed else tr(lang, "draft_missing"),
-            show_alert=True,
-        )
+        # Only dact:edit and dact:publish are ever produced (delete uses ddelask:);
+        # any other action is a forged callback - just acknowledge it.
+        await query.answer()
 
     @router.callback_query(F.data.startswith("ddpage:"))
     async def cb_draft_create_dest_page(query: CallbackQuery, state: FSMContext) -> None:
