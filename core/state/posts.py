@@ -426,42 +426,6 @@ class PostsMixin:
             {"scheduled_at_utc": scheduled_at_utc},
         )
 
-    async def update_editable_post_content(
-        self,
-        post_id: str,
-        user_id: int,
-        *,
-        kind: str,
-        text: str | None = None,
-        entities_json: str | None = None,
-        caption: str | None = None,
-        caption_entities_json: str | None = None,
-        caption_above: bool | None = None,
-        media_items: list[dict[str, str]] | None = None,
-    ) -> bool:
-        if kind == "text":
-            updates: dict[str, object] = {
-                "kind": kind,
-                "text": text,
-                "entities_json": entities_json,
-            }
-        elif kind == "media":
-            updates = {
-                "kind": kind,
-                "caption": caption,
-                "caption_entities_json": caption_entities_json,
-                "caption_above": caption_above,
-            }
-            if media_items is not None:
-                updates["media_items"] = media_items
-        else:
-            raise ValueError(f"Unsupported scheduled post kind: {kind}")
-        return await self.update_scheduled_post(
-            post_id,
-            user_id,
-            updates,
-        )
-
     @locked_write
     async def cancel_post(self, user_id: int, post_id: str) -> bool:
         cur = await self._conn.execute(
@@ -500,9 +464,6 @@ class PostsMixin:
         )
         await self._conn.commit()
         return cur.rowcount == 1
-
-    async def hard_delete_pending_post(self, user_id: int, post_id: str) -> bool:
-        return await self.hard_delete_post(user_id, post_id)
 
     async def list_due_posts(self, now_utc: int, limit: int = 10) -> list["ScheduledPostRow"]:
         rows = await self._conn.execute_fetchall(

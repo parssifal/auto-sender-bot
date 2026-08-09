@@ -25,8 +25,7 @@ def locked_write(method: Callable[..., Awaitable[_T]]) -> Callable[..., Awaitabl
     connection per worker if throughput ever matters.
 
     ``asyncio.Lock`` is NOT reentrant: never decorate a method that awaits another
-    decorated method (the thin delegators ``update_editable_post_time``,
-    ``update_editable_post_content`` and ``hard_delete_pending_post`` stay
+    decorated method (the thin delegator ``update_editable_post_time`` stays
     undecorated for that reason). Read-only methods stay unlocked — locked writes
     call them internally.
     """
