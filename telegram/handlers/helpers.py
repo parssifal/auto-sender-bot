@@ -432,6 +432,22 @@ async def _require_tz(
     return None
 
 
+async def _page_back_to_content(fetch, page: int, page_size: int):
+    """Fetch a page, walking back toward 0 until non-empty (or page 0 reached).
+
+    Clamps negative pages to 0 (forged callback pages), then decrements until
+    ``fetch(offset)`` returns rows or page 0 is reached. ``fetch`` takes the row
+    offset and returns up to ``page_size + 1`` rows - the +1 is the caller's
+    has-more probe. Returns ``(rows, page)`` with the settled page.
+    """
+    page = max(page, 0)
+    while True:
+        rows = await fetch(page * page_size)
+        if rows or page == 0:
+            return rows, page
+        page -= 1
+
+
 async def _render_destinations(
     store: StateStore,
     message: Message,
@@ -483,14 +499,11 @@ async def _render_broadcast_destinations(
 ) -> None:
     lang = await _user_lang(store, user_id)
     page_size = 5
-    current_page = max(page, 0)
-
-    while True:
-        offset = current_page * page_size
-        items = await store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1)
-        if items or current_page == 0:
-            break
-        current_page -= 1
+    items, current_page = await _page_back_to_content(
+        lambda offset: store.list_user_destinations(user_id=user_id, offset=offset, limit=page_size + 1),
+        page,
+        page_size,
+    )
 
     has_more = len(items) > page_size
     items = items[:page_size]

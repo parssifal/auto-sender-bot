@@ -37,13 +37,11 @@ async def _render_post_list(
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
-        if posts or page == 0:
-            break
-        page -= 1
+    posts, page = await h._page_back_to_content(
+        lambda offset: store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset),
+        page,
+        page_size,
+    )
 
     has_more = len(posts) > page_size
     posts = posts[:page_size]
@@ -116,13 +114,11 @@ async def _render_queue_page(
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
-        if posts or page == 0:
-            break
-        page -= 1
+    posts, page = await h._page_back_to_content(
+        lambda offset: store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset),
+        page,
+        page_size,
+    )
 
     has_more = len(posts) > page_size
     posts = posts[:page_size]

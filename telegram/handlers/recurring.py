@@ -13,13 +13,11 @@ from telegram.handlers import states, keyboards as kb, helpers as h
 async def _render_repeats(store: StateStore, message: Message, *, user_id: int, page: int, edit: bool) -> None:
     lang = await h._user_lang(store, user_id)
     page_size = 5
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        items = await store.list_user_recurring_summaries(user_id=user_id, offset=offset, limit=page_size + 1)
-        if items or page == 0:
-            break
-        page -= 1
+    items, page = await h._page_back_to_content(
+        lambda offset: store.list_user_recurring_summaries(user_id=user_id, offset=offset, limit=page_size + 1),
+        page,
+        page_size,
+    )
 
     has_more = len(items) > page_size
     items = items[:page_size]
