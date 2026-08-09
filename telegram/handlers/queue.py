@@ -22,7 +22,18 @@ from telegram.handlers import states, keyboards as kb, helpers as h
 _MENU_QUEUE_TEXTS = key_values("menu_queue")
 
 
-async def _render_edit_posts(store: StateStore, message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
+async def _render_post_list(
+    store: StateStore,
+    message: Message,
+    *,
+    user_id: int,
+    page: int = 0,
+    edit: bool = False,
+    empty_key: str,
+    header_key: str,
+    item_key: str,
+    kb_fn,
+) -> None:
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     page_size = 8
@@ -38,7 +49,7 @@ async def _render_edit_posts(store: StateStore, message: Message, *, user_id: in
     posts = posts[:page_size]
 
     if not posts:
-        text = tr(lang, "edit_empty")
+        text = tr(lang, empty_key)
         if edit:
             await message.edit_text(text, reply_markup=None)
         else:
@@ -46,13 +57,13 @@ async def _render_edit_posts(store: StateStore, message: Message, *, user_id: in
         return
 
     lines: list[str] = []
-    edit_buttons: list[dict[str, str]] = []
+    buttons: list[dict[str, str]] = []
     for post in posts:
         summary = await h._build_scheduled_post_summary(store, post, lang=lang)
         lines.append(
             tr(
                 lang,
-                "edit_list_item",
+                item_key,
                 post_id=kb._short_id(post.id),
                 where=summary["where"],
                 local_time=kb._format_local(post.scheduled_at_utc, tz_name),
@@ -60,62 +71,30 @@ async def _render_edit_posts(store: StateStore, message: Message, *, user_id: in
                 preview=summary["preview"],
             )
         )
-        edit_buttons.append({"id": post.id, "label": kb._short_id(post.id)})
+        buttons.append({"id": post.id, "label": kb._short_id(post.id)})
 
-    text = tr(lang, "edit_list_header", lines="\n\n".join(lines))
-    reply_markup = kb._edit_paged_kb(edit_buttons, page=page, has_more=has_more, lang=lang)
+    text = tr(lang, header_key, lines="\n\n".join(lines))
+    reply_markup = kb_fn(buttons, page=page, has_more=has_more, lang=lang)
     if edit:
         await message.edit_text(text, reply_markup=reply_markup)
     else:
         await message.answer(text, reply_markup=reply_markup)
+
+
+async def _render_edit_posts(store: StateStore, message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
+    await _render_post_list(
+        store, message, user_id=user_id, page=page, edit=edit,
+        empty_key="edit_empty", header_key="edit_list_header", item_key="edit_list_item",
+        kb_fn=kb._edit_paged_kb,
+    )
 
 
 async def _render_delete_posts(store: StateStore, message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
-    lang = await h._user_lang(store, user_id)
-    tz_name = await store.get_user_timezone(user_id) or "UTC"
-    page_size = 8
-    page = max(page, 0)
-    while True:
-        offset = page * page_size
-        posts = await store.list_editable_pending_posts(user_id=user_id, limit=page_size + 1, offset=offset)
-        if posts or page == 0:
-            break
-        page -= 1
-
-    has_more = len(posts) > page_size
-    posts = posts[:page_size]
-
-    if not posts:
-        text = tr(lang, "delete_empty")
-        if edit:
-            await message.edit_text(text, reply_markup=None)
-        else:
-            await message.answer(text, reply_markup=await h._main_menu_for(store, user_id))
-        return
-
-    lines: list[str] = []
-    delete_buttons: list[dict[str, str]] = []
-    for post in posts:
-        summary = await h._build_scheduled_post_summary(store, post, lang=lang)
-        lines.append(
-            tr(
-                lang,
-                "delete_list_item",
-                post_id=kb._short_id(post.id),
-                where=summary["where"],
-                local_time=kb._format_local(post.scheduled_at_utc, tz_name),
-                kind=summary["kind"],
-                preview=summary["preview"],
-            )
-        )
-        delete_buttons.append({"id": post.id, "label": kb._short_id(post.id)})
-
-    text = tr(lang, "delete_list_header", lines="\n\n".join(lines))
-    reply_markup = kb._delete_paged_kb(delete_buttons, page=page, has_more=has_more, lang=lang)
-    if edit:
-        await message.edit_text(text, reply_markup=reply_markup)
-    else:
-        await message.answer(text, reply_markup=reply_markup)
+    await _render_post_list(
+        store, message, user_id=user_id, page=page, edit=edit,
+        empty_key="delete_empty", header_key="delete_list_header", item_key="delete_list_item",
+        kb_fn=kb._delete_paged_kb,
+    )
 
 
 def _app_button(lang: str, webapp_url: str) -> InlineKeyboardButton:
