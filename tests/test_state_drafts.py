@@ -1,7 +1,44 @@
+from types import SimpleNamespace
+
 import pytest
 
+import core.state.drafts as drafts_state
+import core.state.teams as teams_state
 from core.db import open_db
 from core.state import StateStore
+
+
+def _freeze_time(monkeypatch: pytest.MonkeyPatch, now: int) -> None:
+    """Freeze the clock the team/draft store methods read - and ONLY that clock.
+
+    The store submodules each do ``import time``; patching each one's own ``time``
+    binding replaces the name in that namespace. This deliberately does NOT touch the
+    stdlib ``time`` module (``core.state.time is time``), so freezing here no longer
+    leaks a frozen ``time.time()`` into the rest of the process. Only teams/drafts
+    timestamps are asserted in this file, so those two modules are enough.
+    """
+    clock = SimpleNamespace(time=lambda: now)
+    monkeypatch.setattr(teams_state, "time", clock)
+    monkeypatch.setattr(drafts_state, "time", clock)
+
+
+def test_freeze_time_is_scoped_to_store_modules_not_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    # T-55: the whole point of the switch is that freezing the store clock must NOT
+    # freeze the stdlib clock process-wide (the old `core.state.time.time` patch did,
+    # bleeding a frozen time.time() into asyncio and everything else). The timestamp
+    # assertions elsewhere can't tell the two apart - a global patch freezes teams/drafts
+    # too - so this test pins the scoping directly.
+    import time as global_time
+
+    real_before = global_time.time()
+    _freeze_time(monkeypatch, 1_700_000_000)
+
+    # The store submodules read the frozen clock...
+    assert teams_state.time.time() == 1_700_000_000
+    assert drafts_state.time.time() == 1_700_000_000
+    # ...but the stdlib global clock keeps running untouched.
+    assert global_time.time() != 1_700_000_000
+    assert global_time.time() >= real_before
 
 
 EXPECTED_TEAM_COLUMNS = {
@@ -171,15 +208,15 @@ async def test_state_store_migrate_is_idempotent_for_drafts(store) -> None:
 @pytest.mark.asyncio
 async def test_state_store_team_crud_uses_public_methods(store, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     await store.ensure_user(123)
     await store.ensure_user(456)
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     first_team_id = await store.create_team(123, "Alpha")
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     second_team_id = await store.create_team(123, "Beta")
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+    _freeze_time(monkeypatch, 1_700_000_030)
     third_team_id = await store.create_team(456, "Gamma")
 
     team = await store.get_team(first_team_id)
@@ -196,19 +233,19 @@ async def test_state_store_team_crud_uses_public_methods(store, monkeypatch: pyt
     assert [item.name for item in owned_teams] == ["Beta", "Alpha"]
     assert [item.name for item in await store.list_writable_teams(123)] == ["Beta", "Alpha"]
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_035)
+    _freeze_time(monkeypatch, 1_700_000_035)
     gamma_editor_member = await store.upsert_team_member(third_team_id, 123, "editor")
     assert gamma_editor_member.role == "editor"
     assert gamma_editor_member.created_at == 1_700_000_035
     assert gamma_editor_member.updated_at == 1_700_000_035
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
+    _freeze_time(monkeypatch, 1_700_000_040)
     editor_member = await store.upsert_team_member(first_team_id, 456, "editor")
     assert editor_member.role == "editor"
     assert editor_member.created_at == 1_700_000_040
     assert editor_member.updated_at == 1_700_000_040
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_050)
+    _freeze_time(monkeypatch, 1_700_000_050)
     viewer_member = await store.upsert_team_member(first_team_id, 456, "viewer")
     assert viewer_member.role == "viewer"
     assert viewer_member.created_at == 1_700_000_040
@@ -236,7 +273,7 @@ async def test_state_store_team_crud_uses_public_methods(store, monkeypatch: pyt
 @pytest.mark.asyncio
 async def test_state_store_draft_storage_supports_text_and_media_payloads(store, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     await store.ensure_user(123)
     await store.upsert_destination(
         -1001,
@@ -247,7 +284,7 @@ async def test_state_store_draft_storage_supports_text_and_media_payloads(store,
         True,
     )
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     text_draft_id = await store.create_draft(
         team_id=None,
         author_user_id=123,
@@ -258,7 +295,7 @@ async def test_state_store_draft_storage_supports_text_and_media_payloads(store,
     )
     team_id = await store.create_team(123, "Editorial")
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     media_draft_id = await store.create_draft(
         team_id=team_id,
         author_user_id=123,
@@ -309,7 +346,7 @@ async def test_state_store_draft_storage_supports_text_and_media_payloads(store,
 @pytest.mark.asyncio
 async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     for user_id in (123, 456, 789, 900):
         await store.ensure_user(user_id)
     await store.upsert_destination(
@@ -327,7 +364,7 @@ async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypat
     team_beta = await store.create_team(900, "Beta")
     await store.upsert_team_member(team_beta, 123, "viewer")
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     personal_draft_id = await store.create_draft(
         author_user_id=123,
         chat_id=-1001,
@@ -335,7 +372,7 @@ async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypat
         text="My personal draft",
         entities_json=None,
     )
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     team_alpha_draft_id = await store.create_draft(
         team_id=team_alpha,
         author_user_id=123,
@@ -344,7 +381,7 @@ async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypat
         text="Alpha draft",
         entities_json=None,
     )
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+    _freeze_time(monkeypatch, 1_700_000_030)
     team_beta_draft_id = await store.create_draft(
         team_id=team_beta,
         author_user_id=900,
@@ -353,7 +390,7 @@ async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypat
         text="Beta draft",
         entities_json=None,
     )
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
+    _freeze_time(monkeypatch, 1_700_000_040)
     await store.create_draft(
         author_user_id=456,
         chat_id=-1001,
@@ -379,7 +416,7 @@ async def test_state_store_draft_crud_filters_accessible_scopes(store, monkeypat
 @pytest.mark.asyncio
 async def test_state_store_get_draft_permissions_respects_personal_and_team_roles(store, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     for user_id in (123, 456, 789):
         await store.ensure_user(user_id)
     await store.upsert_destination(
@@ -395,7 +432,7 @@ async def test_state_store_get_draft_permissions_respects_personal_and_team_role
     await store.upsert_team_member(team_id, 456, "editor")
     await store.upsert_team_member(team_id, 789, "viewer")
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     personal_draft_id = await store.create_draft(
         author_user_id=123,
         chat_id=-1001,
@@ -403,7 +440,7 @@ async def test_state_store_get_draft_permissions_respects_personal_and_team_role
         text="Personal draft",
         entities_json=None,
     )
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     team_draft_id = await store.create_draft(
         team_id=team_id,
         author_user_id=123,
@@ -454,7 +491,7 @@ async def test_state_store_get_draft_permissions_respects_personal_and_team_role
 @pytest.mark.asyncio
 async def test_state_store_create_update_and_delete_draft_enforce_permissions(store, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     for user_id in (123, 456, 789, 900):
         await store.ensure_user(user_id)
     await store.upsert_destination(
@@ -488,7 +525,7 @@ async def test_state_store_create_update_and_delete_draft_enforce_permissions(st
             entities_json=None,
         )
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     team_draft_id = await store.create_draft(
         team_id=team_id,
         author_user_id=123,
@@ -520,7 +557,7 @@ async def test_state_store_create_update_and_delete_draft_enforce_permissions(st
         entities_json=None,
     )
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     assert await store.update_draft(
         team_draft_id,
         456,
@@ -541,7 +578,7 @@ async def test_state_store_create_update_and_delete_draft_enforce_permissions(st
     assert updated_to_text.updated_at == 1_700_000_020
     assert await store.get_draft_media(team_draft_id) == []
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+    _freeze_time(monkeypatch, 1_700_000_030)
     assert await store.update_draft(
         team_draft_id,
         123,
@@ -564,7 +601,7 @@ async def test_state_store_create_update_and_delete_draft_enforce_permissions(st
     assert updated_to_media.updated_at == 1_700_000_030
     assert await store.get_draft_media(team_draft_id) == [{"type": "photo", "file_id": "photo-3"}]
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_040)
+    _freeze_time(monkeypatch, 1_700_000_040)
     personal_draft_id = await store.create_draft(
         author_user_id=123,
         chat_id=-1001,
@@ -573,7 +610,7 @@ async def test_state_store_create_update_and_delete_draft_enforce_permissions(st
         entities_json=None,
     )
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_050)
+    _freeze_time(monkeypatch, 1_700_000_050)
     assert await store.update_draft(
         personal_draft_id,
         123,
@@ -667,10 +704,10 @@ async def test_state_store_team_invite_accepts_once_and_adds_membership(store, m
     await store.ensure_user(456)
     await store.ensure_user(789)
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     team_id = await store.create_team(123, "Editorial")
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     invite = await store.create_team_invite(team_id, 123, "editor", ttl_seconds=3600)
     assert invite.team_id == team_id
     assert invite.role == "editor"
@@ -683,7 +720,7 @@ async def test_state_store_team_invite_accepts_once_and_adds_membership(store, m
     persisted_invite = await store.get_team_invite(invite.token)
     assert persisted_invite == invite
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_020)
+    _freeze_time(monkeypatch, 1_700_000_020)
     accepted = await store.accept_team_invite(invite.token, 456)
     assert accepted.status == "accepted"
     assert accepted.team is not None
@@ -697,7 +734,7 @@ async def test_state_store_team_invite_accepts_once_and_adds_membership(store, m
     assert consumed_invite.accepted_by_user_id == 456
     assert consumed_invite.accepted_at == 1_700_000_020
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_030)
+    _freeze_time(monkeypatch, 1_700_000_030)
     used = await store.accept_team_invite(invite.token, 789)
     assert used.status == "used"
     assert used.team is not None
@@ -711,17 +748,17 @@ async def test_state_store_team_invite_rejects_non_owner_expired_and_existing_me
     await store.ensure_user(456)
     await store.ensure_user(789)
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_000)
+    _freeze_time(monkeypatch, 1_700_000_000)
     team_id = await store.create_team(123, "Editorial")
     await store.upsert_team_member(team_id, 456, "editor")
 
     with pytest.raises(ValueError, match="Only team owner"):
         await store.create_team_invite(team_id, 456, "viewer")
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_010)
+    _freeze_time(monkeypatch, 1_700_000_010)
     expired_invite = await store.create_team_invite(team_id, 123, "viewer", ttl_seconds=60)
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_071)
+    _freeze_time(monkeypatch, 1_700_000_071)
     expired = await store.accept_team_invite(expired_invite.token, 789)
     assert expired.status == "expired"
     assert expired.team is not None
@@ -729,7 +766,7 @@ async def test_state_store_team_invite_rejects_non_owner_expired_and_existing_me
     assert expired.role == "viewer"
     assert await store.get_team_member_role(team_id, 789) is None
 
-    monkeypatch.setattr("core.state.time.time", lambda: 1_700_000_080)
+    _freeze_time(monkeypatch, 1_700_000_080)
     existing_member_invite = await store.create_team_invite(team_id, 123, "viewer", ttl_seconds=60)
     already_member = await store.accept_team_invite(existing_member_invite.token, 456)
     assert already_member.status == "already_member"

@@ -1,6 +1,6 @@
 import pytest
 
-from core.notifier import InvalidEntitiesError, _load_entities, send_media_post
+from core.notifier import InvalidEntitiesError, _load_entities, send_media_post, send_text
 
 
 class _FakeMessage:
@@ -124,6 +124,60 @@ async def test_returns_message_ids_including_separate_long_caption() -> None:
     )
     # photo first (101), then the separate caption message (102)
     assert stats.message_ids == (101, 102)
+
+
+@pytest.mark.asyncio
+async def test_send_text_with_entities_sends_one_message_carrying_entities() -> None:
+    # T-53, entities branch: a short formatted post goes out as ONE send_message with
+    # its parsed entities attached (the format survives).
+    bot = FakeBot()
+    entities_json = '[{"type": "bold", "offset": 0, "length": 5}]'
+    stats = await send_text(bot=bot, chat_id=-100, text="hello world", entities_json=entities_json)  # type: ignore[arg-type]
+
+    assert stats.messages_sent == 1
+    assert len(bot.calls) == 1
+    method, kwargs = bot.calls[0]
+    assert method == "send_message"
+    assert kwargs["text"] == "hello world"
+    entities = kwargs["entities"]
+    assert entities is not None and len(entities) == 1
+    assert entities[0].type == "bold"
+    assert (entities[0].offset, entities[0].length) == (0, 5)
+
+
+@pytest.mark.asyncio
+async def test_send_text_without_entities_uses_split_path_without_entities_kwarg() -> None:
+    # T-53, no-entities branch: with no entities_json the entities branch is skipped and
+    # split_text runs; a short text is one chunk sent with NO `entities` kwarg at all.
+    # Pins the `and entities_json` guard: dropping it would route this through the entity
+    # branch and attach entities=None here.
+    bot = FakeBot()
+    stats = await send_text(bot=bot, chat_id=-100, text="plain text", entities_json=None)  # type: ignore[arg-type]
+
+    assert stats.messages_sent == 1
+    assert len(bot.calls) == 1
+    method, kwargs = bot.calls[0]
+    assert method == "send_message"
+    assert kwargs["text"] == "plain text"
+    assert "entities" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_send_text_over_limit_splits_and_drops_entities() -> None:
+    # T-53 + report section 6 (known unreachable branch): when text exceeds 4096 the
+    # entities-carrying branch is skipped, so split_text sends the chunks WITHOUT
+    # entities - the formatting is silently lost. Prod caps stored text at 4096, so this
+    # branch never fires in production; the test DOCUMENTS the loss rather than hiding it.
+    bot = FakeBot()
+    text = "x" * 9000  # no spaces/newlines -> hard cut at 4096: [4096, 4096, 808]
+    entities_json = '[{"type": "bold", "offset": 0, "length": 5}]'
+    stats = await send_text(bot=bot, chat_id=-100, text=text, entities_json=entities_json)  # type: ignore[arg-type]
+
+    assert stats.messages_sent == 3
+    assert len(bot.calls) == 3
+    assert all(method == "send_message" for method, _ in bot.calls)
+    assert all("entities" not in kwargs for _, kwargs in bot.calls)  # entities dropped on split
+    assert "".join(kwargs["text"] for _, kwargs in bot.calls) == text
 
 
 def test_load_entities_raises_invalid_entities_error_on_bad_json() -> None:

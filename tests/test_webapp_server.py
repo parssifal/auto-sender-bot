@@ -193,3 +193,8 @@ async def test_broadcast_happy_path_returns_summary(bcast_server):
     assert body["delivered"] == 3
     assert body["blocked"] == 0
     assert body["failed"] == 0
+    # The summary counting delivery is not enough: assert the bot actually sent the
+    # scheduled text to every recipient. An empty/wrong text would slip past otherwise.
+    sent = bcast_server._fake_bot.sent
+    assert {chat_id for chat_id, _ in sent} == {ADMIN_ID, 101, 102}
+    assert [text for _, text in sent] == ["hello all"] * 3

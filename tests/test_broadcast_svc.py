@@ -52,3 +52,5 @@ async def test_create_broadcast_media_passes_items_through(store):
         store, user_id=uid, chat_ids=[-100], scheduled_at_utc=1_900_000_000, content=content
     )
     assert len(post_ids) == 1
+    # The media items must actually reach the created post, not just a post existing.
+    assert await store.get_post_media(post_ids[0]) == [{"type": "photo", "file_id": "F1"}]

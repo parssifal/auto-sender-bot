@@ -26,3 +26,7 @@ async def test_prepare_team_invite_ok_returns_invite_and_team(store):
     result = await team_svc.prepare_team_invite(store, owner_id=1, team_ref=team_id, role="editor")
     assert result.status == "ok"
     assert result.team is not None and result.invite is not None
+    # The invite must carry the requested role and be tied to the resolved team.
+    assert result.invite.role == "editor"
+    assert result.invite.team_id == team_id
+    assert result.team.id == team_id
