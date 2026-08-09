@@ -10,7 +10,8 @@ from aiogram.fsm.state import State
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup
 
 from core.limits import ResourceLimitError
-from core.services._shared import _resolve_draft_id, _resolve_team_id  # noqa: F401  # re-export for existing callers
+from core.services import broadcast_svc
+from core.services._shared import _resolve_team_id  # noqa: F401  # re-export for teams.py
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
 from telegram.i18n import DEFAULT_LANGUAGE, key_values, normalize_language, resolve_timezone_choice, tr
@@ -533,14 +534,8 @@ async def _render_broadcast_destinations(
         await message.answer(text, reply_markup=reply_markup)
 
 
-async def _resolve_broadcast_destinations(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> list[tuple[int, str]]:
-    from core.services import broadcast_svc
-
-    return await broadcast_svc.resolve_valid_destinations(store, user_id, selected_chat_ids)
-
-
 async def _resolve_broadcast_destination_lines(store: StateStore, user_id: int, selected_chat_ids: list[int]) -> tuple[list[int], str]:
-    resolved_destinations = await _resolve_broadcast_destinations(store, user_id, selected_chat_ids)
+    resolved_destinations = await broadcast_svc.resolve_valid_destinations(store, user_id, selected_chat_ids)
     valid_chat_ids = [chat_id for chat_id, _ in resolved_destinations]
     labels = [f"- {label}" for _, label in resolved_destinations]
     return valid_chat_ids, "\n".join(labels)

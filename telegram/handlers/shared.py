@@ -47,7 +47,6 @@ from telegram.handlers.helpers import (
     _prompt_for_datetime,
     _render_broadcast_destinations,
     _require_tz,
-    _resolve_broadcast_destinations,
     _resolve_broadcast_destination_lines,
     _resolve_caption_above,
     _save_scheduled_post_media,
@@ -792,7 +791,7 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         tz_name = await store.get_user_timezone(user_id) or "UTC"
 
         if current_state == BroadcastStates.confirming.state:
-            resolved_destinations = await _resolve_broadcast_destinations(
+            resolved_destinations = await broadcast_svc.resolve_valid_destinations(
                 store,
                 user_id,
                 _normalize_selected_chat_ids(ctx.selected_chat_ids),
