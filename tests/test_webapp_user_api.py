@@ -21,10 +21,10 @@ USER_B = 222
 CHAT_A = -3001
 
 
-def _init_data(user_id: int, *, token: str = TOKEN) -> str:
+def _init_data(user_id: int, *, token: str = TOKEN, auth_date: int | None = None) -> str:
     user = {"id": user_id, "first_name": "U"}
     fields = {
-        "auth_date": str(int(time.time())),
+        "auth_date": str(int(time.time()) if auth_date is None else auth_date),
         "query_id": "AAA",
         "user": json.dumps(user, separators=(",", ":")),
     }
@@ -90,6 +90,25 @@ async def test_my_queue_bad_signature_forbidden(server):
 
 
 @pytest.mark.asyncio
+async def test_my_queue_rejects_initdata_older_than_600s(server):
+    # The caller enforces a 600s effective TTL on initData.
+    stale = _init_data(USER_A, auth_date=int(time.time()) - 700)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": stale}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_my_queue_accepts_initdata_within_600s(server):
+    fresh = _init_data(USER_A, auth_date=int(time.time()) - 100)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": fresh}) as r:
+            assert r.status == 200
+
+
+@pytest.mark.asyncio
 async def test_my_queue_returns_only_callers_posts(server, store):
     pa = await _mk_post(store, USER_A)
     await _mk_post(store, USER_B)
@@ -102,6 +121,31 @@ async def test_my_queue_returns_only_callers_posts(server, store):
     assert ids == [pa]
     assert body["posts"][0]["destination_title"] == "Channel A"
     assert body["posts"][0]["kind"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_my_queue_signals_truncation(server, store):
+    # 51 posts > the 50 limit: the payload must flag that more exist.
+    now = int(time.time())
+    for i in range(51):
+        await store.create_scheduled_text_post(USER_A, CHAT_A, now + 3600 + i, "hi", None)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert len(body["posts"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_my_queue_no_truncation_flag_when_under_limit(server, store):
+    await _mk_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/queue"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            body = await r.json()
+    assert body["has_more"] is False
 
 
 # --- Task 2: recurring ---

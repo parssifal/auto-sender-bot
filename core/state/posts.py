@@ -60,18 +60,23 @@ class PostsMixin:
     ) -> str:
         await self._guard_active_posts_cap(user_id)
         post_id = uuid.uuid4().hex
-        await self._insert_scheduled_media_post(
-            post_id=post_id,
-            user_id=user_id,
-            chat_id=chat_id,
-            scheduled_at_utc=scheduled_at_utc,
-            caption=caption,
-            caption_entities_json=caption_entities_json,
-            caption_above=caption_above,
-            media_items=media_items,
-            created_at=int(time.time()),
-        )
-        await self._conn.commit()
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._insert_scheduled_media_post(
+                post_id=post_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                scheduled_at_utc=scheduled_at_utc,
+                caption=caption,
+                caption_entities_json=caption_entities_json,
+                caption_above=caption_above,
+                media_items=media_items,
+                created_at=int(time.time()),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
         return post_id
 
     @locked_write
@@ -463,9 +468,16 @@ class PostsMixin:
             """
             UPDATE scheduled_posts
             SET status='cancelled'
-            WHERE id=? AND user_id=? AND status='pending'
+            WHERE id=?
+              AND user_id=?
+              AND status='pending'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recurring_instances
+                  WHERE post_id=?
+              )
             """,
-            (post_id, user_id),
+            (post_id, user_id, post_id),
         )
         await self._conn.commit()
         return cur.rowcount == 1

@@ -30,6 +30,9 @@ _DEFAULT_RATE_LIMIT_WINDOW_S = 60.0
 # A broadcast is a single Telegram message per recipient (max 4096 chars).
 _DEFAULT_BROADCAST_TEXT_MAX = 4096
 _ENTITIES_JSON_MAX = 32 * 1024
+# Effective TTL for a Telegram WebApp initData payload. Telegram itself does not
+# expire it, so we bound replay of a leaked payload to a short window.
+_INIT_DATA_MAX_AGE_S = 600
 
 
 class _RateLimiter:
@@ -175,6 +178,22 @@ async def _post_to_json(store: StateStore, row: ScheduledPostRow) -> dict:
     }
 
 
+def _client_key(request: web.Request) -> str:
+    """Rate-limit key: the real client behind our reverse proxy.
+
+    Behind our own Caddy (deploy/Caddyfile) ``request.remote`` is always
+    127.0.0.1, so keying on it puts every client in one bucket. Caddy appends
+    the real peer as the LAST ``X-Forwarded-For`` hop; earlier hops are
+    client-supplied and spoofable, so trust only the last one.
+    """
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        last = xff.rsplit(",", 1)[-1].strip()
+        if last:
+            return last
+    return request.remote or "unknown"
+
+
 def _extract_init_data(request: web.Request) -> str | None:
     header = request.headers.get("Authorization")
     if not header:
@@ -199,6 +218,8 @@ async def start_webapp_server(
     rate_limit_window_s: float = _DEFAULT_RATE_LIMIT_WINDOW_S,
     broadcast_text_max: int = _DEFAULT_BROADCAST_TEXT_MAX,
 ) -> WebappServer:
+    if not bot_token:
+        raise ValueError("bot_token must be non-empty")
     admin_set = set(admin_ids)
     rate_limiter = _RateLimiter(
         max_requests=rate_limit_max, window_seconds=rate_limit_window_s
@@ -218,7 +239,7 @@ async def start_webapp_server(
 
     @web.middleware
     async def _guard_mw(request: web.Request, handler):
-        key = request.remote or "unknown"
+        key = _client_key(request)
         if not rate_limiter.allow(key, now=time.monotonic()):
             return web.json_response({"error": "rate_limited"}, status=429)
         # Reject oversized bodies up front. aiohttp's client_max_size also guards
@@ -235,7 +256,7 @@ async def start_webapp_server(
         init_data = _extract_init_data(request)
         if not init_data:
             return None
-        user = validate_init_data(init_data, bot_token)
+        user = validate_init_data(init_data, bot_token, max_age_s=_INIT_DATA_MAX_AGE_S)
         if user is None or int(user.get("id", 0)) not in admin_set:
             return None
         return user
@@ -244,7 +265,7 @@ async def start_webapp_server(
         init_data = _extract_init_data(request)
         if not init_data:
             return None
-        return validate_init_data(init_data, bot_token)
+        return validate_init_data(init_data, bot_token, max_age_s=_INIT_DATA_MAX_AGE_S)
 
     async def index(_request: web.Request) -> web.Response:
         return web.Response(text=admin_html, content_type="text/html")
@@ -258,7 +279,10 @@ async def start_webapp_server(
             return web.json_response({"error": "forbidden"}, status=403)
         user_id = int(user["id"])
         tz_name = await store.get_user_timezone(user_id) or "UTC"
-        rows = await store.list_editable_pending_posts(user_id, limit=50, offset=0)
+        limit = 50
+        rows = await store.list_editable_pending_posts(user_id, limit=limit + 1, offset=0)
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         posts = [await _post_to_json(store, r) for r in rows]
         return web.json_response(
             {
@@ -266,6 +290,7 @@ async def start_webapp_server(
                 "lang": await store.get_user_language(user_id),
                 "is_admin": user_id in admin_set,
                 "posts": posts,
+                "has_more": has_more,
             }
         )
 

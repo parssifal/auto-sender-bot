@@ -31,6 +31,35 @@ async def store() -> StateStore:
 
 
 @pytest.mark.asyncio
+async def test_create_media_post_rolls_back_on_media_failure(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    # Second item is malformed (missing "file_id") -> KeyError on the 2nd media
+    # insert, after the post row and first media row are already written.
+    media_items = [
+        {"type": "photo", "file_id": "abc"},
+        {"type": "photo"},
+    ]
+
+    with pytest.raises(KeyError):
+        await store.create_scheduled_media_post(
+            user_id=USER_ID,
+            chat_id=CHAT_ID,
+            scheduled_at_utc=scheduled_at_utc,
+            caption=None,
+            caption_entities_json=None,
+            caption_above=None,
+            media_items=media_items,
+        )
+
+    async with store._conn.execute("SELECT COUNT(*) FROM scheduled_posts") as cur:
+        (post_count,) = await cur.fetchone()
+    async with store._conn.execute("SELECT COUNT(*) FROM scheduled_post_media") as cur:
+        (media_count,) = await cur.fetchone()
+    assert post_count == 0, "orphan post row left after failed media insert"
+    assert media_count == 0
+
+
+@pytest.mark.asyncio
 async def test_list_editable_pending_posts_excludes_recurring(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     editable_post_id = await store.create_scheduled_text_post(
@@ -207,6 +236,28 @@ async def test_hard_delete_post_rejects_recurring_post(store: StateStore) -> Non
     post = await store.get_scheduled_post(post_id)
     assert deleted is False
     assert post is not None
+
+
+@pytest.mark.asyncio
+async def test_cancel_post_rejects_recurring_instance(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    _, post_id = await store.create_recurring_series(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        interval_type="daily",
+        time_of_day_minutes=9 * 60,
+        timezone="Europe/Moscow",
+        start_at_utc=scheduled_at_utc,
+        kind="text",
+        text="Recurring post",
+        entities_json=None,
+    )
+
+    cancelled = await store.cancel_post(USER_ID, post_id)
+
+    post = await store.get_scheduled_post(post_id)
+    assert cancelled is False
+    assert post is not None and post.status == "pending"
 
 
 @pytest.mark.asyncio

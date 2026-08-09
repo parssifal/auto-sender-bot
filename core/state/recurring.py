@@ -9,6 +9,16 @@ from core.state.base import locked_write
 from core.state.models import RecurringInstance, RecurringPattern, RecurringPatternSummary, ScheduledPostRow
 
 
+def _reject_stray_weekdays_mask(interval_type: str, weekdays_mask: int | None) -> None:
+    # Only interval_type='weekdays' honours the mask (scheduler.py:84); on
+    # daily/weekly it is stored and silently ignored. Reject it at the boundary
+    # so the accepted contract matches what actually runs.
+    if weekdays_mask is not None and interval_type != "weekdays":
+        raise ValueError(
+            f"weekdays_mask is only valid for interval_type='weekdays', not {interval_type!r}"
+        )
+
+
 class RecurringMixin:
     async def count_user_recurring(self, user_id: int) -> int:
         """Active recurring patterns for a user."""
@@ -38,6 +48,7 @@ class RecurringMixin:
         current_count: int = 0,
         is_active: bool = True,
     ) -> str:
+        _reject_stray_weekdays_mask(interval_type, weekdays_mask)
         await self._guard_recurring_cap(user_id)
         now = int(time.time())
         pattern_id = uuid.uuid4().hex
@@ -112,7 +123,7 @@ class RecurringMixin:
         query = """
             SELECT
                 rp.*,
-                d.title AS destination_title,
+                COALESCE(d.title, CAST(rp.chat_id AS TEXT)) AS destination_title,
                 d.username AS destination_username,
                 (
                     SELECT sp.id
@@ -148,7 +159,7 @@ class RecurringMixin:
                     LIMIT 1
                 ) AS next_post_status
             FROM recurring_patterns rp
-            JOIN destinations d ON d.chat_id = rp.chat_id
+            LEFT JOIN destinations d ON d.chat_id = rp.chat_id
             WHERE rp.user_id=?
         """
         params: list[object] = [user_id]
@@ -443,6 +454,7 @@ class RecurringMixin:
     ) -> tuple[str, str]:
         if kind not in {"text", "media"}:
             raise ValueError(f"Unsupported recurring post kind: {kind}")
+        _reject_stray_weekdays_mask(interval_type, weekdays_mask)
 
         items = list(media_items or [])
         if kind == "media" and not items:

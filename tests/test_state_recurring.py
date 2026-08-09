@@ -62,6 +62,50 @@ async def _seed_recurring_pattern(
 
 
 @pytest.mark.asyncio
+async def test_weekdays_mask_rejected_for_non_weekdays_intervals() -> None:
+    # weekdays_mask is only honoured by interval_type='weekdays' (scheduler.py:84).
+    # A mask on daily/weekly is stored but silently ignored, so reject it at the
+    # boundary instead of leaving a dead contract.
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(123)
+        await store.upsert_destination(
+            -1001, "channel", "Dest", "dest", "administrator", True,
+        )
+        for interval in ("daily", "weekly"):
+            with pytest.raises(ValueError, match="weekdays_mask"):
+                await store.create_recurring_pattern(
+                    user_id=123, chat_id=-1001, interval_type=interval,
+                    weekdays_mask=31, time_of_day_minutes=600,
+                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+                )
+            with pytest.raises(ValueError, match="weekdays_mask"):
+                await store.create_recurring_series(
+                    user_id=123, chat_id=-1001, interval_type=interval,
+                    weekdays_mask=31, time_of_day_minutes=600,
+                    timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+                    kind="text", text="x", entities_json=None,
+                )
+        # Legitimate uses still work: weekdays+mask, and weekly with no mask.
+        wk = await store.create_recurring_pattern(
+            user_id=123, chat_id=-1001, interval_type="weekdays",
+            weekdays_mask=31, time_of_day_minutes=600,
+            timezone="Europe/Moscow", start_at_utc=1_700_000_000,
+        )
+        assert wk
+        weekly = await store.create_recurring_pattern(
+            user_id=123, chat_id=-1001, interval_type="weekly",
+            time_of_day_minutes=600, timezone="Europe/Moscow",
+            start_at_utc=1_700_000_000,
+        )
+        assert weekly
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_migrate_creates_recurring_patterns_schema() -> None:
     conn = await open_db(":memory:")
     try:
@@ -328,6 +372,30 @@ async def test_state_store_list_user_recurring_summaries_filters_by_user_and_act
 
 
 @pytest.mark.asyncio
+async def test_state_store_list_user_recurring_summaries_survives_missing_destination() -> None:
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        pattern_id = await _seed_recurring_pattern(store)
+
+        # Simulate a destination row that has gone missing.
+        await conn.execute("PRAGMA foreign_keys=OFF")
+        await conn.execute("DELETE FROM destinations WHERE chat_id=?", (-1001,))
+        await conn.commit()
+
+        summaries = await store.list_user_recurring_summaries(123, offset=0, limit=10)
+
+        assert len(summaries) == 1
+        summary = summaries[0]
+        assert summary.pattern.id == pattern_id
+        assert summary.destination_title == str(-1001)
+        assert summary.destination_username is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
     conn = await open_db(":memory:")
     try:
@@ -361,7 +429,12 @@ async def test_state_store_recurring_instance_lookup_and_due_query() -> None:
             entities_json=None,
         )
         await store.create_recurring_instance(active_pattern_id, cancelled_post_id, 3, 1_700_000_050)
-        assert await store.cancel_post(123, cancelled_post_id) is True
+        # cancel_post refuses recurring instances (T-23); mark cancelled directly
+        # to exercise get_due_recurring_instances' status filter.
+        await conn.execute(
+            "UPDATE scheduled_posts SET status='cancelled' WHERE id=?", (cancelled_post_id,)
+        )
+        await conn.commit()
 
         inactive_pattern_id = await _seed_recurring_pattern(store)
         inactive_post_id = await store.create_scheduled_text_post(
