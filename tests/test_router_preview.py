@@ -156,3 +156,30 @@ async def test_first_preview_does_not_delete_anything(preview_flow) -> None:
     )
     await _feed_qview(preview_flow, post1, update_id=1)
     assert preview_flow["bot"].deleted == []
+
+
+@pytest.mark.asyncio
+async def test_preview_has_queue_navigation_buttons(preview_flow) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    ids = [
+        await preview_flow["store"].create_scheduled_text_post(
+            user_id=USER_ID, chat_id=DESTINATION_CHAT_ID, scheduled_at_utc=scheduled_at_utc + 60 * i,
+            text=f"Post {i}", entities_json=None,
+        )
+        for i in range(3)
+    ]
+
+    def nav_callbacks(flow) -> list[str]:
+        info = next(m for m in flow["bot"].calls if isinstance(m, SendMessage) and m.reply_markup is not None)
+        return [b.callback_data for row in info.reply_markup.inline_keyboard for b in row]
+
+    await _feed_qview(preview_flow, ids[0], update_id=1)
+    assert nav_callbacks(preview_flow) == [f"qview:{ids[1]}"]  # first post: forward only
+
+    preview_flow["bot"].calls.clear()
+    await _feed_qview(preview_flow, ids[1], update_id=2)
+    assert nav_callbacks(preview_flow) == [f"qview:{ids[0]}", f"qview:{ids[2]}"]
+
+    preview_flow["bot"].calls.clear()
+    await _feed_qview(preview_flow, ids[2], update_id=3)
+    assert nav_callbacks(preview_flow) == [f"qview:{ids[1]}"]  # last post: back only

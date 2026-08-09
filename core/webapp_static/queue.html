@@ -159,6 +159,15 @@ function fmtLocal(epoch){
     timeZone:TZ, day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit",
   }).format(new Date(epoch*1000));
 }
+// Split an epoch into the <input type=date>/<input type=time> values for TZ.
+// hourCycle (not hour12) so midnight is "00", not "24".
+function localInputParts(epoch){
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA",{
+    timeZone:TZ, year:"numeric", month:"2-digit", day:"2-digit",
+    hour:"2-digit", minute:"2-digit", hourCycle:"h23",
+  }).formatToParts(new Date(epoch*1000)).map(x=>[x.type,x.value]));
+  return { date:`${p.year}-${p.month}-${p.day}`, time:`${p.hour}:${p.minute}` };
+}
 function composeLocal(dateStr,timeStr){ const [y,m,d]=dateStr.split("-"); return `${d}.${m}.${y} ${timeStr}`; }
 function escapeHtml(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
@@ -199,7 +208,7 @@ function renderQueue(posts, hasMore){
       <div class="row"><b>${escapeHtml(p.destination_title)}</b><span class="when">${fmtLocal(p.scheduled_at_utc)}</span></div>
       <div class="meta">${kind}${p.preview?" · "+escapeHtml(p.preview):""}</div>
       <div class="actions">
-        <button class="act primary" data-act="resched" data-id="${p.id}">${t("resched")}</button>
+        <button class="act primary" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
         <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
       </div>`;
     el.appendChild(card);
@@ -244,8 +253,13 @@ document.getElementById("admin-link").addEventListener("click", ()=>{ location.h
 
 // Reschedule modal
 const modal = document.getElementById("modal");
-function openModal(id){
+function openModal(id, epoch){
   rescheduleId = id;
+  // Always reset the fields to the post's own time: the inputs otherwise keep
+  // whatever was typed for a previously rescheduled post.
+  const cur = localInputParts(Number(epoch) || Math.floor(Date.now()/1000));
+  document.getElementById("m-date").value = cur.date;
+  document.getElementById("m-time").value = cur.time;
   document.getElementById("m-err").textContent = "";
   modal.classList.add("open");
 }
@@ -270,7 +284,7 @@ document.addEventListener("click", async (e)=>{
   const btn = e.target.closest("button[data-act]"); if(!btn) return;
   const id = btn.dataset.id, act = btn.dataset.act;
   try{
-    if(act==="resched"){ openModal(id); return; }
+    if(act==="resched"){ openModal(id, btn.dataset.when); return; }
     if(act==="cancel"){
       if(!confirm(t("confirm_cancel"))) return;
       await api(`/api/my/post/${id}/cancel`, { method:"POST" });

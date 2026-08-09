@@ -43,6 +43,7 @@ from telegram.handlers.keyboards import (
     _main_menu_kb,
     _media_collect_kb,
     _normalize_selected_chat_ids,
+    _preview_nav_kb,
     _schedule_datetime_markup,
     _short_id,
 )
@@ -599,6 +600,7 @@ async def _send_post_preview(
 
     tz_name = await store.get_user_timezone(user_id) or "UTC"
     summary = await _build_scheduled_post_summary(store, post, lang=lang)
+    queue_ids = [p.id for p in await store.list_editable_pending_posts(user_id=user_id, limit=200)]
     info_msg = await message.answer(
         tr(
             lang,
@@ -608,7 +610,8 @@ async def _send_post_preview(
             local_time=_format_local(post.scheduled_at_utc, tz_name),
             tz_name=tz_name,
             kind=summary["kind"],
-        )
+        ),
+        reply_markup=_preview_nav_kb(queue_ids, queue_ids.index(post.id)) if post.id in queue_ids else None,
     )
     if info_msg is not None:
         sent_ids.append(info_msg.message_id)

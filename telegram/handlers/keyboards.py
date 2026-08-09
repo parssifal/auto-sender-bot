@@ -211,6 +211,16 @@ def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _preview_nav_kb(post_ids: list[str], index: int) -> InlineKeyboardMarkup | None:
+    """⬅️/➡️ row for stepping through the queue straight from a preview."""
+    row: list[InlineKeyboardButton] = []
+    if index > 0:
+        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"qview:{post_ids[index - 1]}"))
+    if index < len(post_ids) - 1:
+        row.append(InlineKeyboardButton(text="➡️", callback_data=f"qview:{post_ids[index + 1]}"))
+    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
+
+
 def _posts_paged_kb(
     posts: list[dict[str, str]],
     page: int,
