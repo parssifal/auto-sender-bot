@@ -275,11 +275,20 @@ async def test_startup_requeues_stuck_sending_post(store: StateStore) -> None:
     now_utc = scheduled_at_utc + 60
     assert await store.claim_post_for_sending(post_id=post_id, now_utc=now_utc) is True
 
+    # While stuck in 'sending': invisible to the scheduler yet still holding a quota slot.
+    assert post_id not in {p.id for p in await store.list_due_posts(now_utc=now_utc)}
+    assert await store.count_active_posts(USER_ID) == 1
+
     # Process restarts: same start path main.py runs.
     await store.migrate()
 
     post = await store.get_scheduled_post(post_id)
     assert post is not None and post.status == "pending"
     assert post.attempts == 1
+    # Consequence 1: visible to the scheduler again.
     assert post_id in {p.id for p in await store.list_due_posts(now_utc=now_utc)}
+    # Consequence 2: the slot is releasable again - cancel frees it (impossible while
+    # stuck in 'sending', which cancel_post refuses). Both were held hostage forever.
+    assert await store.count_active_posts(USER_ID) == 1
     assert await store.cancel_post(USER_ID, post_id) is True
+    assert await store.count_active_posts(USER_ID) == 0

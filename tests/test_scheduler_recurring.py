@@ -152,6 +152,118 @@ async def test_calculate_next_occurrence_preserves_local_time_across_dst_gap() -
 
 
 @pytest.mark.asyncio
+async def test_calculate_next_occurrence_preserves_local_time_across_dst_fall_back() -> None:
+    # T-47 (scheduler path, fall-back half): Europe/Berlin 2026-10-25, clocks go
+    # 03:00 CEST -> 02:00 CET, so 02:30 exists twice. _build_local_datetime uses the
+    # default fold=0, i.e. the FIRST 02:30 (CEST, +02:00). The daily series must keep
+    # firing at 02:30 wall time, not silently move an hour. This is the intended,
+    # non-rejecting behaviour on the internal recurrence path (parse_local_datetime
+    # rejects only the spring-forward *gap*; ambiguous fall-back times are kept).
+    pattern = RecurringPattern(
+        id="pattern",
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        interval_type="daily",
+        weekdays_mask=None,
+        time_of_day_minutes=2 * 60 + 30,
+        timezone="Europe/Berlin",
+        start_at_utc=0,
+        end_at_utc=None,
+        max_occurrences=None,
+        current_count=1,
+        is_active=True,
+        created_at=0,
+        updated_at=0,
+    )
+    before_dst_local = datetime(2026, 10, 24, 2, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+
+    next_occurrence = calculate_next_occurrence(pattern, int(before_dst_local.timestamp()))
+    next_local = datetime.fromtimestamp(next_occurrence, tz=timezone.utc).astimezone(ZoneInfo("Europe/Berlin"))
+
+    assert next_local.year == 2026
+    assert next_local.month == 10
+    assert next_local.day == 25
+    assert next_local.hour == 2
+    assert next_local.minute == 30
+    # fold=0 -> first occurrence, still CEST (+02:00); a fold=1 slip would read +01:00.
+    assert next_local.utcoffset().total_seconds() == 2 * 3600
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_ends_series_past_end_at_utc() -> None:
+    # T-49: the end_at_utc branch (scheduler.py) was never executed by any test -
+    # every helper call passed end_at_utc=None. When the next occurrence falls past
+    # end_at_utc the series must stop instead of materializing beyond its window.
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+        next_at = due_at + 86400  # Moscow has no DST: next daily occurrence is +1 day exactly.
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+            end_at_utc=next_at - 1,  # window closes one second before the next occurrence.
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Last one", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+
+        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+
+        sent_post = await store.get_scheduled_post(post_id)
+        assert sent_post is not None
+        assert sent_post.status == "sent"
+        assert await store.list_pending_posts(USER_ID, limit=10) == []
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is False
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_process_due_post_end_at_utc_boundary_is_inclusive() -> None:
+    # T-49 boundary: the comparison is `next > end_at_utc`, so a next occurrence landing
+    # exactly ON end_at_utc is still inside the window and must be materialized. A `>=`
+    # slip would wrongly end the series one occurrence early.
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        due_at = int(datetime(2026, 3, 3, 9, 30, tzinfo=ZoneInfo("Europe/Moscow")).timestamp())
+        next_at = due_at + 86400
+        pattern_id = await _seed_pattern(
+            store,
+            interval_type="daily",
+            timezone_name="Europe/Moscow",
+            time_of_day_minutes=9 * 60 + 30,
+            start_at_utc=due_at,
+            end_at_utc=next_at,  # end lands exactly on the next occurrence: inclusive.
+        )
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "Recurring text", None)
+        await store.create_recurring_instance(pattern_id, post_id, 1, due_at)
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+
+        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+
+        pending_posts = await store.list_pending_posts(USER_ID, limit=10)
+        assert len(pending_posts) == 1
+        assert pending_posts[0].scheduled_at_utc == next_at
+        pattern = await store.get_recurring_pattern(pattern_id)
+        assert pattern is not None
+        assert pattern.is_active is True
+        assert pattern.current_count == 2
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_process_due_post_materializes_next_recurring_text_post() -> None:
     conn = await open_db(":memory:")
     try:
