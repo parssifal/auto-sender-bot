@@ -22,6 +22,7 @@ COPY main.py /app/main.py
 COPY core /app/core
 COPY telegram /app/telegram
 COPY tests /app/tests
+COPY deploy /app/deploy
 
 # Run the suite; only touch the success marker if pytest exits cleanly.
 RUN python -m pytest -q && touch /app/tests-passed
