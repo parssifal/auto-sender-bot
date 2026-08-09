@@ -29,7 +29,6 @@ _DEFAULT_RATE_LIMIT_MAX = 240
 _DEFAULT_RATE_LIMIT_WINDOW_S = 60.0
 # A broadcast is a single Telegram message per recipient (max 4096 chars).
 _DEFAULT_BROADCAST_TEXT_MAX = 4096
-_ENTITIES_JSON_MAX = 32 * 1024
 # Effective TTL for a Telegram WebApp initData payload. Telegram itself does not
 # expire it, so we bound replay of a leaked payload to a short window.
 _INIT_DATA_MAX_AGE_S = 600
@@ -106,13 +105,11 @@ def validate_init_data(
 def _fill_daily(rows: list[tuple[str, int]], *, now: int, days: int = 30) -> list[list]:
     """Return a dense ``[[YYYY-MM-DD, count], ...]`` series for the last ``days``."""
     counts = {day: cnt for day, cnt in rows}
-    start_day = datetime.fromtimestamp(now, tz=timezone.utc).date()
     series: list[list] = []
     for offset in range(days - 1, -1, -1):
         day = datetime.fromtimestamp(now - offset * DAY, tz=timezone.utc).date()
         key = day.isoformat()
         series.append([key, counts.get(key, 0)])
-    _ = start_day
     return series
 
 
@@ -395,12 +392,7 @@ async def start_webapp_server(
             return web.json_response({"error": "empty_text"}, status=400)
         if len(text) > broadcast_text_max:
             return web.json_response({"error": "text_too_long"}, status=400)
-        entities_json = payload.get("entities_json")
-        if isinstance(entities_json, str) and len(entities_json) > _ENTITIES_JSON_MAX:
-            return web.json_response({"error": "entities_too_large"}, status=400)
-        summary = await admin_broadcast_svc.broadcast_to_all(
-            store, bot, text=text, entities_json=entities_json,
-        )
+        summary = await admin_broadcast_svc.broadcast_to_all(store, bot, text=text)
         return web.json_response(summary)
 
     app = web.Application(client_max_size=max_body_bytes, middlewares=[_guard_mw])
