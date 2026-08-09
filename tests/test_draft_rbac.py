@@ -1,9 +1,5 @@
 from core.rbac import (
     can_create_team_draft,
-    can_delete_draft,
-    can_edit_draft,
-    can_publish_draft,
-    can_view_draft,
     resolve_draft_permissions,
 )
 
@@ -80,10 +76,11 @@ def test_convenience_wrappers_match_matrix() -> None:
         "team_role": "editor",
     }
 
-    assert can_view_draft(**kwargs) is True
-    assert can_edit_draft(**kwargs) is True
-    assert can_delete_draft(**kwargs) is True
-    assert can_publish_draft(**kwargs) is True
+    permissions = resolve_draft_permissions(**kwargs)
+    assert permissions.can_view is True
+    assert permissions.can_edit is True
+    assert permissions.can_delete is True
+    assert permissions.can_publish is True
     assert can_create_team_draft("owner") is True
     assert can_create_team_draft("editor") is True
     assert can_create_team_draft("viewer") is False
