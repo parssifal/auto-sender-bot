@@ -1,19 +1,8 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
-from core.db import open_db
 from core.state import StateStore
-
-
-@pytest_asyncio.fixture
-async def store() -> StateStore:
-    conn = await open_db(":memory:")
-    state = StateStore(conn)
-    await state.migrate()
-    yield state
-    await conn.close()
 
 
 @pytest.mark.asyncio
