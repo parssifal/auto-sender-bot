@@ -107,6 +107,72 @@ async def _datetime_entry_prompt_text(store, state, lang: str, state_name: str) 
     return tr(lang, "enter_datetime")
 
 
+async def _apply_parsed_datetime(
+    store,
+    message,
+    state,
+    *,
+    user_id: int,
+    current_state: str | None,
+    parsed: ParsedScheduleTime,
+    lang: str,
+) -> None:
+    """Route a resolved schedule time to the flow that owns ``current_state``.
+
+    Reached from three picker entries — quick button, time button, typed text —
+    which each ran an identical five-way dispatch on the flow's
+    entering_datetime/selecting_time states. ``current_state`` is always one of
+    the active flow's two picker states, so membership covers both.
+    """
+    if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
+        await _move_repeat_to_destination_selection(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+        )
+        return
+    if current_state in {DraftStates.entering_datetime.state, DraftStates.selecting_time.state}:
+        await _move_draft_publish_to_confirmation(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+        )
+        return
+    if current_state in {EditStates.entering_datetime.state, EditStates.selecting_time.state}:
+        await _save_scheduled_post_time(
+            store,
+            message,
+            state,
+            user_id=user_id,
+            scheduled_at_utc=parsed.utc_epoch,
+        )
+        return
+    if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
+        await _move_to_post_collection(
+            message,
+            state,
+            scheduled_at_utc=parsed.utc_epoch,
+            scheduled_local=str(parsed.local_dt),
+            collecting_state=BroadcastStates.collecting_post,
+            lang=lang,
+        )
+        return
+    await _move_to_post_collection(
+        message,
+        state,
+        scheduled_at_utc=parsed.utc_epoch,
+        scheduled_local=str(parsed.local_dt),
+        collecting_state=ScheduleStates.collecting_post,
+        lang=lang,
+    )
+
+
 def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     router = Router(name="shared")
 
@@ -262,51 +328,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        if current_state == RepeatStates.entering_datetime.state:
-            await _move_repeat_to_destination_selection(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == DraftStates.entering_datetime.state:
-            await _move_draft_publish_to_confirmation(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == EditStates.entering_datetime.state:
-            await _save_scheduled_post_time(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-        if current_state == BroadcastStates.entering_datetime.state:
-            await _move_to_post_collection(
-                query.message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             query.message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=query.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
@@ -412,51 +440,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
 
         await query.answer()
         await _clear_inline_markup(query.message)
-        if current_state == RepeatStates.selecting_time.state:
-            await _move_repeat_to_destination_selection(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == DraftStates.selecting_time.state:
-            await _move_draft_publish_to_confirmation(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-        if current_state == EditStates.selecting_time.state:
-            await _save_scheduled_post_time(
-                store,
-                query.message,
-                state,
-                user_id=query.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-        if current_state == BroadcastStates.selecting_time.state:
-            await _move_to_post_collection(
-                query.message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             query.message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=query.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
@@ -516,55 +506,13 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             )
             return
 
-        if current_state in {RepeatStates.entering_datetime.state, RepeatStates.selecting_time.state}:
-            await _move_repeat_to_destination_selection(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-
-        if current_state in {DraftStates.entering_datetime.state, DraftStates.selecting_time.state}:
-            await _move_draft_publish_to_confirmation(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-            )
-            return
-
-        if current_state in {EditStates.entering_datetime.state, EditStates.selecting_time.state}:
-            await _save_scheduled_post_time(
-                store,
-                message,
-                state,
-                user_id=message.from_user.id,
-                scheduled_at_utc=parsed.utc_epoch,
-            )
-            return
-
-        if current_state in {BroadcastStates.entering_datetime.state, BroadcastStates.selecting_time.state}:
-            await _move_to_post_collection(
-                message,
-                state,
-                scheduled_at_utc=parsed.utc_epoch,
-                scheduled_local=str(parsed.local_dt),
-                collecting_state=BroadcastStates.collecting_post,
-                lang=lang,
-            )
-            return
-
-        await _move_to_post_collection(
+        await _apply_parsed_datetime(
+            store,
             message,
             state,
-            scheduled_at_utc=parsed.utc_epoch,
-            scheduled_local=str(parsed.local_dt),
-            collecting_state=ScheduleStates.collecting_post,
+            user_id=message.from_user.id,
+            current_state=current_state,
+            parsed=parsed,
             lang=lang,
         )
 
