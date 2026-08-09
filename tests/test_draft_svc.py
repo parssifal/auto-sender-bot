@@ -87,18 +87,23 @@ async def test_publish_draft_text_creates_scheduled_post(store):
 
 
 @pytest.mark.asyncio
-async def test_publish_draft_media_creates_scheduled_post(store):
+@pytest.mark.parametrize(
+    "caption_above, expected_caption_above",
+    [(None, None), (True, 1), (False, 0)],
+)
+async def test_publish_draft_media_creates_scheduled_post(store, caption_above, expected_caption_above):
     author_id = 123
     await store.ensure_user(author_id)
     await _seed_dest(store, -1001, "Alpha", "alpha")
+    media_items = [{"type": "photo", "file_id": "photo-1"}]
     draft_id = await store.create_draft(
         author_user_id=author_id,
         chat_id=-1001,
         kind="media",
         caption="Look at this",
         caption_entities_json=None,
-        caption_above=None,
-        media_items=[{"type": "photo", "file_id": "photo-1"}],
+        caption_above=caption_above,
+        media_items=media_items,
     )
     draft = await draft_svc.resolve_publishable_draft(store, draft_id, author_id)
     assert draft is not None
@@ -112,6 +117,12 @@ async def test_publish_draft_media_creates_scheduled_post(store):
     assert post.kind == "media"
     assert post.chat_id == -1001
     assert post.caption == "Look at this"
+    # caption_above branch in publish_draft must survive: None stays None, else bool->int.
+    assert post.caption_above == expected_caption_above
+    # The media items must carry through to the published post, not be silently lost.
+    post_media = await store.get_post_media(post_id)
+    assert post_media == await store.get_draft_media(draft.id)
+    assert post_media == media_items
 
 
 @pytest.mark.asyncio
