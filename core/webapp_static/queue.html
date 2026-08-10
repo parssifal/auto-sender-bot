@@ -152,6 +152,27 @@
   .modal .actions{justify-content:flex-end; margin-top:18px}
   .err{color:var(--danger); font-size:13px; min-height:18px; margin-bottom:8px}
 
+  /* Compose */
+  .fab{position:fixed; z-index:15; right:max(16px, calc(50% - 300px + 16px)); bottom:calc(18px + env(safe-area-inset-bottom));
+    width:56px; height:56px; border-radius:19px; border:0; display:grid; place-items:center; cursor:pointer; color:#fff;
+    background:linear-gradient(135deg,var(--jet-1),var(--jet-2)); transition:transform .12s;
+    box-shadow:0 12px 28px -10px color-mix(in srgb,var(--jet-1) 75%, transparent)}
+  .fab svg{width:26px; height:26px}
+  .fab:active{transform:scale(.92)}
+  .fab[hidden]{display:none}
+  .field select,.field textarea{appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
+    border-radius:12px; padding:12px 13px; font-size:16px; font-family:var(--sans); font-weight:600; width:100%}
+  .field textarea{min-height:104px; resize:vertical; line-height:1.45}
+  .field select:focus,.field textarea:focus{outline:2px solid var(--accent); outline-offset:1px}
+  .film.pick .frame{width:96px; aspect-ratio:1; border-radius:12px}
+  .frame .pin{position:absolute; right:5px; top:5px; width:24px; height:24px; border-radius:8px; border:0; cursor:pointer;
+    background:rgba(0,0,0,.55); color:#fff; font-size:13px; line-height:1; display:grid; place-items:center}
+  #c-add{margin-bottom:14px}
+  #c-add[disabled]{opacity:.5}
+  .check{display:flex; align-items:center; gap:9px; margin-bottom:14px; font-size:13px; font-weight:700; color:var(--muted); cursor:pointer}
+  .check input{width:18px; height:18px; accent-color:var(--accent); flex:none}
+  .check[hidden]{display:none}
+
   /* Post preview */
   .card[data-open]{cursor:pointer}
   .modal.wide{max-width:600px}
@@ -202,6 +223,43 @@
     <p class="eyebrow" id="t-recurring">По расписанию</p>
     <div id="recurring-list"></div>
   </section>
+</div>
+
+<button class="fab" id="fab" hidden aria-label="Новый пост">
+  <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+</button>
+
+<div class="overlay" id="compose">
+  <div class="modal">
+    <h3 id="c-title">Новый пост</h3>
+    <div class="err" id="c-err"></div>
+    <div class="field">
+      <label id="c-dest-l">Канал</label>
+      <select id="c-dest"></select>
+    </div>
+    <div class="field">
+      <label id="c-text-l">Текст</label>
+      <textarea id="c-text"></textarea>
+    </div>
+    <div class="film pick" id="c-media" hidden></div>
+    <button class="tinybtn" id="c-add">Добавить медиа</button>
+    <input type="file" id="c-file" accept="image/*,video/*" multiple hidden>
+    <label class="check" id="c-above-row" hidden>
+      <input type="checkbox" id="c-above"><span id="c-above-l">Подпись над медиа</span>
+    </label>
+    <div class="field">
+      <label id="c-date-l">Дата</label>
+      <input type="date" id="c-date">
+    </div>
+    <div class="field">
+      <label id="c-time-l">Время</label>
+      <input type="time" id="c-time">
+    </div>
+    <div class="actions">
+      <button class="act" id="c-cancel">Отмена</button>
+      <button class="act primary" id="c-save">Запланировать</button>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="modal">
@@ -260,6 +318,11 @@ const I18N = {
     err:e=>"Ошибка: "+e, need_both:"Укажите дату и время",
     close:"Закрыть", no_caption:"Без подписи", loading:"Загрузка…",
     kind_video:"Видео", kind_doc:"Файл",
+    c_new:"Новый пост", c_dest:"Канал", c_text:"Текст", c_date:"Дата", c_time:"Время",
+    c_save:"Запланировать", c_cancel:"Отмена", c_add_media:"Добавить медиа", c_above:"Подпись над медиа",
+    c_loading:"Загрузка каналов…", c_no_dest:"Нет доступных каналов", c_no_rights:"нет прав",
+    c_pick_dest:"Выберите канал", c_need_content:"Добавьте текст или медиа",
+    c_max_media:"Не больше 10 файлов", c_uploading:"Загрузка файла…",
   },
   en: {
     title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
@@ -275,8 +338,57 @@ const I18N = {
     err:e=>"Error: "+e, need_both:"Pick a date and time",
     close:"Close", no_caption:"No caption", loading:"Loading…",
     kind_video:"Video", kind_doc:"File",
+    c_new:"New post", c_dest:"Channel", c_text:"Text", c_date:"Date", c_time:"Time",
+    c_save:"Schedule", c_cancel:"Cancel", c_add_media:"Add media", c_above:"Caption above media",
+    c_loading:"Loading channels…", c_no_dest:"No channels available", c_no_rights:"no rights",
+    c_pick_dest:"Pick a channel", c_need_content:"Add text or media",
+    c_max_media:"Up to 10 files", c_uploading:"Uploading…",
   },
 };
+// Server error keys → readable text, shared by every modal.
+const ERR = {
+  ru:{
+    rights_user_admin_required:"Вы не админ этого канала",
+    rights_bot_admin_required:"Бот не админ в канале",
+    rights_bot_can_post_required:"У бота нет права публиковать",
+    rights_not_member:"Бот не состоит в канале",
+    rights_check_failed:"Не удалось проверить права",
+    datetime_future_required:"Время должно быть в будущем",
+    datetime_min_lead_required:"Слишком близкое время",
+    datetime_dst_gap:"Такого времени не существует — перевод часов",
+    bad_datetime:"Неверная дата или время",
+    empty_text:"Добавьте текст или медиа",
+    text_too_long:"Текст длиннее 4096 символов",
+    limit_posts:"Достигнут лимит запланированных постов",
+    unsupported_media:"Можно загружать только фото и видео",
+    upload_failed:"Не удалось загрузить файл",
+    payload_too_large:"Файл слишком большой",
+    not_found:"Канал недоступен",
+    bot_unavailable:"Бот недоступен, попробуйте позже",
+    rate_limited:"Слишком много запросов, подождите минуту",
+  },
+  en:{
+    rights_user_admin_required:"You are not an admin of this channel",
+    rights_bot_admin_required:"The bot is not an admin there",
+    rights_bot_can_post_required:"The bot cannot post there",
+    rights_not_member:"The bot is not a member of the channel",
+    rights_check_failed:"Could not verify rights",
+    datetime_future_required:"Pick a time in the future",
+    datetime_min_lead_required:"That time is too soon",
+    datetime_dst_gap:"That time does not exist — DST shift",
+    bad_datetime:"Invalid date or time",
+    empty_text:"Add text or media",
+    text_too_long:"Text is longer than 4096 characters",
+    limit_posts:"Scheduled-post limit reached",
+    unsupported_media:"Only photos and videos can be uploaded",
+    upload_failed:"Upload failed",
+    payload_too_large:"File is too large",
+    not_found:"Channel unavailable",
+    bot_unavailable:"Bot unavailable, try again later",
+    rate_limited:"Too many requests, wait a minute",
+  },
+};
+const errText = key => (ERR[LANG] || ERR.en)[key] || t("err")(key);
 const INTERVAL = {
   ru:{ daily:"Ежедневно", weekly:"Еженедельно", weekdays:"По будням" },
   en:{ daily:"Daily", weekly:"Weekly", weekdays:"Weekdays" },
@@ -379,6 +491,16 @@ function applyStaticLabels(){
   document.getElementById("m-cancel").textContent = t("m_cancel");
   document.getElementById("m-save").textContent = t("m_save");
   document.getElementById("pv-close").textContent = t("close");
+  document.getElementById("fab").setAttribute("aria-label", t("c_new"));
+  document.getElementById("c-title").textContent = t("c_new");
+  document.getElementById("c-dest-l").textContent = t("c_dest");
+  document.getElementById("c-text-l").textContent = t("c_text");
+  document.getElementById("c-date-l").textContent = t("c_date");
+  document.getElementById("c-time-l").textContent = t("c_time");
+  document.getElementById("c-add").textContent = t("c_add_media");
+  document.getElementById("c-above-l").textContent = t("c_above");
+  document.getElementById("c-cancel").textContent = t("c_cancel");
+  document.getElementById("c-save").textContent = t("c_save");
   const b = document.getElementById("tz-banner");
   b.textContent = t("tz_note")(TZ); b.hidden = false;
 }
@@ -508,6 +630,7 @@ async function loadAll(){
   TZ = q.tz || TZ; LANG = q.lang || LANG;
   applyStaticLabels();
   if(q.is_admin){ document.getElementById("admin-link").hidden = false; }
+  document.getElementById("fab").hidden = false;
   renderQueue(q.posts, q.has_more);
   renderRecurring(rec.patterns);
 }
@@ -543,7 +666,112 @@ document.getElementById("m-save").addEventListener("click", async ()=>{
     });
     closeModal();
     await loadAll();
-  }catch(e){ errEl.textContent = t("err")(e.message); }
+  }catch(e){ errEl.textContent = errText(e.message); }
+});
+
+// Compose — a new one-off post
+const compose = document.getElementById("compose");
+const cErr = document.getElementById("c-err");
+let composeMedia = [];   // [{type, file_id, url}] — url is a local preview only
+
+function releaseComposeMedia(){
+  for(const m of composeMedia) if(m.url) URL.revokeObjectURL(m.url);
+  composeMedia = [];
+}
+function renderComposeMedia(){
+  const el = document.getElementById("c-media");
+  el.innerHTML = composeMedia.map((m,i)=>`<div class="frame">${
+    m.url ? `<img src="${m.url}">`
+          : `<span class="tlabel">${t("kind_video")}</span><svg class="tico" viewBox="0 0 24 24" fill="none">${SVG_VIDEO}</svg>`
+  }<button class="pin" data-rm="${i}">✕</button></div>`).join("");
+  el.hidden = !composeMedia.length;
+  document.getElementById("c-above-row").hidden = !composeMedia.length;
+}
+
+async function openCompose(){
+  releaseComposeMedia(); renderComposeMedia();
+  cErr.textContent = "";
+  document.getElementById("c-text").value = "";
+  document.getElementById("c-above").checked = false;
+  const start = localInputParts(Math.floor(Date.now()/1000) + 3600);
+  document.getElementById("c-date").value = start.date;
+  document.getElementById("c-time").value = start.time;
+  const sel = document.getElementById("c-dest");
+  sel.innerHTML = `<option value="">${t("c_loading")}</option>`;
+  compose.classList.add("open");
+  try{
+    const d = await api("/api/my/destinations");
+    sel.innerHTML = d.destinations.length
+      ? d.destinations.map(x=>`<option value="${x.chat_id}"${x.can_post?"":" disabled"}>${
+          escapeHtml(x.title)}${x.can_post?"":" — "+t("c_no_rights")}</option>`).join("")
+      : `<option value="">${t("c_no_dest")}</option>`;
+  }catch(e){ sel.innerHTML = ""; cErr.textContent = errText(e.message); }
+}
+function closeCompose(){ compose.classList.remove("open"); releaseComposeMedia(); }
+
+document.getElementById("fab").addEventListener("click", openCompose);
+document.getElementById("c-cancel").addEventListener("click", closeCompose);
+compose.addEventListener("click", (e)=>{ if(e.target === compose) closeCompose(); });
+document.getElementById("c-add").addEventListener("click", ()=> document.getElementById("c-file").click());
+
+// Each file is relayed to Telegram by the server, which hands back a file_id;
+// the browser can never produce one itself.
+document.getElementById("c-file").addEventListener("change", async (e)=>{
+  const files = [...e.target.files];
+  e.target.value = "";
+  const addBtn = document.getElementById("c-add");
+  addBtn.disabled = true;
+  for(const f of files){
+    if(composeMedia.length >= 10){ cErr.textContent = t("c_max_media"); break; }
+    cErr.textContent = t("c_uploading");
+    const fd = new FormData();
+    fd.append("file", f, f.name);
+    try{
+      const r = await api("/api/my/media", { method:"POST", body: fd });
+      composeMedia.push({
+        type: r.type, file_id: r.file_id,
+        url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
+      });
+      cErr.textContent = "";
+      renderComposeMedia();
+    }catch(ex){ cErr.textContent = errText(ex.message); break; }
+  }
+  addBtn.disabled = false;
+});
+
+document.getElementById("c-media").addEventListener("click", (e)=>{
+  const btn = e.target.closest("button[data-rm]");
+  if(!btn) return;
+  const [removed] = composeMedia.splice(Number(btn.dataset.rm), 1);
+  if(removed?.url) URL.revokeObjectURL(removed.url);
+  renderComposeMedia();
+});
+
+document.getElementById("c-save").addEventListener("click", async ()=>{
+  const chatId = document.getElementById("c-dest").value;
+  const text = document.getElementById("c-text").value;
+  const date = document.getElementById("c-date").value;
+  const time = document.getElementById("c-time").value;
+  if(!chatId){ cErr.textContent = t("c_pick_dest"); return; }
+  if(!date || !time){ cErr.textContent = t("need_both"); return; }
+  if(!composeMedia.length && !text.trim()){ cErr.textContent = t("c_need_content"); return; }
+  const btn = document.getElementById("c-save");
+  btn.disabled = true;
+  try{
+    await api("/api/my/post", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        chat_id: Number(chatId),
+        text,
+        local_datetime: composeLocal(date,time),
+        media: composeMedia.map(m=>({ type:m.type, file_id:m.file_id })),
+        caption_above: document.getElementById("c-above").checked,
+      }),
+    });
+    closeCompose();
+    await loadAll();
+  }catch(e){ cErr.textContent = errText(e.message); }
+  finally{ btn.disabled = false; }
 });
 
 // Post preview

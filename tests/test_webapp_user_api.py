@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 import pytest
 import pytest_asyncio
-from aiohttp import ClientSession
+from aiohttp import ClientSession, FormData
 
 from core.db import open_db
 from core.state import StateStore
@@ -452,3 +452,317 @@ async def test_post_media_without_bot_returns_503(server, store):
         async with s.get(server.url(f"/api/my/post/{pid}/media/0"),
                          headers={"Authorization": _init_data(USER_A)}) as r:
             assert r.status == 503
+
+
+# --- Task: create a post from the Mini App ---
+
+
+class _Member:
+    def __init__(self, status: str, can_post: bool | None = True) -> None:
+        self.status = status
+        self.can_post_messages = can_post
+
+
+class _Me:
+    id = 42
+
+
+class _SentMessage:
+    def __init__(self, *, photo=None, video=None) -> None:
+        self.message_id = 7
+        self.photo = photo
+        self.video = video
+
+
+class _Sized:
+    def __init__(self, file_id: str) -> None:
+        self.file_id = file_id
+
+
+class _ComposeBot(_FakeBot):
+    """Fake bot covering the rights checks and the media staging round-trip."""
+
+    def __init__(self, *, user_status: str = "administrator", bot_status: str = "administrator",
+                 bot_can_post: bool | None = True) -> None:
+        super().__init__()
+        self.user_status = user_status
+        self.bot_status = bot_status
+        self.bot_can_post = bot_can_post
+        self.sent: list[tuple[str, int, bytes]] = []
+        self.deleted: list[tuple[int, int]] = []
+
+    async def me(self) -> _Me:
+        return _Me()
+
+    async def get_chat_member(self, chat_id: int, user_id: int) -> _Member:
+        if user_id == _Me.id:
+            return _Member(self.bot_status, self.bot_can_post)
+        return _Member(self.user_status)
+
+    async def send_photo(self, chat_id: int, photo, disable_notification: bool = False) -> _SentMessage:
+        self.sent.append(("photo", chat_id, photo.data))
+        return _SentMessage(photo=[_Sized("SMALL"), _Sized("STAGED-PHOTO")])
+
+    async def send_video(self, chat_id: int, video, disable_notification: bool = False) -> _SentMessage:
+        self.sent.append(("video", chat_id, video.data))
+        return _SentMessage(video=_Sized("STAGED-VIDEO"))
+
+    async def delete_message(self, chat_id: int, message_id: int) -> None:
+        self.deleted.append((chat_id, message_id))
+
+
+@pytest_asyncio.fixture
+async def compose_bot() -> _ComposeBot:
+    return _ComposeBot()
+
+
+@pytest_asyncio.fixture
+async def server_compose(store: StateStore, compose_bot: _ComposeBot):
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,),
+        bot=compose_bot,
+    )
+    yield srv
+    await srv.close()
+
+
+def _local_dt(offset_s: int) -> str:
+    """A 'DD.MM.YYYY HH:MM' string in UTC (the fixture users have no timezone)."""
+    when = datetime.now(timezone.utc) + timedelta(seconds=offset_s)
+    return when.strftime("%d.%m.%Y %H:%M")
+
+
+async def _create(server, user_id: int, **body):
+    payload = {"chat_id": CHAT_A, "text": "hello", "local_datetime": _local_dt(7200), **body}
+    async with ClientSession() as s:
+        async with s.post(server.url("/api/my/post"),
+                          headers={"Authorization": _init_data(user_id)},
+                          json=payload) as r:
+            return r.status, await r.json()
+
+
+@pytest.mark.asyncio
+async def test_destinations_requires_auth(server):
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/destinations")) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_destinations_lists_linked_with_post_flag(server, store):
+    await store.upsert_destination(-3002, "channel", "Muted", None, "member", None)
+    await store.link_user_destination(USER_A, -3002, "link")
+    async with ClientSession() as s:
+        async with s.get(server.url("/api/my/destinations"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    by_id = {d["chat_id"]: d for d in body["destinations"]}
+    assert by_id[CHAT_A]["can_post"] is True
+    assert by_id[-3002]["can_post"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_post_requires_auth(server_compose):
+    async with ClientSession() as s:
+        async with s.post(server_compose.url("/api/my/post"), json={}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_create_text_post_happy(server_compose, store):
+    status, body = await _create(server_compose, USER_A)
+    assert status == 200, body
+    row = await store.get_scheduled_post(body["id"])
+    assert row.user_id == USER_A
+    assert row.chat_id == CHAT_A
+    assert row.kind == "text"
+    assert row.text == "hello"
+    assert row.status == "pending"
+    assert row.scheduled_at_utc == body["scheduled_at_utc"]
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_unlinked_destination(server_compose):
+    status, body = await _create(server_compose, USER_A, chat_id=-9999)
+    assert status == 404
+    assert body["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_empty_content(server_compose):
+    status, body = await _create(server_compose, USER_A, text="   ")
+    assert status == 400
+    assert body["error"] == "empty_text"
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_past_time(server_compose):
+    status, body = await _create(server_compose, USER_A, local_datetime=_local_dt(-3600))
+    assert status == 400
+    assert body["error"] == "datetime_future_required"
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_unparseable_time(server_compose):
+    status, body = await _create(server_compose, USER_A, local_datetime="tomorrow")
+    assert status == 400
+    assert body["error"] == "bad_datetime"
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_overlong_text(server_compose):
+    status, body = await _create(server_compose, USER_A, text="x" * 4097)
+    assert status == 400
+    assert body["error"] == "text_too_long"
+
+
+@pytest.mark.asyncio
+async def test_create_media_post_stores_items_and_caption(server_compose, store):
+    status, body = await _create(
+        server_compose, USER_A, text="look",
+        media=[{"type": "photo", "file_id": "F1"}, {"type": "video", "file_id": "F2"}],
+        caption_above=True,
+    )
+    assert status == 200, body
+    row = await store.get_scheduled_post(body["id"])
+    assert row.kind == "media"
+    assert row.caption == "look"
+    assert row.text is None
+    assert bool(row.caption_above) is True
+    assert await store.get_post_media(body["id"]) == [
+        {"type": "photo", "file_id": "F1"},
+        {"type": "video", "file_id": "F2"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_unknown_media_type(server_compose):
+    status, _ = await _create(server_compose, USER_A,
+                              media=[{"type": "sticker", "file_id": "F1"}])
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_too_many_media(server_compose):
+    status, _ = await _create(
+        server_compose, USER_A,
+        media=[{"type": "photo", "file_id": f"F{i}"} for i in range(11)],
+    )
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_create_post_blocked_when_caller_lost_channel_admin(store):
+    # The user_destinations link outlives the rights that created it.
+    bot = _ComposeBot(user_status="member")
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,), bot=bot,
+    )
+    try:
+        status, body = await _create(srv, USER_A)
+    finally:
+        await srv.close()
+    assert status == 400
+    assert body["error"] == "rights_user_admin_required"
+    assert await store.count_active_posts(USER_A) == 0
+
+
+@pytest.mark.asyncio
+async def test_create_post_blocked_when_bot_cannot_post(store):
+    bot = _ComposeBot(bot_can_post=False)
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,), bot=bot,
+    )
+    try:
+        status, body = await _create(srv, USER_A)
+    finally:
+        await srv.close()
+    assert status == 400
+    assert body["error"] == "rights_bot_can_post_required"
+
+
+@pytest.mark.asyncio
+async def test_create_post_at_cap_returns_409(server_compose, store, monkeypatch):
+    import core.limits as limits
+
+    monkeypatch.setattr(limits, "MAX_ACTIVE_POSTS_PER_USER", 1)
+    assert (await _create(server_compose, USER_A))[0] == 200
+    status, body = await _create(server_compose, USER_A)
+    assert status == 409
+    assert body["error"] == "limit_posts"
+
+
+@pytest.mark.asyncio
+async def test_create_post_without_bot_returns_503(server):
+    status, body = await _create(server, USER_A)
+    assert status == 503
+    assert body["error"] == "bot_unavailable"
+
+
+async def _upload(server, user_id: int, *, data: bytes, content_type: str, name: str = "file"):
+    form = FormData()
+    form.add_field(name, data, filename="a.bin", content_type=content_type)
+    async with ClientSession() as s:
+        async with s.post(server.url("/api/my/media"),
+                          headers={"Authorization": _init_data(user_id)},
+                          data=form) as r:
+            return r.status, await r.json()
+
+
+@pytest.mark.asyncio
+async def test_media_upload_requires_auth(server_compose):
+    async with ClientSession() as s:
+        async with s.post(server_compose.url("/api/my/media"), data=b"x") as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_media_upload_returns_file_id_and_clears_staging(server_compose, compose_bot):
+    status, body = await _upload(server_compose, USER_A, data=b"JPEGBYTES", content_type="image/jpeg")
+    assert status == 200, body
+    # The largest PhotoSize is the one worth keeping.
+    assert body == {"type": "photo", "file_id": "STAGED-PHOTO"}
+    assert compose_bot.sent == [("photo", USER_A, b"JPEGBYTES")]
+    assert compose_bot.deleted == [(USER_A, 7)]
+
+
+@pytest.mark.asyncio
+async def test_media_upload_handles_video(server_compose, compose_bot):
+    status, body = await _upload(server_compose, USER_A, data=b"MP4", content_type="video/mp4")
+    assert status == 200
+    assert body == {"type": "video", "file_id": "STAGED-VIDEO"}
+
+
+@pytest.mark.asyncio
+async def test_media_upload_rejects_other_content_types(server_compose):
+    status, body = await _upload(server_compose, USER_A, data=b"%PDF", content_type="application/pdf")
+    assert status == 400
+    assert body["error"] == "unsupported_media"
+
+
+@pytest.mark.asyncio
+async def test_media_upload_rejects_wrong_field_name(server_compose):
+    status, _ = await _upload(server_compose, USER_A, data=b"x", content_type="image/jpeg", name="blob")
+    assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_media_upload_over_cap_returns_413(store, compose_bot):
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,),
+        bot=compose_bot, upload_max_bytes=1024,
+    )
+    try:
+        status, body = await _upload(srv, USER_A, data=b"x" * 4096, content_type="image/jpeg")
+    finally:
+        await srv.close()
+    assert status == 413
+    assert body["error"] == "payload_too_large"
+    assert compose_bot.sent == []
+
+
+@pytest.mark.asyncio
+async def test_media_upload_without_bot_returns_503(server):
+    status, body = await _upload(server, USER_A, data=b"x", content_type="image/jpeg")
+    assert status == 503
