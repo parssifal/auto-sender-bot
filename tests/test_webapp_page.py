@@ -102,6 +102,28 @@ def test_queue_page_reuses_compose_sheet_for_editing() -> None:
     assert 'id="pv-edit"' in html
 
 
+def test_queue_page_reorders_media_by_pointer_drag() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # HTML5 drag-and-drop is mouse-only by spec, so the Mini App (a mobile
+    # WebView) must reorder through pointer events instead.
+    assert "draggable" not in html
+    assert "setPointerCapture" in html
+    # The grip opts out of touch scrolling; the tile itself keeps panning the
+    # strip, so dragging and scrolling never fight over the same gesture.
+    assert "touch-action:none" in html
+    # Every way a gesture can end resets the drag — an interrupted one would
+    # otherwise leave dragFrom armed and silently stop thumbnail rendering.
+    assert "lostpointercapture" in html
+
+
+def test_queue_page_keeps_keyboard_path_for_reordering() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # Dragging is pointer-only; the same grip answers arrow keys so reordering
+    # stays reachable without a pointer.
+    assert '"ArrowLeft"' in html and '"ArrowRight"' in html
+    assert "data-grip" in html
+
+
 def test_queue_page_sends_existing_media_as_position_markers() -> None:
     html = QUEUE_HTML.read_text(encoding="utf-8")
     # Media already on the post travel back by index, so a Telegram file_id is

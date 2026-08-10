@@ -167,9 +167,13 @@
   .film.pick .frame{width:96px; aspect-ratio:1; border-radius:12px}
   .frame .pin{position:absolute; right:5px; top:5px; width:24px; height:24px; border-radius:8px; border:0; cursor:pointer;
     background:rgba(0,0,0,.55); color:#fff; font-size:13px; line-height:1; display:grid; place-items:center}
-  .frame .pin.mv{top:auto; bottom:5px; width:22px; height:22px; font-size:11px}
-  .frame .pin.mv.l{right:auto; left:5px}
-  .frame .pin.mv[disabled]{opacity:.3}
+  /* Drag handle. touch-action:none is what makes dragging it reorder instead of
+     scrolling the strip — the tile itself keeps panning .film as usual. */
+  .frame .pin.grip{top:auto; bottom:5px; right:auto; left:5px; width:22px; height:22px;
+    font-size:12px; touch-action:none; cursor:grab}
+  .frame .pin.grip:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .film.pick.dragging .pin.grip{cursor:grabbing}
+  .frame.dragging{opacity:.5; outline:2px solid var(--accent); outline-offset:-2px}
   #c-add{margin-bottom:14px}
   #c-add[disabled]{opacity:.5}
   .check{display:flex; align-items:center; gap:9px; margin-bottom:14px; font-size:13px; font-weight:700; color:var(--muted); cursor:pointer}
@@ -328,7 +332,7 @@ const I18N = {
     c_pick_dest:"Выберите канал", c_need_content:"Добавьте текст или медиа",
     c_max_media:"Не больше 10 файлов", c_uploading:"Загрузка файла…",
     c_edit:"Редактировать пост", c_update:"Сохранить",
-    c_left:"Левее", c_right:"Правее", c_remove:"Убрать",
+    c_reorder:"Переставить", c_remove:"Убрать",
   },
   en: {
     title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
@@ -350,7 +354,7 @@ const I18N = {
     c_pick_dest:"Pick a channel", c_need_content:"Add text or media",
     c_max_media:"Up to 10 files", c_uploading:"Uploading…",
     c_edit:"Edit post", c_update:"Save",
-    c_left:"Move left", c_right:"Move right", c_remove:"Remove",
+    c_reorder:"Reorder", c_remove:"Remove",
   },
 };
 // Server error keys → readable text, shared by every modal.
@@ -703,17 +707,23 @@ function composeTile(m){
 }
 function renderComposeMedia(){
   const el = document.getElementById("c-media");
-  const last = composeMedia.length - 1;
   el.innerHTML = composeMedia.map((m,i)=>`<div class="frame">${
     composeTile(m)
   }<button class="pin" data-rm="${i}" aria-label="${t("c_remove")}">✕</button>${
-    last > 0
-      ? `<button class="pin mv l" data-mv="${i}" data-dir="-1" aria-label="${t("c_left")}"${i===0?" disabled":""}>◀</button>`
-        + `<button class="pin mv r" data-mv="${i}" data-dir="1" aria-label="${t("c_right")}"${i===last?" disabled":""}>▶</button>`
+    composeMedia.length > 1
+      ? `<button class="pin grip" data-grip="${i}" aria-label="${t("c_reorder")}">⠿</button>`
       : ""
   }</div>`).join("");
   el.hidden = !composeMedia.length;
   document.getElementById("c-above-row").hidden = !composeMedia.length;
+}
+
+// Reorder is insert-at-position, not swap: dragging item 0 to the end must
+// shift the rest left, not trade places with whatever sits there.
+function moveComposeMedia(from, to){
+  if(to < 0 || to >= composeMedia.length || from === to) return false;
+  composeMedia.splice(to, 0, ...composeMedia.splice(from, 1));
+  return true;
 }
 
 async function openCompose(postId){
@@ -770,11 +780,17 @@ async function loadComposeThumb(postId, m){
     const url = URL.createObjectURL(await r.blob());
     if(!composeMedia.includes(m)){ URL.revokeObjectURL(url); return; }
     m.url = url;
-    renderComposeMedia();
+    // A re-render mid-drag would break the gesture; the drag ends with one anyway.
+    if(dragFrom === null) renderComposeMedia();
   }catch{ /* the tile stays blank; the item is still kept on save */ }
 }
 
-function closeCompose(){ compose.classList.remove("open"); composeEditId = null; releaseComposeMedia(); }
+function closeCompose(){
+  compose.classList.remove("open");
+  composeEditId = null;
+  endComposeDrag();
+  releaseComposeMedia();
+}
 
 document.getElementById("fab").addEventListener("click", ()=> openCompose());
 document.getElementById("c-cancel").addEventListener("click", closeCompose);
@@ -806,20 +822,70 @@ document.getElementById("c-file").addEventListener("change", async (e)=>{
   addBtn.disabled = false;
 });
 
-document.getElementById("c-media").addEventListener("click", (e)=>{
-  const mv = e.target.closest("button[data-mv]");
-  if(mv){
-    const i = Number(mv.dataset.mv), j = i + Number(mv.dataset.dir);
-    if(j < 0 || j >= composeMedia.length) return;
-    [composeMedia[i], composeMedia[j]] = [composeMedia[j], composeMedia[i]];
-    renderComposeMedia();
-    return;
-  }
+const cMedia = document.getElementById("c-media");
+
+cMedia.addEventListener("click", (e)=>{
   const btn = e.target.closest("button[data-rm]");
   if(!btn) return;
   const [removed] = composeMedia.splice(Number(btn.dataset.rm), 1);
   if(removed?.url) URL.revokeObjectURL(removed.url);
   renderComposeMedia();
+});
+
+// Reordering by dragging the grip. HTML5 drag-and-drop is mouse-only by spec, so
+// pointer events carry both finger and mouse through one path.
+let dragFrom = null;
+
+cMedia.addEventListener("pointerdown", (e)=>{
+  const grip = e.target.closest("button[data-grip]");
+  if(!grip) return;
+  dragFrom = Number(grip.dataset.grip);
+  // Capture on the grip: the finger will leave this tile, and without capture
+  // the move events would go to whatever is underneath instead.
+  grip.setPointerCapture(e.pointerId);
+  cMedia.children[dragFrom]?.classList.add("dragging");
+  cMedia.classList.add("dragging");
+  tg?.HapticFeedback?.impactOccurred?.("light");
+  e.preventDefault();   // no text selection / native image drag
+  grip.focus();         // preventDefault suppresses the implicit focus
+});
+
+cMedia.addEventListener("pointermove", (e)=>{
+  if(dragFrom === null) return;
+  const over = document.elementFromPoint(e.clientX, e.clientY)?.closest(".frame");
+  if(!over || over.parentElement !== cMedia) return;
+  const to = [...cMedia.children].indexOf(over);
+  if(to < 0 || !moveComposeMedia(dragFrom, to)) return;
+  // Move the node instead of re-rendering: a re-render would destroy the element
+  // holding the pointer capture and the gesture would die halfway.
+  cMedia.insertBefore(cMedia.children[dragFrom], to > dragFrom ? over.nextSibling : over);
+  dragFrom = to;
+});
+
+function endComposeDrag(){
+  if(dragFrom === null) return;
+  dragFrom = null;
+  cMedia.classList.remove("dragging");
+  renderComposeMedia();   // resync data-rm / data-grip with the new order
+}
+// lostpointercapture is the one signal for every way a gesture can end — release,
+// cancel, or the element going away mid-drag. Without it an interrupted drag would
+// leave dragFrom set, which silently stops thumbnails from rendering.
+cMedia.addEventListener("lostpointercapture", endComposeDrag);
+cMedia.addEventListener("pointerup", endComposeDrag);   // capture never established
+
+// The grip doubles as the keyboard control — dragging is pointer-only, and
+// arrow keys on the focused grip are the accessible path to the same reorder.
+cMedia.addEventListener("keydown", (e)=>{
+  const grip = e.target.closest("button[data-grip]");
+  if(!grip) return;
+  const dir = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  if(!dir) return;
+  e.preventDefault();
+  const to = Number(grip.dataset.grip) + dir;
+  if(!moveComposeMedia(Number(grip.dataset.grip), to)) return;
+  renderComposeMedia();
+  cMedia.querySelector(`button[data-grip="${to}"]`)?.focus();
 });
 
 document.getElementById("c-save").addEventListener("click", async ()=>{
