@@ -4,13 +4,12 @@ from datetime import date
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup
 
 from core.limits import ResourceLimitError
-from core.services import broadcast_svc
+from core.services import broadcast_svc, rights_svc
 from core.services._shared import _resolve_team_id  # noqa: F401  # re-export for teams.py
 from core.state import Destination, DraftRow, RecurringPattern, ScheduledPostRow, StateStore
 from core.utils import validate_schedule_time
@@ -245,12 +244,15 @@ def _resolve_recurring_pattern_id(patterns: list[RecurringPattern], pattern_ref:
     return None
 
 
-def _format_rights_check_error(exc: Exception, *, subject: str, lang: str = DEFAULT_LANGUAGE) -> str:
-    if isinstance(exc, TelegramForbiddenError):
-        text = str(exc).lower()
-        if "not a member" in text or "bot was kicked" in text:
-            return tr(lang, "rights_not_member")
-    return tr(lang, "rights_check_failed", subject=subject, error=exc)
+def _rights_error_text(err: rights_svc.RightsError, *, lang: str = DEFAULT_LANGUAGE) -> str:
+    if err.key == "rights_check_failed":
+        return tr(
+            lang,
+            "rights_check_failed",
+            subject=tr(lang, f"rights_subject_{err.subject}"),
+            error=err.error,
+        )
+    return tr(lang, err.key)
 
 
 def _is_valid_tz_name(tz_name: str) -> bool:
@@ -374,28 +376,13 @@ async def _move_repeat_to_destination_selection(
 
 
 async def _check_user_admin(bot: Bot, chat_id: int, user_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
-    try:
-        member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-    except Exception as exc:
-        return False, _format_rights_check_error(exc, subject=tr(lang, "rights_subject_user"), lang=lang)
-    if member.status not in {"creator", "administrator"}:
-        return False, tr(lang, "rights_user_admin_required")
-    return True, ""
+    err = await rights_svc.check_user_is_admin(bot, chat_id, user_id)
+    return (True, "") if err is None else (False, _rights_error_text(err, lang=lang))
 
 
 async def _check_bot_admin_and_post(bot: Bot, chat_id: int, *, lang: str = DEFAULT_LANGUAGE) -> tuple[bool, str]:
-    try:
-        me = await bot.me()
-        member = await bot.get_chat_member(chat_id=chat_id, user_id=me.id)
-    except Exception as exc:
-        return False, _format_rights_check_error(exc, subject=tr(lang, "rights_subject_bot"), lang=lang)
-
-    if member.status != "administrator":
-        return False, tr(lang, "rights_bot_admin_required")
-    can_post = getattr(member, "can_post_messages", None)
-    if can_post is False:
-        return False, tr(lang, "rights_bot_can_post_required")
-    return True, ""
+    err = await rights_svc.check_bot_can_post(bot, chat_id)
+    return (True, "") if err is None else (False, _rights_error_text(err, lang=lang))
 
 
 async def _user_lang(store: StateStore, user_id: int) -> str:

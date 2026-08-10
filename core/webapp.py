@@ -8,10 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aiogram.types import BufferedInputFile
 from aiogram.utils.web_app import check_webapp_signature, parse_webapp_init_data
 from aiohttp import web
 
-from core.services import admin_broadcast_svc
+import core.limits as limits
+from core.limits import ResourceLimitError
+from core.services import admin_broadcast_svc, rights_svc
 from core.state import ScheduledPostRow, StateStore
 from core.utils import NonexistentLocalTimeError, parse_local_datetime, validate_schedule_time
 
@@ -41,6 +44,15 @@ _DEFAULT_RATE_LIMIT_MAX = 240
 _DEFAULT_RATE_LIMIT_WINDOW_S = 60.0
 # A broadcast is a single Telegram message per recipient (max 4096 chars).
 _DEFAULT_BROADCAST_TEXT_MAX = 4096
+# Media staged for a Mini App post: one multipart file per request, relayed to
+# Telegram. Bot API caps photo uploads at 10 MiB and other files at 50 MiB;
+# 20 MiB keeps videos usable without letting one request eat the process.
+_DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+_UPLOAD_PATH = "/api/my/media"
+# Telegram media groups hold at most 10 items (same cap as the bot flow).
+_MAX_MEDIA_PER_POST = 10
+# A scheduled text post is one Telegram message.
+_POST_TEXT_MAX = 4096
 # Effective TTL for a Telegram WebApp initData payload. Telegram itself does not
 # expire it, so we bound replay of a leaked payload to a short window.
 _INIT_DATA_MAX_AGE_S = 600
@@ -226,6 +238,7 @@ async def start_webapp_server(
     rate_limit_max: int = _DEFAULT_RATE_LIMIT_MAX,
     rate_limit_window_s: float = _DEFAULT_RATE_LIMIT_WINDOW_S,
     broadcast_text_max: int = _DEFAULT_BROADCAST_TEXT_MAX,
+    upload_max_bytes: int = _DEFAULT_UPLOAD_MAX_BYTES,
 ) -> WebappServer:
     if not bot_token:
         raise ValueError("bot_token must be non-empty")
@@ -254,7 +267,9 @@ async def start_webapp_server(
         # Reject oversized bodies up front. aiohttp's client_max_size also guards
         # the streamed read, but handlers wrap request.json() in broad excepts
         # that would mask the 413 — checking Content-Length here keeps it clean.
-        if (request.content_length or 0) > max_body_bytes:
+        # Media staging is the one route that legitimately carries megabytes.
+        body_cap = upload_max_bytes if request.path == _UPLOAD_PATH else max_body_bytes
+        if (request.content_length or 0) > body_cap:
             return web.json_response({"error": "payload_too_large"}, status=413)
         response = await handler(request)
         # Do not advertise the server implementation/version.
@@ -437,6 +452,188 @@ async def start_webapp_server(
             headers={"Cache-Control": "private, max-age=3600, immutable"},
         )
 
+    async def api_my_destinations(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        rows = await store.list_user_destinations(
+            int(user["id"]), 0, limits.MAX_DESTINATIONS_PER_USER
+        )
+        return web.json_response(
+            {
+                "destinations": [
+                    {
+                        "chat_id": d.chat_id,
+                        "title": d.title,
+                        "username": d.username,
+                        # Cached from my_chat_member updates: a UI hint only. The
+                        # authoritative check runs live when the post is created.
+                        "can_post": d.bot_status == "administrator" and d.bot_can_post is not False,
+                    }
+                    for d in rows
+                ]
+            }
+        )
+
+    async def api_my_media(request: web.Request) -> web.Response:
+        """Stage an uploaded file as a Telegram ``file_id``.
+
+        A browser cannot produce a ``file_id``, and the Bot API has no
+        upload-without-send call — so the file is sent to the caller's own chat
+        with the bot and the staging message is deleted right after.
+        """
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        if bot is None:
+            return web.json_response({"error": "bot_unavailable"}, status=503)
+        user_id = int(user["id"])
+
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        if field is None or field.name != "file":
+            return web.json_response({"error": "bad_request"}, status=400)
+
+        ctype = (field.headers.get("Content-Type") or "").lower()
+        if ctype.startswith("image/"):
+            kind = "photo"
+        elif ctype.startswith("video/"):
+            kind = "video"
+        else:
+            return web.json_response({"error": "unsupported_media"}, status=400)
+
+        # Read bounded: a chunked upload carries no Content-Length, so the
+        # middleware's cap cannot see it and this loop is the only guard.
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await field.read_chunk(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > upload_max_bytes:
+                return web.json_response({"error": "payload_too_large"}, status=413)
+            chunks.append(chunk)
+        if not total:
+            return web.json_response({"error": "bad_request"}, status=400)
+
+        upload = BufferedInputFile(
+            b"".join(chunks),
+            filename=field.filename or ("upload.jpg" if kind == "photo" else "upload.mp4"),
+        )
+        try:
+            if kind == "photo":
+                sent = await bot.send_photo(chat_id=user_id, photo=upload, disable_notification=True)
+                file_id = sent.photo[-1].file_id if sent.photo else None
+            else:
+                sent = await bot.send_video(chat_id=user_id, video=upload, disable_notification=True)
+                file_id = sent.video.file_id if sent.video else None
+        except Exception:
+            logger.warning("media staging failed for user %s (%s)", user_id, kind)
+            return web.json_response({"error": "upload_failed"}, status=502)
+
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=sent.message_id)
+        except Exception:
+            # The file_id stays valid; a leftover message in the user's own chat
+            # is cosmetic and must not fail the upload.
+            logger.info("could not delete staging message for user %s", user_id)
+
+        if not file_id:
+            return web.json_response({"error": "upload_failed"}, status=502)
+        return web.json_response({"type": kind, "file_id": file_id})
+
+    async def api_my_create_post(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "bad_request"}, status=400)
+
+        try:
+            chat_id = int(payload["chat_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "bad_request"}, status=400)
+        # Trust boundary: the caller may only target destinations linked to them.
+        linked = await store.list_user_destinations(
+            user_id, 0, limits.MAX_DESTINATIONS_PER_USER
+        )
+        if chat_id not in {d.chat_id for d in linked}:
+            return web.json_response({"error": "not_found"}, status=404)
+
+        raw_media = payload.get("media") or []
+        if not isinstance(raw_media, list) or len(raw_media) > _MAX_MEDIA_PER_POST:
+            return web.json_response({"error": "bad_request"}, status=400)
+        media_items: list[dict[str, str]] = []
+        for item in raw_media:
+            if not isinstance(item, dict):
+                return web.json_response({"error": "bad_request"}, status=400)
+            m_type = str(item.get("type") or "")
+            file_id = str(item.get("file_id") or "")
+            if m_type not in {"photo", "video"} or not file_id:
+                return web.json_response({"error": "bad_request"}, status=400)
+            media_items.append({"type": m_type, "file_id": file_id})
+
+        text = str(payload.get("text") or "").strip()
+        if not media_items and not text:
+            return web.json_response({"error": "empty_text"}, status=400)
+        if len(text) > _POST_TEXT_MAX:
+            return web.json_response({"error": "text_too_long"}, status=400)
+
+        tz_name = await store.get_user_timezone(user_id) or "UTC"
+        try:
+            parsed = parse_local_datetime(str(payload.get("local_datetime") or "").strip(), tz_name)
+        except NonexistentLocalTimeError:
+            return web.json_response({"error": "datetime_dst_gap"}, status=400)
+        except (ValueError, KeyError):
+            return web.json_response({"error": "bad_datetime"}, status=400)
+        check = validate_schedule_time(parsed.utc_epoch)
+        if not check.is_valid:
+            return web.json_response({"error": check.error_key}, status=400)
+
+        # Same rights gate as the bot flow: the destination link outlives the
+        # rights that created it, so both sides must be re-checked live.
+        if bot is None:
+            return web.json_response({"error": "bot_unavailable"}, status=503)
+        err = await rights_svc.check_user_is_admin(bot, chat_id, user_id)
+        if err is None:
+            err = await rights_svc.check_bot_can_post(bot, chat_id)
+        if err is not None:
+            return web.json_response({"error": err.key}, status=400)
+
+        try:
+            if media_items:
+                post_id = await store.create_scheduled_media_post(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scheduled_at_utc=parsed.utc_epoch,
+                    caption=text or None,
+                    caption_entities_json=None,
+                    caption_above=bool(payload.get("caption_above")),
+                    media_items=media_items,
+                )
+            else:
+                post_id = await store.create_scheduled_text_post(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scheduled_at_utc=parsed.utc_epoch,
+                    text=text,
+                    entities_json=None,
+                )
+        except ResourceLimitError as exc:
+            return web.json_response({"error": f"limit_{exc.resource}"}, status=409)
+        return web.json_response(
+            {"ok": True, "id": post_id, "scheduled_at_utc": parsed.utc_epoch}
+        )
+
     async def api_stats(request: web.Request) -> web.Response:
         if _require_admin(request) is None:
             return web.json_response({"error": "forbidden"}, status=403)
@@ -484,6 +681,9 @@ async def start_webapp_server(
     app.router.add_post("/api/broadcast", api_broadcast)
     app.router.add_get("/app", app_index)
     app.router.add_get("/api/my/queue", api_my_queue)
+    app.router.add_get("/api/my/destinations", api_my_destinations)
+    app.router.add_post("/api/my/post", api_my_create_post)
+    app.router.add_post(_UPLOAD_PATH, api_my_media)
     app.router.add_get("/api/my/recurring", api_my_recurring)
     app.router.add_get("/api/my/post/{id}", api_my_post_detail)
     app.router.add_get("/api/my/post/{id}/media/{idx}", api_my_post_media)
