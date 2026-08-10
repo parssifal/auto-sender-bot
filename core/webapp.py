@@ -407,7 +407,9 @@ async def start_webapp_server(
             {
                 "id": row.id,
                 "kind": row.kind,
+                "chat_id": row.chat_id,
                 "scheduled_at_utc": row.scheduled_at_utc,
+                "caption_above": bool(row.caption_above),
                 "text": row.text,
                 "entities": _parse_entities(row.entities_json),
                 "caption": row.caption,
@@ -546,92 +548,190 @@ async def start_webapp_server(
             return web.json_response({"error": "upload_failed"}, status=502)
         return web.json_response({"type": kind, "file_id": file_id})
 
-    async def api_my_create_post(request: web.Request) -> web.Response:
-        user = _require_user(request)
-        if user is None:
-            return web.json_response({"error": "forbidden"}, status=403)
-        user_id = int(user["id"])
+    async def _validate_post_payload(
+        request: web.Request,
+        user_id: int,
+        *,
+        existing_media: list[dict[str, str]] | None,
+    ) -> tuple[dict | None, web.Response | None]:
+        """Validate a create/edit post body: destination, media, text, time, rights.
+
+        Both routes describe the post's whole desired state, so the rules live
+        here once instead of drifting apart in two handlers.
+
+        ``existing_media`` is the post's current media on the edit route, which
+        lets the client keep an item by position (``{"keep": 2}``) — Telegram
+        file_ids then never have to travel to the browser. ``None`` means the
+        create route, where there is nothing to keep.
+        """
         try:
             payload = await request.json()
         except Exception:
-            return web.json_response({"error": "bad_request"}, status=400)
+            return None, web.json_response({"error": "bad_request"}, status=400)
         if not isinstance(payload, dict):
-            return web.json_response({"error": "bad_request"}, status=400)
+            return None, web.json_response({"error": "bad_request"}, status=400)
 
         try:
             chat_id = int(payload["chat_id"])
         except (KeyError, TypeError, ValueError):
-            return web.json_response({"error": "bad_request"}, status=400)
+            return None, web.json_response({"error": "bad_request"}, status=400)
         # Trust boundary: the caller may only target destinations linked to them.
         linked = await store.list_user_destinations(
             user_id, 0, limits.MAX_DESTINATIONS_PER_USER
         )
         if chat_id not in {d.chat_id for d in linked}:
-            return web.json_response({"error": "not_found"}, status=404)
+            return None, web.json_response({"error": "not_found"}, status=404)
 
         raw_media = payload.get("media") or []
         if not isinstance(raw_media, list) or len(raw_media) > _MAX_MEDIA_PER_POST:
-            return web.json_response({"error": "bad_request"}, status=400)
+            return None, web.json_response({"error": "bad_request"}, status=400)
         media_items: list[dict[str, str]] = []
         for item in raw_media:
             if not isinstance(item, dict):
-                return web.json_response({"error": "bad_request"}, status=400)
+                return None, web.json_response({"error": "bad_request"}, status=400)
+            if "keep" in item:
+                try:
+                    idx = int(item["keep"])
+                except (TypeError, ValueError):
+                    return None, web.json_response({"error": "bad_request"}, status=400)
+                if existing_media is None or not 0 <= idx < len(existing_media):
+                    return None, web.json_response({"error": "bad_request"}, status=400)
+                kept = existing_media[idx]
+                media_items.append({"type": kept["type"], "file_id": kept["file_id"]})
+                continue
             m_type = str(item.get("type") or "")
             file_id = str(item.get("file_id") or "")
             if m_type not in {"photo", "video"} or not file_id:
-                return web.json_response({"error": "bad_request"}, status=400)
+                return None, web.json_response({"error": "bad_request"}, status=400)
             media_items.append({"type": m_type, "file_id": file_id})
 
         text = str(payload.get("text") or "").strip()
         if not media_items and not text:
-            return web.json_response({"error": "empty_text"}, status=400)
+            return None, web.json_response({"error": "empty_text"}, status=400)
         if len(text) > _POST_TEXT_MAX:
-            return web.json_response({"error": "text_too_long"}, status=400)
+            return None, web.json_response({"error": "text_too_long"}, status=400)
 
         tz_name = await store.get_user_timezone(user_id) or "UTC"
         try:
             parsed = parse_local_datetime(str(payload.get("local_datetime") or "").strip(), tz_name)
         except NonexistentLocalTimeError:
-            return web.json_response({"error": "datetime_dst_gap"}, status=400)
+            return None, web.json_response({"error": "datetime_dst_gap"}, status=400)
         except (ValueError, KeyError):
-            return web.json_response({"error": "bad_datetime"}, status=400)
+            return None, web.json_response({"error": "bad_datetime"}, status=400)
         check = validate_schedule_time(parsed.utc_epoch)
         if not check.is_valid:
-            return web.json_response({"error": check.error_key}, status=400)
+            return None, web.json_response({"error": check.error_key}, status=400)
 
         # Same rights gate as the bot flow: the destination link outlives the
         # rights that created it, so both sides must be re-checked live.
         if bot is None:
-            return web.json_response({"error": "bot_unavailable"}, status=503)
+            return None, web.json_response({"error": "bot_unavailable"}, status=503)
         err = await rights_svc.check_user_is_admin(bot, chat_id, user_id)
         if err is None:
             err = await rights_svc.check_bot_can_post(bot, chat_id)
         if err is not None:
-            return web.json_response({"error": err.key}, status=400)
+            return None, web.json_response({"error": err.key}, status=400)
+
+        return (
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "media_items": media_items,
+                "caption_above": bool(payload.get("caption_above")),
+                "scheduled_at_utc": parsed.utc_epoch,
+            },
+            None,
+        )
+
+    async def api_my_create_post(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        data, bad = await _validate_post_payload(request, user_id, existing_media=None)
+        if data is None:
+            return bad
 
         try:
-            if media_items:
+            if data["media_items"]:
                 post_id = await store.create_scheduled_media_post(
                     user_id=user_id,
-                    chat_id=chat_id,
-                    scheduled_at_utc=parsed.utc_epoch,
-                    caption=text or None,
+                    chat_id=data["chat_id"],
+                    scheduled_at_utc=data["scheduled_at_utc"],
+                    caption=data["text"] or None,
                     caption_entities_json=None,
-                    caption_above=bool(payload.get("caption_above")),
-                    media_items=media_items,
+                    caption_above=data["caption_above"],
+                    media_items=data["media_items"],
                 )
             else:
                 post_id = await store.create_scheduled_text_post(
                     user_id=user_id,
-                    chat_id=chat_id,
-                    scheduled_at_utc=parsed.utc_epoch,
-                    text=text,
+                    chat_id=data["chat_id"],
+                    scheduled_at_utc=data["scheduled_at_utc"],
+                    text=data["text"],
                     entities_json=None,
                 )
         except ResourceLimitError as exc:
             return web.json_response({"error": f"limit_{exc.resource}"}, status=409)
         return web.json_response(
-            {"ok": True, "id": post_id, "scheduled_at_utc": parsed.utc_epoch}
+            {"ok": True, "id": post_id, "scheduled_at_utc": data["scheduled_at_utc"]}
+        )
+
+    async def api_my_edit_post(request: web.Request) -> web.Response:
+        """Replace a pending post's destination, content and time in one call."""
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        post_id = request.match_info["id"]
+        row = await store.get_scheduled_post(post_id)
+        # Ownership is the trust boundary: a missing post and someone else's post
+        # are indistinguishable to the caller (both 404, no enumeration).
+        if row is None or row.user_id != user_id:
+            return web.json_response({"error": "not_found"}, status=404)
+        current_media = await store.get_post_media(post_id) if row.kind == "media" else []
+
+        data, bad = await _validate_post_payload(
+            request, user_id, existing_media=current_media
+        )
+        if data is None:
+            return bad
+
+        # The Mini App has no formatting editor, so a rewritten text arrives
+        # plain and loses its entities (same as creating a post here). An
+        # untouched text keeps the entities it already has — editing only the
+        # media must not strip formatting the post got from the bot flow.
+        current_text = (row.caption if row.kind == "media" else row.text) or ""
+        current_entities = (
+            row.caption_entities_json if row.kind == "media" else row.entities_json
+        )
+        entities = current_entities if data["text"] == current_text else None
+
+        updates: dict[str, object] = {
+            "scheduled_at_utc": data["scheduled_at_utc"],
+            "chat_id": data["chat_id"],
+        }
+        if data["media_items"]:
+            updates |= {
+                "kind": "media",
+                "caption": data["text"] or None,
+                "caption_entities_json": entities,
+                "caption_above": data["caption_above"],
+                "media_items": data["media_items"],
+            }
+        else:
+            updates |= {
+                "kind": "text",
+                "text": data["text"],
+                "entities_json": entities,
+            }
+
+        # False means the post stopped being editable between the read above and
+        # the write: sent, cancelled, or adopted by a recurring series.
+        if not await store.update_scheduled_post(post_id, user_id, updates):
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response(
+            {"ok": True, "id": post_id, "scheduled_at_utc": data["scheduled_at_utc"]}
         )
 
     async def api_stats(request: web.Request) -> web.Response:
@@ -686,6 +786,7 @@ async def start_webapp_server(
     app.router.add_post(_UPLOAD_PATH, api_my_media)
     app.router.add_get("/api/my/recurring", api_my_recurring)
     app.router.add_get("/api/my/post/{id}", api_my_post_detail)
+    app.router.add_post("/api/my/post/{id}", api_my_edit_post)
     app.router.add_get("/api/my/post/{id}/media/{idx}", api_my_post_media)
     app.router.add_post("/api/my/post/{id}/reschedule", api_my_reschedule)
     app.router.add_post("/api/my/post/{id}/cancel", api_my_cancel)

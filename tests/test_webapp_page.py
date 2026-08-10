@@ -90,3 +90,21 @@ def test_queue_page_has_post_preview() -> None:
     # initData header) and the object URLs are revoked to avoid leaks.
     assert "createObjectURL" in html
     assert "revokeObjectURL" in html
+
+
+def test_queue_page_reuses_compose_sheet_for_editing() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # One sheet writes both a new and an existing post; the id decides the route.
+    assert "let composeEditId" in html
+    assert 'composeEditId ? `/api/my/post/${composeEditId}` : "/api/my/post"' in html
+    # Entry points: the queue cards and the preview sheet.
+    assert 'data-act="edit"' in html
+    assert 'id="pv-edit"' in html
+
+
+def test_queue_page_sends_existing_media_as_position_markers() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # Media already on the post travel back by index, so a Telegram file_id is
+    # never handed to the browser to echo.
+    assert "{ keep:m.keep }" in html
+    assert "m.keep === undefined" in html

@@ -112,6 +112,56 @@ async def test_update_scheduled_post_updates_pending_non_recurring_post(store: S
 
 
 @pytest.mark.asyncio
+async def test_update_scheduled_post_moves_post_to_another_channel(store: StateStore) -> None:
+    """Retargeting is content-independent: it must work on the time-only path too."""
+    other_chat_id = -2002
+    await store.upsert_destination(other_chat_id, "channel", "Second", None, "administrator", True)
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Editable post",
+        entities_json=None,
+    )
+
+    moved = await store.update_scheduled_post(post_id, USER_ID, {"chat_id": other_chat_id})
+
+    post = await store.get_scheduled_post(post_id)
+    assert moved is True
+    assert post is not None
+    assert post.chat_id == other_chat_id
+    # Untouched fields survive a move.
+    assert post.scheduled_at_utc == scheduled_at_utc
+    assert post.text == "Editable post"
+
+
+@pytest.mark.asyncio
+async def test_update_scheduled_post_moves_channel_together_with_content(store: StateStore) -> None:
+    other_chat_id = -2003
+    await store.upsert_destination(other_chat_id, "channel", "Second", None, "administrator", True)
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Before",
+        entities_json=None,
+    )
+
+    updated = await store.update_scheduled_post(
+        post_id,
+        USER_ID,
+        {"chat_id": other_chat_id, "kind": "text", "text": "After", "entities_json": None},
+    )
+
+    post = await store.get_scheduled_post(post_id)
+    assert updated is True
+    assert post is not None
+    assert (post.chat_id, post.text) == (other_chat_id, "After")
+
+
+@pytest.mark.asyncio
 async def test_update_scheduled_post_rolls_back_media_replacement_on_error(store: StateStore) -> None:
     scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
     original_media = [

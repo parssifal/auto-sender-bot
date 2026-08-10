@@ -766,3 +766,231 @@ async def test_media_upload_over_cap_returns_413(store, compose_bot):
 async def test_media_upload_without_bot_returns_503(server):
     status, body = await _upload(server, USER_A, data=b"x", content_type="image/jpeg")
     assert status == 503
+
+
+# --- Task: edit an existing post from the Mini App ---
+
+
+async def _edit(server, user_id: int, post_id: str, **body):
+    payload = {"chat_id": CHAT_A, "text": "hello", "local_datetime": _local_dt(7200), **body}
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/my/post/{post_id}"),
+                          headers={"Authorization": _init_data(user_id)},
+                          json=payload) as r:
+            return r.status, await r.json()
+
+
+@pytest.mark.asyncio
+async def test_edit_post_requires_auth(server_compose, store):
+    post_id = await _mk_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.post(server_compose.url(f"/api/my/post/{post_id}"), json={}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_edit_post_rewrites_text_and_time(server_compose, store):
+    post_id = await _mk_post(store, USER_A)
+    when = _local_dt(9000)
+    status, body = await _edit(server_compose, USER_A, post_id, text="rewritten", local_datetime=when)
+    assert (status, body["ok"]) == (200, True)
+    post = await store.get_scheduled_post(post_id)
+    assert post.text == "rewritten"
+    assert post.scheduled_at_utc == body["scheduled_at_utc"]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_moves_to_another_linked_channel(server_compose, store):
+    chat_b = -3009
+    await store.upsert_destination(chat_b, "channel", "Channel B", None, "administrator", True)
+    await store.link_user_destination(USER_A, chat_b, "link")
+    post_id = await _mk_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, chat_id=chat_b)
+    assert status == 200
+    post = await store.get_scheduled_post(post_id)
+    assert post.chat_id == chat_b
+
+
+@pytest.mark.asyncio
+async def test_edit_post_rejects_unlinked_channel(server_compose, store):
+    await store.upsert_destination(-3010, "channel", "Foreign", None, "administrator", True)
+    post_id = await _mk_post(store, USER_A)
+    status, body = await _edit(server_compose, USER_A, post_id, chat_id=-3010)
+    assert (status, body["error"]) == (404, "not_found")
+    post = await store.get_scheduled_post(post_id)
+    assert post.chat_id == CHAT_A
+
+
+@pytest.mark.asyncio
+async def test_edit_post_of_another_user_is_not_found(server_compose, store):
+    post_id = await _mk_post(store, USER_B)
+    status, body = await _edit(server_compose, USER_A, post_id, text="stolen")
+    assert (status, body["error"]) == (404, "not_found")
+    post = await store.get_scheduled_post(post_id)
+    assert post.text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_edit_missing_post_is_not_found(server_compose):
+    status, body = await _edit(server_compose, USER_A, "nope")
+    assert (status, body["error"]) == (404, "not_found")
+
+
+@pytest.mark.asyncio
+async def test_edit_post_keeps_existing_media_by_index(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="look",
+                            media=[{"keep": 0}, {"keep": 1}])
+    assert status == 200
+    assert await store.get_post_media(post_id) == [
+        {"type": "photo", "file_id": "FID0"},
+        {"type": "video", "file_id": "FID1"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_reorders_existing_media(server_compose, store):
+    """Array order is the new order; the indices still point at the old one."""
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="look",
+                            media=[{"keep": 1}, {"keep": 0}])
+    assert status == 200
+    assert await store.get_post_media(post_id) == [
+        {"type": "video", "file_id": "FID1"},
+        {"type": "photo", "file_id": "FID0"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_drops_media(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="look", media=[{"keep": 1}])
+    assert status == 200
+    assert await store.get_post_media(post_id) == [{"type": "video", "file_id": "FID1"}]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_appends_newly_uploaded_media(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="look",
+                            media=[{"keep": 0}, {"type": "photo", "file_id": "NEW"}])
+    assert status == 200
+    assert await store.get_post_media(post_id) == [
+        {"type": "photo", "file_id": "FID0"},
+        {"type": "photo", "file_id": "NEW"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_rejects_keep_index_out_of_range(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, body = await _edit(server_compose, USER_A, post_id, text="look", media=[{"keep": 7}])
+    assert (status, body["error"]) == (400, "bad_request")
+    assert len(await store.get_post_media(post_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_post_rejects_keep_marker(server_compose):
+    """Nothing exists to keep on the create route — a keep marker is a client bug."""
+    status, body = await _create(server_compose, USER_A, media=[{"keep": 0}])
+    assert (status, body["error"]) == (400, "bad_request")
+
+
+@pytest.mark.asyncio
+async def test_edit_post_dropping_all_media_turns_it_into_text(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="just words", media=[])
+    assert status == 200
+    post = await store.get_scheduled_post(post_id)
+    assert (post.kind, post.text, post.caption) == ("text", "just words", None)
+    assert await store.get_post_media(post_id) == []
+
+
+@pytest.mark.asyncio
+async def test_edit_post_adding_media_turns_text_into_media(server_compose, store):
+    post_id = await _mk_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="now with art",
+                            media=[{"type": "photo", "file_id": "NEW"}], caption_above=True)
+    assert status == 200
+    post = await store.get_scheduled_post(post_id)
+    assert (post.kind, post.caption, post.text) == ("media", "now with art", None)
+    assert bool(post.caption_above) is True
+    assert await store.get_post_media(post_id) == [{"type": "photo", "file_id": "NEW"}]
+
+
+@pytest.mark.asyncio
+async def test_edit_post_keeps_formatting_when_text_is_untouched(server_compose, store):
+    """Editing only the media must not strip entities the bot flow put there."""
+    post_id = await _mk_media_post(store, USER_A)
+    before = await store.get_scheduled_post(post_id)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="look", media=[{"keep": 0}])
+    assert status == 200
+    post = await store.get_scheduled_post(post_id)
+    assert post.caption_entities_json == before.caption_entities_json
+
+
+@pytest.mark.asyncio
+async def test_edit_post_drops_formatting_when_text_changes(server_compose, store):
+    post_id = await _mk_media_post(store, USER_A)
+    status, _ = await _edit(server_compose, USER_A, post_id, text="new words", media=[{"keep": 0}])
+    assert status == 200
+    post = await store.get_scheduled_post(post_id)
+    assert post.caption_entities_json is None
+
+
+@pytest.mark.asyncio
+async def test_edit_recurring_instance_is_not_found(server_compose, store):
+    """Recurring instances are owned by their series, not editable one by one."""
+    _, post_id = await store.create_recurring_series(
+        user_id=USER_A, chat_id=CHAT_A, interval_type="daily",
+        time_of_day_minutes=540, timezone="UTC", start_at_utc=int(time.time()) + 3600,
+        kind="text", text="series post", entities_json=None,
+    )
+    status, body = await _edit(server_compose, USER_A, post_id, text="nope")
+    assert (status, body["error"]) == (404, "not_found")
+
+
+@pytest.mark.asyncio
+async def test_edit_post_rejects_empty_content(server_compose, store):
+    post_id = await _mk_post(store, USER_A)
+    status, body = await _edit(server_compose, USER_A, post_id, text="   ", media=[])
+    assert (status, body["error"]) == (400, "empty_text")
+
+
+@pytest.mark.asyncio
+async def test_edit_post_rejects_past_time(server_compose, store):
+    post_id = await _mk_post(store, USER_A)
+    status, body = await _edit(server_compose, USER_A, post_id, local_datetime=_local_dt(-3600))
+    assert status == 400
+    assert body["error"].startswith("datetime_")
+
+
+@pytest.mark.asyncio
+async def test_edit_post_blocked_when_bot_cannot_post(store):
+    bot = _ComposeBot(bot_can_post=False)
+    srv = await start_webapp_server(
+        host="127.0.0.1", port=0, store=store, bot_token=TOKEN, admin_ids=(999,), bot=bot,
+    )
+    post_id = await _mk_post(store, USER_A)
+    try:
+        status, body = await _edit(srv, USER_A, post_id, text="rewritten")
+    finally:
+        await srv.close()
+    assert status == 400
+    assert body["error"].startswith("rights_")
+    post = await store.get_scheduled_post(post_id)
+    assert post.text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_post_detail_exposes_fields_the_editor_prefills(server_with_bot, store):
+    post_id = await _mk_media_post(store, USER_A)
+    async with ClientSession() as s:
+        async with s.get(server_with_bot.url(f"/api/my/post/{post_id}"),
+                         headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert body["chat_id"] == CHAT_A
+    assert body["caption_above"] is False
+    # file_ids stay server-side: the editor refers to media by index instead.
+    assert "FID0" not in json.dumps(body)

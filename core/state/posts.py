@@ -205,6 +205,7 @@ class PostsMixin:
     def _editable_post_update_keys() -> set[str]:
         return {
             "scheduled_at_utc",
+            "chat_id",
             "kind",
             "text",
             "entities_json",
@@ -289,6 +290,7 @@ class PostsMixin:
             current_post = self._row_to_post(row)
 
             next_scheduled_at_utc = int(updates.get("scheduled_at_utc", current_post.scheduled_at_utc))
+            next_chat_id = int(updates.get("chat_id", current_post.chat_id))
 
             if content_update_requested:
                 next_kind = str(updates.get("kind", current_post.kind))
@@ -349,6 +351,7 @@ class PostsMixin:
                     """
                     UPDATE scheduled_posts
                     SET scheduled_at_utc=?,
+                        chat_id=?,
                         kind=?,
                         text=?,
                         entities_json=?,
@@ -359,6 +362,7 @@ class PostsMixin:
                     """,
                     (
                         next_scheduled_at_utc,
+                        next_chat_id,
                         next_kind,
                         normalized_text,
                         normalized_entities,
@@ -382,10 +386,11 @@ class PostsMixin:
                 cur = await self._conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET scheduled_at_utc=?
+                    SET scheduled_at_utc=?,
+                        chat_id=?
                     WHERE id=?
                     """,
-                    (next_scheduled_at_utc, post_id),
+                    (next_scheduled_at_utc, next_chat_id, post_id),
                 )
                 if cur.rowcount != 1:
                     await self._conn.rollback()

@@ -167,6 +167,9 @@
   .film.pick .frame{width:96px; aspect-ratio:1; border-radius:12px}
   .frame .pin{position:absolute; right:5px; top:5px; width:24px; height:24px; border-radius:8px; border:0; cursor:pointer;
     background:rgba(0,0,0,.55); color:#fff; font-size:13px; line-height:1; display:grid; place-items:center}
+  .frame .pin.mv{top:auto; bottom:5px; width:22px; height:22px; font-size:11px}
+  .frame .pin.mv.l{right:auto; left:5px}
+  .frame .pin.mv[disabled]{opacity:.3}
   #c-add{margin-bottom:14px}
   #c-add[disabled]{opacity:.5}
   .check{display:flex; align-items:center; gap:9px; margin-bottom:14px; font-size:13px; font-weight:700; color:var(--muted); cursor:pointer}
@@ -289,6 +292,7 @@
     <div class="pv-text" id="pv-text"></div>
     <div class="actions">
       <button class="act" id="pv-close">Закрыть</button>
+      <button class="act primary" id="pv-edit">Изменить</button>
     </div>
   </div>
 </div>
@@ -308,7 +312,7 @@ const I18N = {
     title:"Мои посты", sub:"Очередь постов", queue:"Очередь отправки", recurring:"По расписанию", admin_btn:"Админ-панель",
     hero_eyebrow:"Ближайший вылет",
     empty_q:"Нет запланированных постов", empty_r:"Нет повторяющихся",
-    resched:"Перенести", cancel:"Отменить", cancel_series:"Отменить серию",
+    resched:"Перенести", cancel:"Отменить", cancel_series:"Отменить серию", edit:"Изменить",
     kind_text:"Текст", kind_media:n=>`Медиа × ${n}`, next:"Следующий вылет",
     today:"Сегодня", tomorrow:"Завтра", in_days:n=>`через ${n} ${plural(n,["день","дня","дней"])}`,
     m_title:"Перенести пост", m_date:"Дата", m_time:"Время", m_cancel:"Отмена", m_save:"Сохранить",
@@ -323,12 +327,14 @@ const I18N = {
     c_loading:"Загрузка каналов…", c_no_dest:"Нет доступных каналов", c_no_rights:"нет прав",
     c_pick_dest:"Выберите канал", c_need_content:"Добавьте текст или медиа",
     c_max_media:"Не больше 10 файлов", c_uploading:"Загрузка файла…",
+    c_edit:"Редактировать пост", c_update:"Сохранить",
+    c_left:"Левее", c_right:"Правее", c_remove:"Убрать",
   },
   en: {
     title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
     hero_eyebrow:"Next dispatch",
     empty_q:"No scheduled posts", empty_r:"No recurring patterns",
-    resched:"Reschedule", cancel:"Cancel", cancel_series:"Cancel series",
+    resched:"Reschedule", cancel:"Cancel", cancel_series:"Cancel series", edit:"Edit",
     kind_text:"Text", kind_media:n=>`Media × ${n}`, next:"Next dispatch",
     today:"Today", tomorrow:"Tomorrow", in_days:n=>`in ${n} ${plural(n,["day","days"])}`,
     m_title:"Reschedule post", m_date:"Date", m_time:"Time", m_cancel:"Cancel", m_save:"Save",
@@ -343,6 +349,8 @@ const I18N = {
     c_loading:"Loading channels…", c_no_dest:"No channels available", c_no_rights:"no rights",
     c_pick_dest:"Pick a channel", c_need_content:"Add text or media",
     c_max_media:"Up to 10 files", c_uploading:"Uploading…",
+    c_edit:"Edit post", c_update:"Save",
+    c_left:"Move left", c_right:"Move right", c_remove:"Remove",
   },
 };
 // Server error keys → readable text, shared by every modal.
@@ -491,6 +499,7 @@ function applyStaticLabels(){
   document.getElementById("m-cancel").textContent = t("m_cancel");
   document.getElementById("m-save").textContent = t("m_save");
   document.getElementById("pv-close").textContent = t("close");
+  document.getElementById("pv-edit").textContent = t("edit");
   document.getElementById("fab").setAttribute("aria-label", t("c_new"));
   document.getElementById("c-title").textContent = t("c_new");
   document.getElementById("c-dest-l").textContent = t("c_dest");
@@ -523,6 +532,7 @@ function heroHtml(p){
     </div>
     <div class="actions">
       <button class="act primary" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
+      <button class="act" data-act="edit" data-id="${p.id}">${t("edit")}</button>
       <button class="act danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
     </div>
   </div>`;
@@ -560,6 +570,7 @@ function timelineItemHtml(p){
       <div class="item-meta">${kind}${p.preview?" · "+escapeHtml(p.preview):""}</div>
       <div class="item-actions">
         <button class="tinybtn" data-act="resched" data-id="${p.id}" data-when="${p.scheduled_at_utc}">${t("resched")}</button>
+        <button class="tinybtn" data-act="edit" data-id="${p.id}">${t("edit")}</button>
         <button class="tinybtn danger" data-act="cancel" data-id="${p.id}">${t("cancel")}</button>
       </div>
     </div>
@@ -669,28 +680,48 @@ document.getElementById("m-save").addEventListener("click", async ()=>{
   }catch(e){ errEl.textContent = errText(e.message); }
 });
 
-// Compose — a new one-off post
+// Compose — writes a one-off post, new or existing
 const compose = document.getElementById("compose");
 const cErr = document.getElementById("c-err");
-let composeMedia = [];   // [{type, file_id, url}] — url is a local preview only
+// [{type, url, file_id?, keep?}] — a freshly uploaded item carries a file_id,
+// one already on the post carries its index instead, so Telegram file_ids never
+// reach the browser. url is a local preview only.
+let composeMedia = [];
+let composeEditId = null;   // null = new post
 
 function releaseComposeMedia(){
   for(const m of composeMedia) if(m.url) URL.revokeObjectURL(m.url);
   composeMedia = [];
 }
+// A post edited here can carry media the bot flow accepts but this sheet cannot
+// upload (documents, audio) — they are shown as-is and kept on save.
+function composeTile(m){
+  if(m.type === "photo") return `<img${m.url?` src="${m.url}"`:""}>`;
+  const isVideo = m.type === "video" || m.type === "animation";
+  return `<span class="tlabel">${isVideo ? t("kind_video") : t("kind_doc")}</span>`
+    + `<svg class="tico" viewBox="0 0 24 24" fill="none">${isVideo ? SVG_VIDEO : SVG_DOC}</svg>`;
+}
 function renderComposeMedia(){
   const el = document.getElementById("c-media");
+  const last = composeMedia.length - 1;
   el.innerHTML = composeMedia.map((m,i)=>`<div class="frame">${
-    m.url ? `<img src="${m.url}">`
-          : `<span class="tlabel">${t("kind_video")}</span><svg class="tico" viewBox="0 0 24 24" fill="none">${SVG_VIDEO}</svg>`
-  }<button class="pin" data-rm="${i}">✕</button></div>`).join("");
+    composeTile(m)
+  }<button class="pin" data-rm="${i}" aria-label="${t("c_remove")}">✕</button>${
+    last > 0
+      ? `<button class="pin mv l" data-mv="${i}" data-dir="-1" aria-label="${t("c_left")}"${i===0?" disabled":""}>◀</button>`
+        + `<button class="pin mv r" data-mv="${i}" data-dir="1" aria-label="${t("c_right")}"${i===last?" disabled":""}>▶</button>`
+      : ""
+  }</div>`).join("");
   el.hidden = !composeMedia.length;
   document.getElementById("c-above-row").hidden = !composeMedia.length;
 }
 
-async function openCompose(){
+async function openCompose(postId){
+  composeEditId = postId || null;
   releaseComposeMedia(); renderComposeMedia();
   cErr.textContent = "";
+  document.getElementById("c-title").textContent = t(composeEditId ? "c_edit" : "c_new");
+  document.getElementById("c-save").textContent = t(composeEditId ? "c_update" : "c_save");
   document.getElementById("c-text").value = "";
   document.getElementById("c-above").checked = false;
   const start = localInputParts(Math.floor(Date.now()/1000) + 3600);
@@ -705,11 +736,47 @@ async function openCompose(){
       ? d.destinations.map(x=>`<option value="${x.chat_id}"${x.can_post?"":" disabled"}>${
           escapeHtml(x.title)}${x.can_post?"":" — "+t("c_no_rights")}</option>`).join("")
       : `<option value="">${t("c_no_dest")}</option>`;
-  }catch(e){ sel.innerHTML = ""; cErr.textContent = errText(e.message); }
+  }catch(e){ sel.innerHTML = ""; cErr.textContent = errText(e.message); return; }
+  if(composeEditId) await prefillCompose(composeEditId);
 }
-function closeCompose(){ compose.classList.remove("open"); releaseComposeMedia(); }
 
-document.getElementById("fab").addEventListener("click", openCompose);
+// Load an existing post into the sheet. Runs after the destination list so the
+// post's own channel can be preselected.
+async function prefillCompose(id){
+  let d;
+  try{ d = await api(`/api/my/post/${id}`); }
+  catch(e){ cErr.textContent = errText(e.message); return; }
+  if(composeEditId !== id) return;   // sheet was closed or reused while loading
+  const sel = document.getElementById("c-dest");
+  // A channel the bot lost rights to is rendered disabled; still select it, so
+  // the user sees which one the post targets rather than a silent wrong pick.
+  if([...sel.options].some(o=>o.value === String(d.chat_id))) sel.value = String(d.chat_id);
+  document.getElementById("c-text").value = (d.kind === "media" ? d.caption : d.text) || "";
+  document.getElementById("c-above").checked = !!d.caption_above;
+  const when = localInputParts(d.scheduled_at_utc);
+  document.getElementById("c-date").value = when.date;
+  document.getElementById("c-time").value = when.time;
+  composeMedia = (d.media || []).map(m=>({ type:m.type, keep:m.idx, url:null }));
+  renderComposeMedia();
+  for(const m of composeMedia) if(m.type === "photo") loadComposeThumb(id, m);
+}
+
+// Thumbnails for media already on the post come through the same authorised
+// media proxy the preview sheet uses.
+async function loadComposeThumb(postId, m){
+  try{
+    const r = await fetch(`/api/my/post/${postId}/media/${m.keep}`, { headers: AUTH });
+    if(!r.ok) throw new Error(r.status);
+    const url = URL.createObjectURL(await r.blob());
+    if(!composeMedia.includes(m)){ URL.revokeObjectURL(url); return; }
+    m.url = url;
+    renderComposeMedia();
+  }catch{ /* the tile stays blank; the item is still kept on save */ }
+}
+
+function closeCompose(){ compose.classList.remove("open"); composeEditId = null; releaseComposeMedia(); }
+
+document.getElementById("fab").addEventListener("click", ()=> openCompose());
 document.getElementById("c-cancel").addEventListener("click", closeCompose);
 compose.addEventListener("click", (e)=>{ if(e.target === compose) closeCompose(); });
 document.getElementById("c-add").addEventListener("click", ()=> document.getElementById("c-file").click());
@@ -740,6 +807,14 @@ document.getElementById("c-file").addEventListener("change", async (e)=>{
 });
 
 document.getElementById("c-media").addEventListener("click", (e)=>{
+  const mv = e.target.closest("button[data-mv]");
+  if(mv){
+    const i = Number(mv.dataset.mv), j = i + Number(mv.dataset.dir);
+    if(j < 0 || j >= composeMedia.length) return;
+    [composeMedia[i], composeMedia[j]] = [composeMedia[j], composeMedia[i]];
+    renderComposeMedia();
+    return;
+  }
   const btn = e.target.closest("button[data-rm]");
   if(!btn) return;
   const [removed] = composeMedia.splice(Number(btn.dataset.rm), 1);
@@ -758,13 +833,17 @@ document.getElementById("c-save").addEventListener("click", async ()=>{
   const btn = document.getElementById("c-save");
   btn.disabled = true;
   try{
-    await api("/api/my/post", {
+    // Both routes take the post's whole desired state; editing differs only in
+    // that untouched media travel back as their position on the post.
+    await api(composeEditId ? `/api/my/post/${composeEditId}` : "/api/my/post", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         chat_id: Number(chatId),
         text,
         local_datetime: composeLocal(date,time),
-        media: composeMedia.map(m=>({ type:m.type, file_id:m.file_id })),
+        media: composeMedia.map(m=> m.keep === undefined
+          ? { type:m.type, file_id:m.file_id }
+          : { keep:m.keep }),
         caption_above: document.getElementById("c-above").checked,
       }),
     });
@@ -777,6 +856,7 @@ document.getElementById("c-save").addEventListener("click", async ()=>{
 // Post preview
 const detail = document.getElementById("detail");
 let objectUrls = [];
+let detailId = null;
 function safeUrl(u){ return /^(https?:|tg:)/i.test(u||"") ? u : "#"; }
 function entityTag(e){
   switch(e.type){
@@ -826,6 +906,7 @@ async function loadPhoto(img, postId, idx){
   }catch{ img.parentElement.textContent = "—"; }
 }
 async function openDetail(id, title){
+  detailId = id;
   document.getElementById("pv-title").textContent = title || "";
   document.getElementById("pv-when").textContent = "";
   const mediaEl = document.getElementById("pv-media");
@@ -860,10 +941,16 @@ async function openDetail(id, title){
 }
 function closeDetail(){
   detail.classList.remove("open");
+  detailId = null;
   for(const u of objectUrls) URL.revokeObjectURL(u);
   objectUrls = [];
 }
 document.getElementById("pv-close").addEventListener("click", closeDetail);
+document.getElementById("pv-edit").addEventListener("click", ()=>{
+  const id = detailId;
+  closeDetail();
+  if(id) openCompose(id);
+});
 detail.addEventListener("click", (e)=>{ if(e.target === detail) closeDetail(); });
 
 document.addEventListener("click", async (e)=>{
@@ -876,6 +963,7 @@ document.addEventListener("click", async (e)=>{
   const id = btn.dataset.id, act = btn.dataset.act;
   try{
     if(act==="resched"){ openModal(id, btn.dataset.when); return; }
+    if(act==="edit"){ openCompose(id); return; }
     if(act==="cancel"){
       if(!confirm(t("confirm_cancel"))) return;
       await api(`/api/my/post/${id}/cancel`, { method:"POST" });
