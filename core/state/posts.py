@@ -32,19 +32,33 @@ class PostsMixin:
         scheduled_at_utc: int,
         text: str,
         entities_json: str | None,
+        request_id: str | None = None,
     ) -> str:
+        if request_id:
+            existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
+            if existing is not None:
+                return existing
         await self._guard_active_posts_cap(user_id)
         post_id = uuid.uuid4().hex
-        await self._insert_scheduled_text_post(
-            post_id=post_id,
-            user_id=user_id,
-            chat_id=chat_id,
-            scheduled_at_utc=scheduled_at_utc,
-            text=text,
-            entities_json=entities_json,
-            created_at=int(time.time()),
-        )
-        await self._conn.commit()
+        try:
+            await self._insert_scheduled_text_post(
+                post_id=post_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                scheduled_at_utc=scheduled_at_utc,
+                text=text,
+                entities_json=entities_json,
+                created_at=int(time.time()),
+                request_id=request_id,
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            if request_id:
+                existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
+                if existing is not None:
+                    return existing
+            raise
         return post_id
 
     @locked_write
@@ -57,7 +71,12 @@ class PostsMixin:
         caption_entities_json: str | None,
         caption_above: bool | None,
         media_items: list[dict[str, str]],
+        request_id: str | None = None,
     ) -> str:
+        if request_id:
+            existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
+            if existing is not None:
+                return existing
         await self._guard_active_posts_cap(user_id)
         post_id = uuid.uuid4().hex
         await self._conn.execute("BEGIN IMMEDIATE")
@@ -72,12 +91,24 @@ class PostsMixin:
                 caption_above=caption_above,
                 media_items=media_items,
                 created_at=int(time.time()),
+                request_id=request_id,
             )
             await self._conn.commit()
         except Exception:
             await self._conn.rollback()
+            if request_id:
+                existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
+                if existing is not None:
+                    return existing
             raise
         return post_id
+
+    async def _get_post_id_by_request_id(self, *, user_id: int, request_id: str) -> str | None:
+        row = await self._execute_fetchone(
+            "SELECT id FROM scheduled_posts WHERE user_id=? AND request_id=?",
+            (user_id, request_id),
+        )
+        return None if row is None else str(row["id"])
 
     @locked_write
     async def create_broadcast_posts(
@@ -152,15 +183,16 @@ class PostsMixin:
         text: str,
         entities_json: str | None,
         created_at: int,
+        request_id: str | None = None,
     ) -> None:
         await self._conn.execute(
             """
             INSERT INTO scheduled_posts(
                 id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
-                attempts, next_retry_at_utc, created_at
-            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?)
+                attempts, next_retry_at_utc, created_at, request_id
+            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?, ?)
             """,
-            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, created_at),
+            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, created_at, request_id),
         )
 
     async def _insert_scheduled_media_post(
@@ -175,14 +207,15 @@ class PostsMixin:
         caption_above: bool | None,
         media_items: list[dict[str, str]],
         created_at: int,
+        request_id: str | None = None,
     ) -> None:
         await self._conn.execute(
             """
             INSERT INTO scheduled_posts(
                 id, user_id, chat_id, scheduled_at_utc, status, kind,
                 caption, caption_entities_json, caption_above,
-                attempts, next_retry_at_utc, created_at
-            ) VALUES(?, ?, ?, ?, 'pending', 'media', ?, ?, ?, 0, NULL, ?)
+                attempts, next_retry_at_utc, created_at, request_id
+            ) VALUES(?, ?, ?, ?, 'pending', 'media', ?, ?, ?, 0, NULL, ?, ?)
             """,
             (
                 post_id,
@@ -193,6 +226,7 @@ class PostsMixin:
                 caption_entities_json,
                 None if caption_above is None else int(caption_above),
                 created_at,
+                request_id,
             ),
         )
         for idx, item in enumerate(media_items):
@@ -238,6 +272,19 @@ class PostsMixin:
               AND sp.status='pending'
               AND ri.post_id IS NULL
             ORDER BY sp.scheduled_at_utc ASC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        )
+        return [self._row_to_post(r) for r in rows]
+
+    async def list_failed_posts(self, user_id: int, limit: int = 10, offset: int = 0) -> list["ScheduledPostRow"]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT *
+            FROM scheduled_posts
+            WHERE user_id=? AND status='failed'
+            ORDER BY scheduled_at_utc DESC
             LIMIT ? OFFSET ?
             """,
             (user_id, limit, offset),

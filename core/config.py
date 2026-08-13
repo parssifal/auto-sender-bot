@@ -14,6 +14,7 @@ class Config:
     healthcheck_port: int = 8080
     log_level: str = "INFO"
     scheduler_poll_seconds: float = 2.0
+    scheduler_stale_seconds: int = 300
     telegram_polling_timeout_seconds: int = 30
     telegram_http_timeout_seconds: float = 75.0
     admin_ids: tuple[int, ...] = ()
@@ -87,6 +88,7 @@ def load_config() -> Config:
 
     healthcheck_port = _env_num("HEALTHCHECK_PORT", 8080, int)
     scheduler_poll_seconds = _env_num("SCHEDULER_POLL_SECONDS", 2.0, float)
+    scheduler_stale_seconds = _env_num("SCHEDULER_STALE_SECONDS", 300, int)
     telegram_polling_timeout_seconds = _env_num("TELEGRAM_POLLING_TIMEOUT_SECONDS", 30, int)
     telegram_http_timeout_seconds = _env_num("TELEGRAM_HTTP_TIMEOUT_SECONDS", 75.0, float)
 
@@ -116,6 +118,7 @@ def load_config() -> Config:
         healthcheck_port=healthcheck_port,
         log_level=log_level,
         scheduler_poll_seconds=scheduler_poll_seconds,
+        scheduler_stale_seconds=scheduler_stale_seconds,
         telegram_polling_timeout_seconds=telegram_polling_timeout_seconds,
         telegram_http_timeout_seconds=telegram_http_timeout_seconds,
         admin_ids=tuple(admin_ids),

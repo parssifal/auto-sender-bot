@@ -96,6 +96,32 @@ def _destinations_kb(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _destinations_manage_kb(
+    destinations: list[Destination],
+    page: int,
+    has_more: bool,
+    lang: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for destination in destinations:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=tr(lang, "btn_unlink_destination", label=_short_id(str(destination.chat_id))),
+                    callback_data=f"udunlink:{page}:{destination.chat_id}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"udpage:{page - 1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"udpage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _toggle_selected_chat_ids(selected_chat_ids: list[int], chat_id: int, enabled: bool) -> list[int]:
     selected = set(selected_chat_ids)
     if enabled:
@@ -209,6 +235,17 @@ def _queue_paged_kb(posts: list[dict[str, str]], page: int, has_more: bool, lang
     if nav:
         rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _failed_paged_kb(*, page: int, has_more: bool) -> InlineKeyboardMarkup | None:
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"fpage:{page - 1}"))
+    if has_more:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"fpage:{page + 1}"))
+    if not nav:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[nav])
 
 
 def _preview_nav_kb(post_ids: list[str], index: int) -> InlineKeyboardMarkup | None:

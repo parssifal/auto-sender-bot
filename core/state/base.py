@@ -52,6 +52,7 @@ class StateStoreBase:
     async def migrate(self) -> None:
         await run_migrations(self._conn)
         await self._reconcile_user_columns()
+        await self._reconcile_scheduled_post_columns()
         await self._requeue_stuck_sending()
 
     async def _requeue_stuck_sending(self) -> None:
@@ -75,3 +76,18 @@ class StateStoreBase:
             await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
         await self._conn.commit()
 
+    async def _reconcile_scheduled_post_columns(self) -> None:
+        # Legacy-DB safety net: baseline stamps existing tables without running
+        # DDL, so later columns must be reconciled explicitly.
+        post_columns = await self._conn.execute_fetchall("PRAGMA table_info(scheduled_posts)")
+        post_column_names = {str(row["name"]) for row in post_columns}
+        if "request_id" not in post_column_names:
+            await self._conn.execute("ALTER TABLE scheduled_posts ADD COLUMN request_id TEXT NULL")
+        await self._conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_user_request_id
+            ON scheduled_posts(user_id, request_id)
+            WHERE request_id IS NOT NULL
+            """
+        )
+        await self._conn.commit()

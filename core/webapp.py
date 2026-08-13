@@ -658,6 +658,7 @@ async def start_webapp_server(
                 "media_items": media_items,
                 "caption_above": bool(payload.get("caption_above")),
                 "scheduled_at_utc": parsed.utc_epoch,
+                "request_id": str(payload.get("request_id") or "").strip()[:128] or None,
             },
             None,
         )
@@ -681,6 +682,7 @@ async def start_webapp_server(
                     caption_entities_json=None,
                     caption_above=data["caption_above"],
                     media_items=data["media_items"],
+                    request_id=data["request_id"],
                 )
             else:
                 post_id = await store.create_scheduled_text_post(
@@ -689,6 +691,7 @@ async def start_webapp_server(
                     scheduled_at_utc=data["scheduled_at_utc"],
                     text=data["text"],
                     entities_json=None,
+                    request_id=data["request_id"],
                 )
         except ResourceLimitError as exc:
             return web.json_response({"error": f"limit_{exc.resource}"}, status=409)

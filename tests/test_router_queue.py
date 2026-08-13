@@ -8,6 +8,7 @@ import pytest_asyncio
 from core.db import open_db
 from core.state import StateStore
 from telegram.handlers.keyboards import _queue_paged_kb, _edit_paged_kb, _delete_paged_kb
+from telegram.handlers.keyboards import _destinations_manage_kb
 
 USER_ID = 1001
 CHAT_ID = -2001
@@ -165,6 +166,30 @@ class TestDeletePagedKb:
         assert "qdelask:post-1" in all_data
 
 
+def test_destinations_manage_callbacks_do_not_reuse_draft_prefix() -> None:
+    from core.state import Destination
+
+    kb = _destinations_manage_kb(
+        [
+            Destination(
+                chat_id=CHAT_ID,
+                type="channel",
+                title="Test channel",
+                username=None,
+                bot_status="administrator",
+                bot_can_post=True,
+            )
+        ],
+        page=0,
+        has_more=True,
+        lang=LANG,
+    )
+
+    callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert f"udunlink:0:{CHAT_ID}" in callbacks
+    assert "udpage:1" in callbacks
+
+
 # ---------------------------------------------------------------------------
 # state.py offset parameter
 # ---------------------------------------------------------------------------
@@ -227,11 +252,14 @@ async def test_list_pending_posts_offset_beyond_end_returns_empty(store: StateSt
 class _FakeMessage:
     def __init__(self) -> None:
         self.reply_markup = None
+        self.text = None
 
     async def answer(self, _text, reply_markup=None):
+        self.text = _text
         self.reply_markup = reply_markup
 
     async def edit_text(self, _text, reply_markup=None):
+        self.text = _text
         self.reply_markup = reply_markup
 
 
@@ -271,6 +299,29 @@ async def test_render_queue_page_excludes_recurring_instances(store: StateStore)
     assert f"qview:{editable_id}" in all_data
     assert f"qcancel:{recurring_id}" not in all_data
     assert f"qview:{recurring_id}" not in all_data
+
+
+@pytest.mark.asyncio
+async def test_render_failed_page_shows_failed_posts(store: StateStore) -> None:
+    from telegram.handlers.queue import _render_failed_page
+
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    post_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Broken",
+        entities_json=None,
+    )
+    assert await store.claim_post_for_sending(post_id=post_id, now_utc=scheduled_at_utc) is True
+    await store.mark_failed(post_id=post_id, error="Bot cannot post")
+
+    msg = _FakeMessage()
+    await _render_failed_page(store, msg, page=0, user_id=USER_ID)
+
+    assert post_id[:8] in msg.text
+    assert "Test channel" in msg.text
+    assert "Bot cannot post" in msg.text
 
 
 @pytest.mark.asyncio

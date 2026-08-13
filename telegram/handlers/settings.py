@@ -3,7 +3,7 @@ from __future__ import annotations
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from core.limits import ResourceLimitError
 from core.state import StateStore
@@ -22,16 +22,61 @@ _TZ_LOCATION_BUTTON_TEXTS = key_values("timezone_location_button")
 def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
     router = Router(name="settings")
 
+    async def _render_destinations(message: Message, *, user_id: int, page: int = 0, edit: bool = False) -> None:
+        lang = await h._user_lang(store, user_id)
+        page_size = 8
+        destinations, page = await h._page_back_to_content(
+            lambda offset: store.list_user_destinations(user_id, offset, page_size + 1),
+            page,
+            page_size,
+        )
+        total = await store.count_user_destinations(user_id)
+        has_more = len(destinations) > page_size
+        destinations = destinations[:page_size]
+        if destinations:
+            lines = []
+            for destination in destinations:
+                username = f" (@{destination.username})" if destination.username else ""
+                lines.append(
+                    tr(
+                        lang,
+                        "destinations_list_item",
+                        title=destination.title,
+                        username=username,
+                        chat_id=destination.chat_id,
+                        status=destination.bot_status,
+                    )
+                )
+            text = tr(lang, "destinations_list", total=total, lines="\n".join(lines))
+            reply_markup = kb._destinations_manage_kb(destinations, page, has_more, lang)
+        else:
+            text = tr(lang, "destinations_empty")
+            reply_markup = None
+        if edit:
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup or await h._main_menu_for(store, user_id))
+
     @router.message(F.text.in_(_MENU_DESTINATIONS_TEXTS))
     @router.message(Command("destinations"))
     async def cmd_destinations(message: Message, state: FSMContext) -> None:
         await store.ensure_user(message.from_user.id)
-        lang = await h._user_lang(store, message.from_user.id)
-        total = await store.count_user_destinations(message.from_user.id)
-        await message.answer(
-            tr(lang, "destinations_info", total=total),
-            reply_markup=await h._main_menu_for(store, message.from_user.id),
-        )
+        await state.clear()
+        await _render_destinations(message, user_id=message.from_user.id)
+
+    @router.callback_query(F.data.startswith("udpage:"))
+    async def cb_destinations_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_destinations(query.message, user_id=query.from_user.id, page=page, edit=True)
+
+    @router.callback_query(F.data.startswith("udunlink:"))
+    async def cb_destination_unlink(query: CallbackQuery) -> None:
+        _, page_raw, chat_id_raw = query.data.split(":", 2)
+        lang = await h._user_lang(store, query.from_user.id)
+        removed = await store.unlink_user_destination(query.from_user.id, int(chat_id_raw))
+        await query.answer(tr(lang, "destination_unlink_ok") if removed else tr(lang, "destination_unlink_missing"))
+        await _render_destinations(query.message, user_id=query.from_user.id, page=int(page_raw), edit=True)
 
     @router.message(F.text.in_(_MENU_TIMEZONE_TEXTS))
     @router.message(Command("timezone"))

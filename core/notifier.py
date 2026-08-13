@@ -70,9 +70,12 @@ async def send_media_post(
         if message_id is not None:
             message_ids.append(int(message_id))
 
-    async def _send_caption_plain() -> int:
+    async def _send_caption_separately() -> int:
         if not caption_text:
             return 0
+        if len(caption_text) <= 4096 and caption_entities:
+            _track(await bot.send_message(chat_id=chat_id, text=caption_text, entities=caption_entities))
+            return 1
         chunks = split_text(caption_text, max_len=4096)
         for chunk in chunks:
             _track(await bot.send_message(chat_id=chat_id, text=chunk))
@@ -80,7 +83,7 @@ async def send_media_post(
 
     messages_sent = 0
     if send_caption_separately and caption_above_value:
-        messages_sent += await _send_caption_plain()
+        messages_sent += await _send_caption_separately()
 
     if len(media_items) == 1:
         item = media_items[0]
@@ -136,6 +139,6 @@ async def send_media_post(
         messages_sent += 1
 
     if send_caption_separately and not caption_above_value:
-        messages_sent += await _send_caption_plain()
+        messages_sent += await _send_caption_separately()
 
     return SendStats(messages_sent=messages_sent, message_ids=tuple(message_ids))

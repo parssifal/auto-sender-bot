@@ -88,6 +88,16 @@ def test_load_config_parses_scheduler_poll(monkeypatch: pytest.MonkeyPatch) -> N
     assert cfg.scheduler_poll_seconds == 1.5
 
 
+def test_load_config_parses_scheduler_stale_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    _disable_dotenv(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("SCHEDULER_STALE_SECONDS", "120")
+
+    cfg = config_module.load_config()
+
+    assert cfg.scheduler_stale_seconds == 120
+
+
 def test_load_config_parses_redis_url(monkeypatch: pytest.MonkeyPatch) -> None:
     _disable_dotenv(monkeypatch)
     monkeypatch.setenv("BOT_TOKEN", "token")

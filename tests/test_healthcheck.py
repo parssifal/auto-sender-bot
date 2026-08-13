@@ -9,6 +9,8 @@ from aiohttp import ClientSession
 
 from core.db import open_db
 from core.healthcheck import collect_health_status, start_healthcheck_server
+from core.scheduler import SchedulerMetrics
+from core.state import StateStore
 
 
 @pytest_asyncio.fixture
@@ -56,3 +58,55 @@ async def test_collect_health_status_reports_unhealthy_scheduler(health_db) -> N
     assert payload["checks"]["db"]["ok"] is True
     assert payload["checks"]["scheduler"]["ok"] is False
     assert payload["checks"]["scheduler"]["detail"] == "finished"
+
+
+@pytest.mark.asyncio
+async def test_collect_health_status_reports_stale_scheduler_tick(health_db) -> None:
+    scheduler_task = asyncio.create_task(asyncio.sleep(60))
+    metrics = SchedulerMetrics(last_tick_finished_at=100, last_tick_started_at=90)
+    try:
+        status, payload = await collect_health_status(
+            health_db,
+            scheduler_task,
+            scheduler_metrics=metrics,
+            scheduler_stale_seconds=30,
+            now=200,
+        )
+    finally:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
+
+    assert status == 503
+    assert payload["status"] == "degraded"
+    assert payload["checks"]["scheduler"]["ok"] is False
+    assert "stale" in payload["checks"]["scheduler"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_collect_health_status_reports_oldest_due_backlog() -> None:
+    conn = await open_db(":memory:")
+    scheduler_task = asyncio.create_task(asyncio.sleep(60))
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await store.ensure_user(1)
+        await store.upsert_destination(-1, "channel", "Due", None, "administrator", True)
+        await store.create_scheduled_text_post(1, -1, 100, "late", None)
+
+        status, payload = await collect_health_status(
+            conn,
+            scheduler_task,
+            scheduler_metrics=SchedulerMetrics(last_tick_finished_at=200),
+            scheduler_stale_seconds=30,
+            now=200,
+        )
+    finally:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
+        await conn.close()
+
+    assert status == 503
+    assert payload["checks"]["oldest_due_post"]["ok"] is False
+    assert payload["checks"]["oldest_due_post"]["age_seconds"] == 100

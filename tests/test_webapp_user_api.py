@@ -563,6 +563,16 @@ async def test_destinations_lists_linked_with_post_flag(server, store):
 
 
 @pytest.mark.asyncio
+async def test_unlink_destination_removes_user_link_only(store):
+    removed = await store.unlink_user_destination(USER_A, CHAT_A)
+
+    assert removed is True
+    assert await store.list_user_destinations(USER_A, 0, 10) == []
+    assert await store.get_destination_title(CHAT_A) == "Channel A"
+    assert [d.chat_id for d in await store.list_user_destinations(USER_B, 0, 10)] == [CHAT_A]
+
+
+@pytest.mark.asyncio
 async def test_create_post_requires_auth(server_compose):
     async with ClientSession() as s:
         async with s.post(server_compose.url("/api/my/post"), json={}) as r:
@@ -580,6 +590,20 @@ async def test_create_text_post_happy(server_compose, store):
     assert row.text == "hello"
     assert row.status == "pending"
     assert row.scheduled_at_utc == body["scheduled_at_utc"]
+
+
+@pytest.mark.asyncio
+async def test_create_text_post_reuses_same_request_id(server_compose, store):
+    request_id = "web-req-1"
+
+    first_status, first_body = await _create(server_compose, USER_A, request_id=request_id)
+    second_status, second_body = await _create(server_compose, USER_A, request_id=request_id)
+
+    assert first_status == 200
+    assert second_status == 200
+    assert second_body["id"] == first_body["id"]
+    posts = await store.list_pending_posts(USER_A, limit=10)
+    assert [post.id for post in posts] == [first_body["id"]]
 
 
 @pytest.mark.asyncio

@@ -714,10 +714,47 @@ async def test_process_due_post_fails_broken_entities_without_retry() -> None:
 
         post = await store.get_scheduled_post(post_id)
         assert post is not None
-        await _process_due_post(bot=FakeBot(), store=store, post=post, now_utc=due_at)
+        bot = FakeBot()
+        await _process_due_post(bot=bot, store=store, post=post, now_utc=due_at)
 
         final = await store.get_scheduled_post(post_id)
         assert final.status == "failed"
         assert final.attempts == 1
+        assert bot.calls[-1][0] == "send_message"
+        assert bot.calls[-1][1]["chat_id"] == USER_ID
+        assert post_id[:8] in bot.calls[-1][1]["text"]
+        assert "Recurring destination" in bot.calls[-1][1]["text"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_dm_error_does_not_break_scheduler() -> None:
+    class DmBlockedBot(FakeBot):
+        async def get_chat_member(self, **kwargs):
+            user_id = kwargs["user_id"]
+            if user_id == BOT_ID:
+                return type("Member", (), {"status": "administrator", "can_post_messages": True})()
+            return type("Member", (), {"status": "member", "can_post_messages": True})()
+
+        async def send_message(self, **kwargs):
+            raise RuntimeError("bot blocked")
+
+    conn = await open_db(":memory:")
+    try:
+        store = StateStore(conn)
+        await store.migrate()
+        await _seed_destination(store)
+        due_at = int(time.time()) - 10
+        post_id = await store.create_scheduled_text_post(USER_ID, CHAT_ID, due_at, "hi", None)
+        post = await store.get_scheduled_post(post_id)
+        assert post is not None
+
+        await _process_due_post(bot=DmBlockedBot(), store=store, post=post, now_utc=due_at)
+
+        final = await store.get_scheduled_post(post_id)
+        assert final is not None
+        assert final.status == "failed"
+        assert final.last_error == "User is not admin anymore"
     finally:
         await conn.close()

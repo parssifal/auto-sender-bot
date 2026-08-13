@@ -93,6 +93,15 @@ class DestinationsMixin:
             )
         return out
 
+    @locked_write
+    async def unlink_user_destination(self, user_id: int, chat_id: int) -> bool:
+        cur = await self._conn.execute(
+            "DELETE FROM user_destinations WHERE user_id=? AND chat_id=?",
+            (user_id, chat_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
     async def get_destination_title(self, chat_id: int) -> str | None:
         row = await self._execute_fetchone(
             "SELECT title FROM destinations WHERE chat_id=?",

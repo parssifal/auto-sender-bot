@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, time as clock_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -38,13 +39,64 @@ def _compute_backoff_seconds(attempt: int) -> int:
 MAX_SEND_ATTEMPTS = 6
 
 
+@dataclass
+class SchedulerMetrics:
+    last_tick_started_at: int | None = None
+    last_tick_finished_at: int | None = None
+    last_error: str | None = None
+    last_due_count: int = 0
+
+
 async def _mark_retry_or_failed(store: StateStore, post: ScheduledPostRow, *, next_retry_at_utc: int, error: str) -> None:
     # post.attempts is the count BEFORE claim_post_for_sending incremented it for this
     # attempt, so the current attempt number (and the DB value now) is post.attempts + 1.
     if post.attempts + 1 >= MAX_SEND_ATTEMPTS:
-        await store.mark_failed(post_id=post.id, error=error)
+        await _mark_failed_and_notify_author(store=store, bot=None, post=post, error=error)
     else:
         await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at_utc, error=error)
+
+
+async def _mark_retry_or_failed_with_bot(
+    store: StateStore,
+    bot: Bot,
+    post: ScheduledPostRow,
+    *,
+    next_retry_at_utc: int,
+    error: str,
+) -> None:
+    if post.attempts + 1 >= MAX_SEND_ATTEMPTS:
+        await _mark_failed_and_notify_author(store=store, bot=bot, post=post, error=error)
+    else:
+        await store.mark_retry(post_id=post.id, next_retry_at_utc=next_retry_at_utc, error=error)
+
+
+def _failure_notice_text(*, post: ScheduledPostRow, destination_title: str, error: str) -> str:
+    return (
+        "Scheduled post failed.\n"
+        f"- id: {post.id[:8]}\n"
+        f"- Destination: {destination_title}\n"
+        f"- Reason: {error}"
+    )
+
+
+async def _mark_failed_and_notify_author(
+    *,
+    store: StateStore,
+    bot: Bot | None,
+    post: ScheduledPostRow,
+    error: str,
+) -> None:
+    await store.mark_failed(post_id=post.id, error=error)
+    if bot is None:
+        return
+    destination = await store.get_destination_title(post.chat_id) or str(post.chat_id)
+    try:
+        await bot.send_message(
+            chat_id=post.user_id,
+            text=_failure_notice_text(post=post, destination_title=destination, error=error),
+        )
+    except Exception:
+        logger.info("Could not DM failure notice for post %s to user %s", post.id, post.user_id)
 
 
 async def _user_is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -162,15 +214,25 @@ async def scheduler_loop(
     store: StateStore,
     stop_event: asyncio.Event,
     poll_interval_seconds: float = 2.0,
+    metrics: SchedulerMetrics | None = None,
 ) -> None:
     logger.info("Scheduler started (poll_interval=%.2fs)", poll_interval_seconds)
     while not stop_event.is_set():
         now_utc = int(time.time())
+        if metrics is not None:
+            metrics.last_tick_started_at = now_utc
         try:
             due = await store.list_due_posts(now_utc=now_utc, limit=10)
+            if metrics is not None:
+                metrics.last_due_count = len(due)
             for post in due:
                 await _process_due_post(bot=bot, store=store, post=post, now_utc=now_utc)
+            if metrics is not None:
+                metrics.last_tick_finished_at = int(time.time())
+                metrics.last_error = None
         except Exception:
+            if metrics is not None:
+                metrics.last_error = "Scheduler tick failed"
             logger.exception("Scheduler tick failed")
 
         try:
@@ -191,11 +253,21 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
     sent_at_utc = int(time.time())
     try:
         if not await _user_is_admin(bot, chat_id=post.chat_id, user_id=post.user_id):
-            await store.mark_failed(post_id=post.id, error="User is not admin anymore")
+            await _mark_failed_and_notify_author(
+                store=store,
+                bot=bot,
+                post=post,
+                error="User is not admin anymore",
+            )
             logger.warning("Post %s failed: user %s is not admin in chat %s", post.id, post.user_id, post.chat_id)
             return
         if not await _bot_can_post(bot, chat_id=post.chat_id):
-            await store.mark_failed(post_id=post.id, error="Bot cannot post to destination")
+            await _mark_failed_and_notify_author(
+                store=store,
+                bot=bot,
+                post=post,
+                error="Bot cannot post to destination",
+            )
             logger.warning("Post %s failed: bot cannot post to chat %s", post.id, post.chat_id)
             return
 
@@ -218,24 +290,35 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
         logger.info("Sent post %s to chat %s", post.id, post.chat_id)
     except TelegramRetryAfter as exc:
         next_retry_at = int(time.time()) + int(getattr(exc, "retry_after", 1)) + 1
-        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=f"retry_after: {exc}")
+        await _mark_retry_or_failed_with_bot(
+            store,
+            bot,
+            post,
+            next_retry_at_utc=next_retry_at,
+            error=f"retry_after: {exc}",
+        )
         logger.warning("RetryAfter for post %s: %s", post.id, exc)
     except (TelegramNetworkError,) as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed_with_bot(store, bot, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.warning("Network error for post %s: %s", post.id, exc)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        await store.mark_failed(post_id=post.id, error=str(exc))
+        await _mark_failed_and_notify_author(store=store, bot=bot, post=post, error=str(exc))
         logger.warning("Permanent Telegram error for post %s: %s", post.id, exc)
     except TelegramAPIError as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed_with_bot(store, bot, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.warning("Telegram API error for post %s: %s", post.id, exc)
     except InvalidEntitiesError as exc:
         # Deterministic content error: retrying can never fix it, so fail immediately.
-        await store.mark_failed(post_id=post.id, error=f"invalid entities: {exc}")
+        await _mark_failed_and_notify_author(
+            store=store,
+            bot=bot,
+            post=post,
+            error=f"invalid entities: {exc}",
+        )
         logger.warning("Post %s failed: invalid entities_json - %s", post.id, exc)
     except Exception as exc:
         next_retry_at = int(time.time()) + _compute_backoff_seconds(post.attempts + 1)
-        await _mark_retry_or_failed(store, post, next_retry_at_utc=next_retry_at, error=str(exc))
+        await _mark_retry_or_failed_with_bot(store, bot, post, next_retry_at_utc=next_retry_at, error=str(exc))
         logger.exception("Unexpected error sending post %s", post.id)

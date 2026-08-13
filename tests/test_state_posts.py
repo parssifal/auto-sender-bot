@@ -311,6 +311,60 @@ async def test_cancel_post_rejects_recurring_instance(store: StateStore) -> None
 
 
 @pytest.mark.asyncio
+async def test_list_failed_posts_returns_failures_with_error(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+    failed_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="Broken",
+        entities_json=None,
+    )
+    pending_id = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc + 60,
+        text="Still pending",
+        entities_json=None,
+    )
+
+    assert await store.claim_post_for_sending(post_id=failed_id, now_utc=scheduled_at_utc) is True
+    await store.mark_failed(post_id=failed_id, error="Bot cannot post")
+
+    failed = await store.list_failed_posts(USER_ID, limit=10, offset=0)
+
+    assert [post.id for post in failed] == [failed_id]
+    assert failed[0].last_error == "Bot cannot post"
+    assert pending_id not in {post.id for post in failed}
+
+
+@pytest.mark.asyncio
+async def test_create_text_post_request_id_is_idempotent(store: StateStore) -> None:
+    scheduled_at_utc = int(datetime(2099, 12, 31, 6, 30, tzinfo=timezone.utc).timestamp())
+
+    first = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="same",
+        entities_json=None,
+        request_id="req-1",
+    )
+    second = await store.create_scheduled_text_post(
+        user_id=USER_ID,
+        chat_id=CHAT_ID,
+        scheduled_at_utc=scheduled_at_utc,
+        text="same",
+        entities_json=None,
+        request_id="req-1",
+    )
+
+    assert second == first
+    posts = await store.list_pending_posts(USER_ID, limit=10)
+    assert [post.id for post in posts] == [first]
+
+
+@pytest.mark.asyncio
 async def test_startup_requeues_stuck_sending_post(store: StateStore) -> None:
     """A crash between claim and mark_* leaves 'sending' forever: invisible to
     list_due_posts, un-cancellable, and holding a quota slot."""

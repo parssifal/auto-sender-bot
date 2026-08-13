@@ -13,7 +13,7 @@ from core.db import open_db
 from core.fsm_storage import build_fsm_event_isolation, build_fsm_storage
 from core.healthcheck import start_healthcheck_server
 from core.logging_setup import configure_logging
-from core.scheduler import scheduler_loop
+from core.scheduler import SchedulerMetrics, scheduler_loop
 from core.state import StateStore
 from core.webapp import start_webapp_server
 from telegram.admin import build_admin_router
@@ -78,8 +78,15 @@ async def amain() -> None:
 
     stop_event = asyncio.Event()
     _install_signal_handlers(asyncio.get_running_loop(), stop_event)
+    scheduler_metrics = SchedulerMetrics()
     scheduler_task = asyncio.create_task(
-        scheduler_loop(bot=bot, store=store, stop_event=stop_event, poll_interval_seconds=cfg.scheduler_poll_seconds)
+        scheduler_loop(
+            bot=bot,
+            store=store,
+            stop_event=stop_event,
+            poll_interval_seconds=cfg.scheduler_poll_seconds,
+            metrics=scheduler_metrics,
+        )
     )
     healthcheck_server = None
     webapp_server = None
@@ -91,6 +98,8 @@ async def amain() -> None:
             port=cfg.healthcheck_port,
             conn=conn,
             scheduler_task=scheduler_task,
+            scheduler_metrics=scheduler_metrics,
+            scheduler_stale_seconds=cfg.scheduler_stale_seconds,
         )
         if cfg.webapp_url:
             webapp_server = await start_webapp_server(

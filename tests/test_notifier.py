@@ -127,6 +127,27 @@ async def test_returns_message_ids_including_separate_long_caption() -> None:
 
 
 @pytest.mark.asyncio
+async def test_separate_long_caption_keeps_entities_when_it_fits_one_message() -> None:
+    bot = FakeBot()
+    entities_json = '[{"type": "bold", "offset": 0, "length": 5}]'
+    long_caption = "hello " + ("x" * 1100)  # >1024 caption, <4096 message
+
+    await send_media_post(
+        bot=bot,  # type: ignore[arg-type]
+        chat_id=-100,
+        media_items=[{"type": "photo", "file_id": "p1"}],
+        caption=long_caption,
+        caption_entities_json=entities_json,
+        caption_above=False,
+    )
+
+    method, kwargs = bot.calls[-1]
+    assert method == "send_message"
+    assert kwargs["text"] == long_caption
+    assert kwargs["entities"][0].type == "bold"
+
+
+@pytest.mark.asyncio
 async def test_send_text_with_entities_sends_one_message_carrying_entities() -> None:
     # T-53, entities branch: a short formatted post goes out as ONE send_message with
     # its parsed entities attached (the format survives).

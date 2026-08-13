@@ -236,6 +236,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "queue_header": "Upcoming posts:\n{lines}",
         "queue_cancel_ok": "Cancelled",
         "queue_cancel_missing": "Not found / already sent",
+        "failed_empty": "No failed posts.",
+        "failed_list_header": "Failed posts:\n\n{lines}",
+        "failed_list_item": (
+            "id={post_id}\n"
+            "- Where: {where}\n"
+            "- When: {local_time}\n"
+            "- Type: {kind}\n"
+            "- Reason: {error}"
+        ),
         "edit_empty": "No editable pending posts.",
         "edit_list_header": "Choose a post to edit:\n\n{lines}",
         "edit_list_item": (
@@ -313,6 +322,20 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- send @username with command: /link @channelusername\n"
             "- or forward a message from channel/chat after /link_forward"
         ),
+        "destinations_empty": (
+            "You don't have linked channels/chats yet.\n\n"
+            "Add:\n"
+            "- send @username with command: /link @channelusername\n"
+            "- or forward a message from channel/chat after /link_forward"
+        ),
+        "destinations_list": (
+            "Linked channels/chats: {total}\n\n"
+            "{lines}\n\n"
+            "Add another: /link @channelusername or /link_forward."
+        ),
+        "destinations_list_item": "- {title}{username} ({chat_id}) — {status}",
+        "destination_unlink_ok": "Unlinked",
+        "destination_unlink_missing": "Already unlinked",
         "link_usage": "Usage: /link @channelusername",
         "link_need_username": "Need @username, for example /link @mychannel",
         "link_not_found": "Could not find chat {username}: {error}",
@@ -371,6 +394,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_draft_delete": "Delete",
         "btn_draft_publish": "Publish",
         "btn_view_post": "👁 {label}",
+        "btn_unlink_destination": "Unlink {label}",
         "view_not_found": "Post not found or unavailable.",
         "view_post_info": "Preview — id={post_id}\n• Where: {where}\n• When: {local_time} ({tz_name})\n• Type: {kind}",
     },
@@ -606,6 +630,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "queue_header": "Ближайшие посты:\n{lines}",
         "queue_cancel_ok": "Отменено",
         "queue_cancel_missing": "Не найдено/уже отправлено",
+        "failed_empty": "Постов с ошибкой нет.",
+        "failed_list_header": "Посты с ошибкой:\n\n{lines}",
+        "failed_list_item": (
+            "id={post_id}\n"
+            "- Куда: {where}\n"
+            "- Когда: {local_time}\n"
+            "- Тип: {kind}\n"
+            "- Причина: {error}"
+        ),
         "edit_empty": "Нет доступных для редактирования pending-постов.",
         "edit_list_header": "Выберите пост для редактирования:\n\n{lines}",
         "edit_list_item": (
@@ -683,6 +716,20 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- пришлите @username канала/чата командой: /link @channelusername\n"
             "- или перешлите сообщение из канала/чата после команды /link_forward"
         ),
+        "destinations_empty": (
+            "У вас пока нет привязанных каналов/чатов.\n\n"
+            "Добавить:\n"
+            "- пришлите @username канала/чата командой: /link @channelusername\n"
+            "- или перешлите сообщение из канала/чата после команды /link_forward"
+        ),
+        "destinations_list": (
+            "Привязанные каналы/чаты: {total}\n\n"
+            "{lines}\n\n"
+            "Добавить ещё: /link @channelusername или /link_forward."
+        ),
+        "destinations_list_item": "- {title}{username} ({chat_id}) — {status}",
+        "destination_unlink_ok": "Отвязано",
+        "destination_unlink_missing": "Уже отвязано",
         "link_usage": "Использование: /link @channelusername",
         "link_need_username": "Нужен @username, например /link @mychannel",
         "link_not_found": "Не удалось найти чат {username}: {error}",
@@ -741,6 +788,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn_draft_delete": "Удалить",
         "btn_draft_publish": "Запланировать",
         "btn_view_post": "👁 {label}",
+        "btn_unlink_destination": "Отвязать {label}",
         "view_not_found": "Пост не найден или недоступен.",
         "view_post_info": "Предпросмотр — id={post_id}\n• Куда: {where}\n• Когда: {local_time} ({tz_name})\n• Тип: {kind}",
     },

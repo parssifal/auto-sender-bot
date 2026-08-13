@@ -700,6 +700,12 @@ const cErr = document.getElementById("c-err");
 // reach the browser. url is a local preview only.
 let composeMedia = [];
 let composeEditId = null;   // null = new post
+let composeRequestId = null;
+
+function newRequestId(){
+  if(window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return String(Date.now()) + "-" + Math.random();
+}
 
 function releaseComposeMedia(){
   for(const m of composeMedia) if(m.url) URL.revokeObjectURL(m.url);
@@ -736,6 +742,7 @@ function moveComposeMedia(from, to){
 
 async function openCompose(postId){
   composeEditId = postId || null;
+  composeRequestId = composeEditId ? null : newRequestId();
   releaseComposeMedia(); renderComposeMedia();
   cErr.textContent = "";
   document.getElementById("c-title").textContent = t(composeEditId ? "c_edit" : "c_new");
@@ -796,6 +803,7 @@ async function loadComposeThumb(postId, m){
 function closeCompose(){
   compose.classList.remove("open");
   composeEditId = null;
+  composeRequestId = null;
   endComposeDrag();
   releaseComposeMedia();
 }
@@ -922,6 +930,7 @@ document.getElementById("c-save").addEventListener("click", async ()=>{
           ? { type:m.type, file_id:m.file_id }
           : { keep:m.keep }),
         caption_above: document.getElementById("c-above").checked,
+        request_id: composeRequestId,
       }),
     });
     closeCompose();

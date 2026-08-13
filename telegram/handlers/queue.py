@@ -163,6 +163,54 @@ async def _render_queue_page(
         await message.answer(text, reply_markup=reply_markup)
 
 
+async def _render_failed_page(
+    store: StateStore,
+    message: Message,
+    page: int,
+    user_id: int,
+    *,
+    edit: bool = False,
+) -> None:
+    lang = await h._user_lang(store, user_id)
+    tz_name = await store.get_user_timezone(user_id) or "UTC"
+    page_size = 8
+    posts, page = await h._page_back_to_content(
+        lambda offset: store.list_failed_posts(user_id=user_id, limit=page_size + 1, offset=offset),
+        page,
+        page_size,
+    )
+    has_more = len(posts) > page_size
+    posts = posts[:page_size]
+    if not posts:
+        text = tr(lang, "failed_empty")
+        if edit:
+            await message.edit_text(text, reply_markup=None)
+        else:
+            await message.answer(text, reply_markup=await h._main_menu_for(store, user_id))
+        return
+
+    lines = []
+    for post in posts:
+        summary = await h._build_scheduled_post_summary(store, post, lang=lang)
+        lines.append(
+            tr(
+                lang,
+                "failed_list_item",
+                post_id=kb._short_id(post.id),
+                where=summary["where"],
+                local_time=kb._format_local(post.scheduled_at_utc, tz_name),
+                kind=summary["kind"],
+                error=post.last_error or "-",
+            )
+        )
+    text = tr(lang, "failed_list_header", lines="\n\n".join(lines))
+    reply_markup = kb._failed_paged_kb(page=page, has_more=has_more)
+    if edit:
+        await message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await message.answer(text, reply_markup=reply_markup)
+
+
 async def _start_scheduled_post_edit(store: StateStore, message: Message, state: FSMContext, *, user_id: int, post: ScheduledPostRow) -> None:
     lang = await h._user_lang(store, user_id)
     tz_name = await store.get_user_timezone(user_id) or "UTC"
@@ -564,11 +612,23 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         await state.clear()
         await _render_queue_page(store, message, page=0, user_id=message.from_user.id, webapp_url=webapp_url)
 
+    @router.message(Command("failed"))
+    async def cmd_failed(message: Message, state: FSMContext) -> None:
+        await store.ensure_user(message.from_user.id)
+        await state.clear()
+        await _render_failed_page(store, message, page=0, user_id=message.from_user.id)
+
     @router.callback_query(F.data.startswith("qpage:"))
     async def cb_queue_page(query: CallbackQuery) -> None:
         page = int(query.data.split(":")[1])
         await query.answer()
         await _render_queue_page(store, query.message, page=page, user_id=query.from_user.id, edit=True, webapp_url=webapp_url)
+
+    @router.callback_query(F.data.startswith("fpage:"))
+    async def cb_failed_page(query: CallbackQuery) -> None:
+        page = int(query.data.split(":")[1])
+        await query.answer()
+        await _render_failed_page(store, query.message, page=page, user_id=query.from_user.id, edit=True)
 
     @router.callback_query(F.data.startswith("qview:"))
     async def cb_queue_view(query: CallbackQuery, state: FSMContext) -> None:
