@@ -471,6 +471,14 @@ function localInputParts(epoch){
 }
 function composeLocal(dateStr,timeStr){ const [y,m,d]=dateStr.split("-"); return `${d}.${m}.${y} ${timeStr}`; }
 function escapeHtml(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function mediaContentType(f){
+  if(f.type) return f.type;
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  return {
+    jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", gif:"image/gif", webp:"image/webp",
+    mp4:"video/mp4", m4v:"video/mp4", mov:"video/quicktime", webm:"video/webm",
+  }[ext] || "application/octet-stream";
+}
 
 async function api(path,opts){
   // opts spreads first: otherwise its own `headers` key overwrites the merged
@@ -807,13 +815,16 @@ document.getElementById("c-file").addEventListener("change", async (e)=>{
   for(const f of files){
     if(composeMedia.length >= 10){ cErr.textContent = t("c_max_media"); break; }
     cErr.textContent = t("c_uploading");
-    const fd = new FormData();
-    fd.append("file", f, f.name);
+    const contentType = mediaContentType(f);
     try{
-      const r = await api("/api/my/media", { method:"POST", body: fd });
+      const r = await api("/api/my/media", {
+        method:"POST",
+        headers:{"Content-Type": contentType},
+        body: f,
+      });
       composeMedia.push({
         type: r.type, file_id: r.file_id,
-        url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
+        url: contentType.startsWith("image/") ? URL.createObjectURL(f) : null,
       });
       cErr.textContent = "";
       renderComposeMedia();

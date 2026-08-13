@@ -136,3 +136,12 @@ def test_queue_page_sends_existing_media_as_position_markers() -> None:
     # never handed to the browser to echo.
     assert "{ keep:m.keep }" in html
     assert "m.keep === undefined" in html
+
+
+def test_queue_page_uploads_new_media_as_raw_file_body() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # Some Telegram WebViews/proxies mangle multipart uploads. The server
+    # accepts raw image/video bodies, so the Mini App should use that path.
+    assert "const contentType = mediaContentType(f)" in html
+    assert 'headers:{"Content-Type": contentType}' in html
+    assert "body: f" in html
