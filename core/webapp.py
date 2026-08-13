@@ -58,6 +58,15 @@ _POST_TEXT_MAX = 4096
 _INIT_DATA_MAX_AGE_S = 600
 
 
+def _upload_kind(content_type: str | None) -> str | None:
+    ctype = (content_type or "").lower()
+    if ctype.startswith("image/"):
+        return "photo"
+    if ctype.startswith("video/"):
+        return "video"
+    return None
+
+
 class _RateLimiter:
     """Fixed-window per-key request counter.
 
@@ -491,40 +500,50 @@ async def start_webapp_server(
             return web.json_response({"error": "bot_unavailable"}, status=503)
         user_id = int(user["id"])
 
+        async def _read_upload(read_chunk) -> tuple[bytes | None, web.Response | None]:
+            # Read bounded: a chunked upload carries no Content-Length, so the
+            # middleware's cap cannot see it and this loop is the only guard.
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = await read_chunk(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > upload_max_bytes:
+                    return None, web.json_response({"error": "payload_too_large"}, status=413)
+                chunks.append(chunk)
+            if not total:
+                return None, web.json_response({"error": "bad_request"}, status=400)
+            return b"".join(chunks), None
+
+        field = None
         try:
             reader = await request.multipart()
             field = await reader.next()
         except Exception:
-            return web.json_response({"error": "bad_request"}, status=400)
-        if field is None or field.name != "file":
-            return web.json_response({"error": "bad_request"}, status=400)
-
-        ctype = (field.headers.get("Content-Type") or "").lower()
-        if ctype.startswith("image/"):
-            kind = "photo"
-        elif ctype.startswith("video/"):
-            kind = "video"
+            kind = _upload_kind(request.content_type)
+            if kind is None:
+                return web.json_response({"error": "bad_request"}, status=400)
         else:
-            return web.json_response({"error": "unsupported_media"}, status=400)
+            if field is None or field.name != "file":
+                return web.json_response({"error": "bad_request"}, status=400)
+            kind = _upload_kind(field.headers.get("Content-Type"))
+            if kind is None:
+                return web.json_response({"error": "unsupported_media"}, status=400)
 
-        # Read bounded: a chunked upload carries no Content-Length, so the
-        # middleware's cap cannot see it and this loop is the only guard.
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = await field.read_chunk(64 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > upload_max_bytes:
-                return web.json_response({"error": "payload_too_large"}, status=413)
-            chunks.append(chunk)
-        if not total:
-            return web.json_response({"error": "bad_request"}, status=400)
+        if field is None:
+            body, bad = await _read_upload(request.content.read)
+            filename = "upload.jpg" if kind == "photo" else "upload.mp4"
+        else:
+            body, bad = await _read_upload(field.read_chunk)
+            filename = field.filename or ("upload.jpg" if kind == "photo" else "upload.mp4")
+        if bad is not None:
+            return bad
 
         upload = BufferedInputFile(
-            b"".join(chunks),
-            filename=field.filename or ("upload.jpg" if kind == "photo" else "upload.mp4"),
+            body or b"",
+            filename=filename,
         )
         try:
             if kind == "photo":

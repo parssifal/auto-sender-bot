@@ -728,6 +728,21 @@ async def test_media_upload_returns_file_id_and_clears_staging(server_compose, c
 
 
 @pytest.mark.asyncio
+async def test_media_upload_accepts_raw_image_body(server_compose, compose_bot):
+    async with ClientSession() as s:
+        async with s.post(
+            server_compose.url("/api/my/media"),
+            headers={"Authorization": _init_data(USER_A), "Content-Type": "image/jpeg"},
+            data=b"JPEGBYTES",
+        ) as r:
+            status, body = r.status, await r.json()
+
+    assert status == 200, body
+    assert body == {"type": "photo", "file_id": "STAGED-PHOTO"}
+    assert compose_bot.sent == [("photo", USER_A, b"JPEGBYTES")]
+
+
+@pytest.mark.asyncio
 async def test_media_upload_handles_video(server_compose, compose_bot):
     status, body = await _upload(server_compose, USER_A, data=b"MP4", content_type="video/mp4")
     assert status == 200
