@@ -92,6 +92,12 @@ def test_queue_page_has_post_preview() -> None:
     assert "revokeObjectURL" in html
 
 
+def test_queue_page_preview_images_fit_without_cropping() -> None:
+    html = QUEUE_HTML.read_text(encoding="utf-8")
+    # Vertical photos must be shown whole in the Mini App preview sheet.
+    assert "object-fit:contain" in html
+
+
 def test_queue_page_reuses_compose_sheet_for_editing() -> None:
     html = QUEUE_HTML.read_text(encoding="utf-8")
     # One sheet writes both a new and an existing post; the id decides the route.
