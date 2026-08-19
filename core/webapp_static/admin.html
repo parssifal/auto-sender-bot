@@ -148,6 +148,12 @@
   .u-card .f .val{font-family:var(--num); font-weight:700; font-size:19px; margin-top:3px}
   .u-msg{margin-top:12px; font-size:13px; color:var(--c4); display:none}
   .u-msg.show{display:block}
+  .plan-grant{margin-top:14px; border-top:1px solid var(--group-bg); padding-top:12px}
+  .plan-grant .k{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--hint); font-weight:700; margin-bottom:8px}
+  .plan-grant .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+  .plan-btn{padding:7px 14px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-weight:700; font-size:13px; cursor:pointer}
+  .plan-grant #planDays{flex:1; min-width:120px}
+  .plan-grant .result{margin-top:8px; font-size:13px; color:var(--hint); min-height:16px}
 
   .foot{text-align:center; font-size:11.5px; color:var(--hint); padding:14px 0 4px; letter-spacing:.02em}
   .banner{display:none; background:var(--c4); color:#fff; border-radius:12px; padding:10px 14px; font-size:13px; margin-bottom:var(--gap)}
@@ -258,6 +264,17 @@
         <div class="f"><div class="k">Часовой пояс</div><div class="val num" id="ucTz" style="font-size:14px">—</div></div>
         <div class="f"><div class="k">Регистрация</div><div class="val num" id="ucCreated" style="font-size:14px">—</div></div>
         <div class="f"><div class="k">Статусы</div><div class="val num" id="ucStatuses" style="font-size:13px">—</div></div>
+        <div class="f"><div class="k">Тариф</div><div class="val num" id="ucPlan" style="font-size:14px">—</div></div>
+      </div>
+      <div class="plan-grant">
+        <div class="k">Выдать тариф</div>
+        <div class="row">
+          <button class="plan-btn" data-plan="basic">basic</button>
+          <button class="plan-btn" data-plan="pro">pro</button>
+          <button class="plan-btn" data-plan="premium">premium</button>
+          <input id="planDays" inputmode="numeric" placeholder="дней (0 = бессрочно)" aria-label="Дней">
+        </div>
+        <div class="result" id="planResult"></div>
       </div>
     </div>
   </section>
@@ -294,6 +311,7 @@
   var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   var initData = tg && tg.initData ? tg.initData : "";
   var lastStats = null;
+  var currentUserId = null;      // id пользователя в открытой карточке (для выдачи тарифа)
   var REFRESH_MS = 45000;       // авто-обновление статистики каждые 45 с
   var refreshTimer = null;      // id setInterval опроса
   var inFlight = false;         // защита от наложения запросов
@@ -559,7 +577,26 @@
       else { banner("Не удалось загрузить профиль"); }
     });
   }
+  function planLabel(p){
+    var plan = p.plan || "basic";
+    if(!p.plan_expires_at){ return plan; }
+    var day = new Date(p.plan_expires_at*1000).toISOString().slice(0,10);
+    var expired = p.plan_expires_at*1000 < Date.now();
+    return plan + " · до " + day + (expired ? " (истёк)" : "");
+  }
+  function grantPlan(plan){
+    if(!currentUserId){ return; }
+    var days = parseInt(($("planDays").value||"0").replace(/[^0-9]/g,""),10) || 0;
+    if(!initData){ $("planResult").textContent = "Демо-режим: тариф не изменён."; return; }
+    apiPost("/api/user/"+currentUserId+"/plan", {plan:plan, days:days}).then(function(r){
+      $("planResult").textContent = "Готово: " + r.plan + (r.plan_expires_at ? "" : " (бессрочно)");
+      api("/api/user/"+currentUserId).then(showProfile).catch(function(){});
+    }).catch(function(e){ $("planResult").textContent = "Ошибка: " + e.message; });
+  }
   function showProfile(p){
+    currentUserId = p.user_id;
+    $("planResult").textContent = "";
+    $("ucPlan").textContent = planLabel(p);
     $("ucChannels").textContent = nf.format(p.channels);
     $("ucPosts").textContent = nf.format(p.posts);
     $("ucLang").textContent = p.language || "—";
@@ -644,6 +681,9 @@
   $("back-app").addEventListener("click", function(){ location.href = "/app"; });
   $("findBtn").addEventListener("click", findUser);
   $("findInput").addEventListener("keydown", function(e){ if(e.key==="Enter") findUser(); });
+  Array.prototype.forEach.call(document.querySelectorAll(".plan-btn"), function(btn){
+    btn.addEventListener("click", function(){ grantPlan(btn.getAttribute("data-plan")); });
+  });
   $("broadcastText").addEventListener("input", updateBroadcastCounter);
   $("broadcast-send").addEventListener("click", openBroadcastModal);
   $("broadcastConfirm").addEventListener("click", sendBroadcast);

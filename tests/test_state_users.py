@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from core.state import StateStore
@@ -80,3 +82,43 @@ async def test_all_user_ids_returns_every_id(store: StateStore) -> None:
 @pytest.mark.asyncio
 async def test_all_user_ids_empty(store: StateStore) -> None:
     assert await store.all_user_ids() == []
+
+
+# --- Plan tiers (Phase 1) ---
+
+
+@pytest.mark.asyncio
+async def test_default_plan_is_basic(store: StateStore) -> None:
+    await store.ensure_user(1)
+    assert await store.get_user_plan(1) == "basic"
+
+
+@pytest.mark.asyncio
+async def test_unknown_user_reads_basic(store: StateStore) -> None:
+    assert await store.get_user_plan(999) == "basic"
+
+
+@pytest.mark.asyncio
+async def test_active_plan_is_honored(store: StateStore) -> None:
+    await store.ensure_user(1)
+    assert await store.set_user_plan(1, "premium", int(time.time()) + 3600) is True
+    assert await store.get_user_plan(1) == "premium"
+
+
+@pytest.mark.asyncio
+async def test_expired_plan_reverts_to_basic(store: StateStore) -> None:
+    await store.ensure_user(1)
+    await store.set_user_plan(1, "pro", int(time.time()) - 10)
+    assert await store.get_user_plan(1) == "basic"
+
+
+@pytest.mark.asyncio
+async def test_indefinite_plan_never_expires(store: StateStore) -> None:
+    await store.ensure_user(1)
+    await store.set_user_plan(1, "pro", None)
+    assert await store.get_user_plan(1) == "pro"
+
+
+@pytest.mark.asyncio
+async def test_set_plan_missing_user_returns_false(store: StateStore) -> None:
+    assert await store.set_user_plan(12345, "pro", None) is False

@@ -29,8 +29,9 @@ class RecurringMixin:
         return 0 if row is None else int(row["cnt"])
 
     async def _guard_recurring_cap(self, user_id: int) -> None:
-        if await self.count_user_recurring(user_id) >= limits.MAX_RECURRING_PER_USER:
-            raise ResourceLimitError("recurring", limits.MAX_RECURRING_PER_USER)
+        limit = limits.limit_for(await self.get_user_plan(user_id), "recurring")
+        if await self.count_user_recurring(user_id) >= limit:
+            raise ResourceLimitError("recurring", limit)
 
     @locked_write
     async def create_recurring_pattern(

@@ -134,6 +134,36 @@ async def test_recurring_series_counts_against_active_posts_cap(store: StateStor
     assert exc.value.resource == "posts"
 
 
+# --- Per-plan limits (Phase 1): no monkeypatch, real plan tiers ---
+
+
+@pytest.mark.asyncio
+async def test_basic_plan_destinations_cap_is_five(store: StateStore) -> None:
+    # basic tier allows 5 linked destinations; USER already has 1 (seed).
+    for i in range(4):
+        cid = -100000 - i
+        await store.upsert_destination(cid, "channel", f"c{i}", None, "administrator", True)
+        await store.link_user_destination(USER, cid, "seed")
+    assert await store.count_user_destinations(USER) == 5
+    over = -200000
+    await store.upsert_destination(over, "channel", "over", None, "administrator", True)
+    with pytest.raises(ResourceLimitError) as exc:
+        await store.link_user_destination(USER, over, "new")
+    assert exc.value.resource == "destinations"
+    assert exc.value.limit == 5
+
+
+@pytest.mark.asyncio
+async def test_pro_plan_lifts_destinations_cap(store: StateStore) -> None:
+    # pro tier allows 20 destinations, so the 6th link that basic rejects passes.
+    await store.set_user_plan(USER, "pro", None)
+    for i in range(10):  # total 11 with the seed — under pro's 20, no raise
+        cid = -300000 - i
+        await store.upsert_destination(cid, "channel", f"p{i}", None, "administrator", True)
+        await store.link_user_destination(USER, cid, "seed")
+    assert await store.count_user_destinations(USER) == 11
+
+
 @pytest.mark.asyncio
 async def test_materialization_respects_active_posts_cap(store: StateStore, monkeypatch) -> None:
     pattern_id, post_id = await store.create_recurring_series(

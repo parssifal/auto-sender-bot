@@ -44,8 +44,10 @@ class DestinationsMixin:
             "SELECT 1 FROM user_destinations WHERE user_id=? AND chat_id=?",
             (user_id, chat_id),
         )
-        if existing is None and await self.count_user_destinations(user_id) >= limits.MAX_DESTINATIONS_PER_USER:
-            raise ResourceLimitError("destinations", limits.MAX_DESTINATIONS_PER_USER)
+        if existing is None:
+            dest_limit = limits.limit_for(await self.get_user_plan(user_id), "destinations")
+            if await self.count_user_destinations(user_id) >= dest_limit:
+                raise ResourceLimitError("destinations", dest_limit)
 
         now = int(time.time())
         await self._conn.execute(

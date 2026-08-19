@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'basic';
+ALTER TABLE users ADD COLUMN plan_expires_at INTEGER NULL;

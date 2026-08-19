@@ -132,6 +132,9 @@ async def broadcast_flow() -> BroadcastFlowHarness:
     await store.ensure_user(USER_ID)
     await store.set_user_language(USER_ID, "ru")
     await store.set_user_timezone(USER_ID, "Europe/Moscow")
+    # This flow links 6 destinations — above the basic tier's 5 — so provision
+    # a premium plan; the suite exercises broadcast, not the per-plan caps.
+    await store.set_user_plan(USER_ID, "premium", None)
     for index, chat_id in enumerate(ALL_DESTINATION_CHAT_IDS, start=1):
         await store.upsert_destination(
             chat_id,

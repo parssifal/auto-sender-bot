@@ -21,8 +21,9 @@ class PostsMixin:
         return 0 if row is None else int(row["cnt"])
 
     async def _guard_active_posts_cap(self, user_id: int) -> None:
-        if await self.count_active_posts(user_id) >= limits.MAX_ACTIVE_POSTS_PER_USER:
-            raise ResourceLimitError("posts", limits.MAX_ACTIVE_POSTS_PER_USER)
+        limit = limits.limit_for(await self.get_user_plan(user_id), "posts")
+        if await self.count_active_posts(user_id) >= limit:
+            raise ResourceLimitError("posts", limit)
 
     @locked_write
     async def create_scheduled_text_post(
@@ -136,8 +137,9 @@ class PostsMixin:
         # A broadcast fans out to one post per destination; count them against
         # the same active-posts cap so repeated broadcasts can't grow unbounded.
         active = await self.count_active_posts(user_id)
-        if active + len(unique_chat_ids) > limits.MAX_ACTIVE_POSTS_PER_USER:
-            raise ResourceLimitError("posts", limits.MAX_ACTIVE_POSTS_PER_USER)
+        limit = limits.limit_for(await self.get_user_plan(user_id), "posts")
+        if active + len(unique_chat_ids) > limit:
+            raise ResourceLimitError("posts", limit)
 
         created_at = int(time.time())
         post_ids: list[str] = []

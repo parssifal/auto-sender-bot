@@ -74,6 +74,10 @@ class StateStoreBase:
             await self._conn.execute("ALTER TABLE users ADD COLUMN username TEXT NULL")
         if "first_name" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NULL")
+        if "plan" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'basic'")
+        if "plan_expires_at" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN plan_expires_at INTEGER NULL")
         await self._conn.commit()
 
     async def _reconcile_scheduled_post_columns(self) -> None:

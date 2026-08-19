@@ -74,8 +74,9 @@ class DraftsMixin:
             if not can_create_team_draft(team_role):
                 raise ValueError("User must be an owner or editor to write team drafts")
 
-        if await self.count_user_drafts(author_user_id) >= limits.MAX_DRAFTS_PER_USER:
-            raise ResourceLimitError("drafts", limits.MAX_DRAFTS_PER_USER)
+        drafts_limit = limits.limit_for(await self.get_user_plan(author_user_id), "drafts")
+        if await self.count_user_drafts(author_user_id) >= drafts_limit:
+            raise ResourceLimitError("drafts", drafts_limit)
 
         normalized_text, normalized_entities, normalized_caption, normalized_caption_entities, normalized_caption_above, items = (
             self._normalize_draft_payload(

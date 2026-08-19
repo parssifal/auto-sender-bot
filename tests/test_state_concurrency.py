@@ -20,6 +20,9 @@ async def store() -> StateStore:
     state = StateStore(conn)
     await state.migrate()
     await state.ensure_user(USER_ID)
+    # This suite stresses concurrency with 20 recurring series and dozens of
+    # posts — beyond the basic tier's caps — so provision a premium plan.
+    await state.set_user_plan(USER_ID, "premium", None)
     await state.upsert_destination(
         CHAT_ID,
         "channel",

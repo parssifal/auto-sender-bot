@@ -113,7 +113,8 @@ class StatsMixin:
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         row = await self._execute_fetchone(
-            "SELECT user_id, timezone, language, username, first_name, created_at FROM users WHERE user_id=?",
+            "SELECT user_id, timezone, language, username, first_name, created_at, "
+            "plan, plan_expires_at FROM users WHERE user_id=?",
             (user_id,),
         )
         if row is None:
@@ -138,6 +139,8 @@ class StatsMixin:
             "username": row["username"],
             "first_name": row["first_name"],
             "created_at": int(row["created_at"]),
+            "plan": row["plan"] or "basic",
+            "plan_expires_at": None if row["plan_expires_at"] is None else int(row["plan_expires_at"]),
             "channels": channels,
             "posts": posts,
             "posts_by_status": posts_by_status,

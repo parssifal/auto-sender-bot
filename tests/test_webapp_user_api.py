@@ -317,6 +317,78 @@ async def test_my_queue_reports_admin_flag(store):
     assert await _is_admin_for((USER_A,)) is True
 
 
+# --- Task: admin grant plan (Phase 1) ---
+
+ADMIN = 999
+
+
+@pytest.mark.asyncio
+async def test_set_plan_requires_admin(server):
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/user/{USER_A}/plan"),
+                          json={"plan": "pro"},
+                          headers={"Authorization": _init_data(USER_A)}) as r:
+            assert r.status == 403
+
+
+@pytest.mark.asyncio
+async def test_set_plan_grants_indefinite(server, store):
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/user/{USER_A}/plan"),
+                          json={"plan": "premium"},
+                          headers={"Authorization": _init_data(ADMIN)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert body["plan"] == "premium"
+    assert body["plan_expires_at"] is None
+    assert await store.get_user_plan(USER_A) == "premium"
+
+
+@pytest.mark.asyncio
+async def test_set_plan_with_days_sets_expiry(server, store):
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/user/{USER_A}/plan"),
+                          json={"plan": "pro", "days": 30},
+                          headers={"Authorization": _init_data(ADMIN)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert body["plan_expires_at"] is not None
+    assert body["plan_expires_at"] > int(time.time())
+    assert await store.get_user_plan(USER_A) == "pro"
+
+
+@pytest.mark.asyncio
+async def test_set_plan_rejects_bad_plan(server):
+    async with ClientSession() as s:
+        async with s.post(server.url(f"/api/user/{USER_A}/plan"),
+                          json={"plan": "platinum"},
+                          headers={"Authorization": _init_data(ADMIN)}) as r:
+            assert r.status == 400
+            body = await r.json()
+    assert body["error"] == "bad_plan"
+
+
+@pytest.mark.asyncio
+async def test_set_plan_unknown_user_404(server):
+    async with ClientSession() as s:
+        async with s.post(server.url("/api/user/424242/plan"),
+                          json={"plan": "pro"},
+                          headers={"Authorization": _init_data(ADMIN)}) as r:
+            assert r.status == 404
+
+
+@pytest.mark.asyncio
+async def test_user_profile_includes_plan(server, store):
+    await store.set_user_plan(USER_A, "pro", None)
+    async with ClientSession() as s:
+        async with s.get(server.url(f"/api/user/{USER_A}"),
+                         headers={"Authorization": _init_data(ADMIN)}) as r:
+            assert r.status == 200
+            body = await r.json()
+    assert body["plan"] == "pro"
+    assert body["plan_expires_at"] is None
+
+
 # --- Task: post detail + media preview ---
 
 

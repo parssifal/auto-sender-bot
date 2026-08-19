@@ -778,6 +778,34 @@ async def start_webapp_server(
             return web.json_response({"error": "forbidden"}, status=403)
         return web.json_response({"users": await store.list_users()})
 
+    async def api_set_user_plan(request: web.Request) -> web.Response:
+        # TODO(payments): a paid upgrade would reach this same StateStore path
+        # after capturing payment; today it is an admin-only manual grant.
+        if _require_admin(request) is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        try:
+            user_id = int(request.match_info["id"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        plan = str(payload.get("plan") or "").strip()
+        if plan not in {"basic", "pro", "premium"}:
+            return web.json_response({"error": "bad_plan"}, status=400)
+        try:
+            days = int(payload.get("days") or 0)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "bad_request"}, status=400)
+        if days < 0:
+            return web.json_response({"error": "bad_request"}, status=400)
+        # days omitted/0 => indefinite (NULL expiry).
+        expires_at = int(time.time()) + days * DAY if days > 0 else None
+        if not await store.set_user_plan(user_id, plan, expires_at):
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response({"ok": True, "plan": plan, "plan_expires_at": expires_at})
+
     async def api_broadcast(request: web.Request) -> web.Response:
         if _require_admin(request) is None:
             return web.json_response({"error": "forbidden"}, status=403)
@@ -799,6 +827,7 @@ async def start_webapp_server(
     app.router.add_get("/", index)
     app.router.add_get("/api/stats", api_stats)
     app.router.add_get("/api/user/{id}", api_user)
+    app.router.add_post("/api/user/{id}/plan", api_set_user_plan)
     app.router.add_get("/api/users", api_users)
     app.router.add_post("/api/broadcast", api_broadcast)
     app.router.add_get("/app", app_index)
