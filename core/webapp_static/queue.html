@@ -176,9 +176,15 @@
   .rx-hint{font-size:11.5px; color:var(--faint); font-weight:600}
   #rx-picker{z-index:30}
   #rx-picker .modal{padding-left:14px; padding-right:14px}
-  emoji-picker{width:100%; height:min(58vh,430px); --background:var(--surface); --border-color:var(--line-strong);
+  /* touch-action:manipulation kills the webview's double-tap-to-zoom so quick
+     taps on neighbouring emoji don't zoom the page. */
+  emoji-picker{width:100%; height:min(58vh,430px); touch-action:manipulation;
+    --background:var(--surface); --border-color:var(--line-strong);
     --input-border-color:var(--line-strong); --input-font-color:var(--ink); --input-placeholder-color:var(--faint);
     --indicator-color:var(--accent); --emoji-size:1.5rem; --category-font-color:var(--muted)}
+  .rxp-sel{display:flex; flex-wrap:wrap; gap:8px; align-items:center; min-height:34px; margin-bottom:10px; touch-action:manipulation}
+  .rxp-chip{font-size:22px; line-height:1; animation:rxpop .18s ease}
+  @keyframes rxpop{from{transform:scale(.6); opacity:.4} to{transform:scale(1); opacity:1}}
   .rx-presets{margin-top:12px; display:flex; flex-direction:column; gap:9px}
   .rx-preset-chips{display:flex; flex-wrap:wrap; gap:8px}
   .rx-preset{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line-strong); background:var(--surface-2);
@@ -313,6 +319,7 @@
 <div class="overlay" id="rx-picker">
   <div class="modal">
     <h3 id="rxp-title">Эмодзи</h3>
+    <div class="rxp-sel" id="rxp-sel"></div>
     <div id="rxp-mount"></div>
   </div>
 </div>
@@ -385,6 +392,7 @@ const I18N = {
     rx_save_preset:"Сохранить набор", rx_name_ph:"Название набора",
     rx_need_name:"Укажите название набора", rx_need_emoji:"Выберите эмодзи для набора",
     rx_add_emoji:"＋ эмодзи", rx_picker_title:"Выберите эмодзи", rx_picker_fail:"Не удалось открыть эмодзи",
+    rx_picker_empty:"Пока ничего не выбрано", rx_picker_full:"Максимум для тарифа",
     rx_presets_hint:"Соберите набор один раз — потом ставится одним тапом.",
   },
   en: {
@@ -412,6 +420,7 @@ const I18N = {
     rx_save_preset:"Save preset", rx_name_ph:"Preset name",
     rx_need_name:"Name the preset", rx_need_emoji:"Pick emoji for the preset",
     rx_add_emoji:"＋ emoji", rx_picker_title:"Pick an emoji", rx_picker_fail:"Couldn't open emoji picker",
+    rx_picker_empty:"Nothing picked yet", rx_picker_full:"Plan maximum reached",
     rx_presets_hint:"Build a set once — then seed it in one tap.",
   },
 };
@@ -804,9 +813,20 @@ function renderReactions(){
   }
 }
 function rxAdd(e){
-  if(rxSelected.includes(e)) return;
+  if(rxSelected.includes(e)) return false;
   if(rxSelected.length >= rxMeta.cap) rxSelected.shift();   // FIFO drop over cap
   rxSelected.push(e);
+  return true;
+}
+// Live "what's chosen" strip in the picker header — the picker itself gives no
+// selected-state feedback, so this (plus haptics) is how the user sees an add land.
+function renderRxPickerSel(){
+  if(!rxMeta) return;
+  const full = rxSelected.length >= rxMeta.cap;
+  document.getElementById("rxp-sel").innerHTML =
+    (rxSelected.map(e=>`<span class="rxp-chip">${escapeHtml(e)}</span>`).join("")
+      || `<span class="rx-hint">${t("rx_picker_empty")}</span>`)
+    + `<span class="rx-cap">${rxSelected.length}/${rxMeta.cap}${full ? " · " + t("rx_picker_full") : ""}</span>`;
 }
 function toggleEmoji(e){
   const i = rxSelected.indexOf(e);
@@ -863,11 +883,19 @@ async function openRxPicker(){
       rxPickerEl.addEventListener("emoji-click", (ev)=>{
         const u = ev.detail && ev.detail.unicode;
         if(!u) return;
-        rxAdd(u); rxPushRecent(u); renderReactions();
+        if(rxAdd(u)){
+          rxPushRecent(u);
+          tg?.HapticFeedback?.selectionChanged?.();
+        }else{
+          tg?.HapticFeedback?.notificationOccurred?.("warning");  // already picked
+        }
+        renderRxPickerSel();
+        renderReactions();
       });
       document.getElementById("rxp-mount").appendChild(rxPickerEl);
     }catch(err){ cErr.textContent = t("rx_picker_fail"); return; }
   }
+  renderRxPickerSel();
   rxPickerOverlay.classList.add("open");
 }
 // Backdrop tap closes; taps inside the sheet don't bubble out to it.
