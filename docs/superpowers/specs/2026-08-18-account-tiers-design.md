@@ -94,15 +94,19 @@ Enforcement: choke-points в `core/state/*` уже читают `limits.MAX_X`. 
 ALTER TABLE scheduled_posts ADD COLUMN reaction_emojis_json TEXT NULL; -- какие эмодзи сеять
 
 CREATE TABLE IF NOT EXISTS reaction_presets (
-    id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    post_type TEXT NULL,
+    post_type TEXT NOT NULL,          -- метка пресета, freeform на пользователя ('веселый'/'грустный'/своё)
     emojis_json TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, post_type),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 ```
+
+Пресет = `(user_id, post_type) → emojis`. Каждый пользователь владеет своими
+строками: правит эмодзи под «весёлый»/«грустный» и заводит собственные типы —
+`post_type` служит и меткой. `name` не нужен (одного набора на тип достаточно;
+несколько наборов на один тип в задаче нет).
 
 `post_type` на самом посте не храним — он лишь выбирает пресет при создании и
 резолвится в `reaction_emojis_json`. Реакции вешаются инлайн из `SendStats`, поэтому
