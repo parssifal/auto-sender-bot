@@ -43,6 +43,7 @@ class RowMappersMixin:
             created_at=int(row["created_at"]),
             sent_at=row["sent_at"],
             last_error=row["last_error"],
+            reaction_emojis_json=row["reaction_emojis_json"],
         )
 
     @staticmethod

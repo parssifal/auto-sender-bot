@@ -37,15 +37,22 @@ async def send_text(
     text: str,
     entities_json: str | None,
 ) -> SendStats:
+    message_ids: list[int] = []
+
+    def _track(sent: Any) -> None:
+        message_id = getattr(sent, "message_id", None)
+        if message_id is not None:
+            message_ids.append(int(message_id))
+
     if len(text) <= 4096 and entities_json:
         entities = _load_entities(entities_json)
-        await bot.send_message(chat_id=chat_id, text=text, entities=entities)
-        return SendStats(messages_sent=1)
+        _track(await bot.send_message(chat_id=chat_id, text=text, entities=entities))
+        return SendStats(messages_sent=1, message_ids=tuple(message_ids))
 
     chunks = split_text(text, max_len=4096)
     for chunk in chunks:
-        await bot.send_message(chat_id=chat_id, text=chunk)
-    return SendStats(messages_sent=len(chunks))
+        _track(await bot.send_message(chat_id=chat_id, text=chunk))
+    return SendStats(messages_sent=len(chunks), message_ids=tuple(message_ids))
 
 
 async def send_media_post(

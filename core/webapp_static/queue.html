@@ -164,6 +164,25 @@
     border-radius:12px; padding:12px 13px; font-size:16px; font-family:var(--sans); font-weight:600; width:100%}
   .field textarea{min-height:104px; resize:vertical; line-height:1.45}
   .field select:focus,.field textarea:focus{outline:2px solid var(--accent); outline-offset:1px}
+  .rx-cap{font-size:11px; color:var(--faint); font-weight:600}
+  .rx-palette{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+  button.rx-chip{appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
+    border-radius:999px; padding:6px 12px; font-size:19px; line-height:1; cursor:pointer}
+  button.rx-chip:active{transform:scale(.94)}
+  button.rx-chip.on{border-color:var(--accent); background:color-mix(in srgb,var(--accent) 16%, transparent)}
+  .rx-add{display:inline-flex; gap:6px; align-items:center}
+  .rx-add input{width:56px; appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
+    border-radius:10px; padding:6px 8px; font-size:17px; text-align:center}
+  .rx-presets{margin-top:12px; display:flex; flex-direction:column; gap:9px}
+  .rx-preset-chips{display:flex; flex-wrap:wrap; gap:8px}
+  .rx-preset{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line-strong); background:var(--surface-2);
+    border-radius:999px; padding:5px 11px; font-size:14px; cursor:pointer}
+  .rx-preset b{font-weight:700; color:var(--muted); font-size:12px}
+  .rx-preset .x{color:var(--danger); font-weight:800; padding:0 2px}
+  .rx-save{display:flex; gap:8px}
+  .rx-save input{flex:1; appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
+    border-radius:10px; padding:8px 11px; font-size:13px}
+  .rx-save input:focus{outline:2px solid var(--accent); outline-offset:1px}
   .film.pick .frame{width:96px; aspect-ratio:1; border-radius:12px}
   .frame .pin{position:absolute; right:5px; top:5px; width:24px; height:24px; border-radius:8px; border:0; cursor:pointer;
     background:rgba(0,0,0,.55); color:#fff; font-size:13px; line-height:1; display:grid; place-items:center}
@@ -257,6 +276,17 @@
     <label class="check" id="c-above-row" hidden>
       <input type="checkbox" id="c-above"><span id="c-above-l">Подпись над медиа</span>
     </label>
+    <div class="field" id="c-rx-field" hidden>
+      <label><span id="c-rx-l">Реакции-затравки</span> <span class="rx-cap" id="c-rx-cap"></span></label>
+      <div class="rx-palette" id="c-rx-palette"></div>
+      <div class="rx-presets" id="c-rx-presets" hidden>
+        <div class="rx-preset-chips" id="c-rx-preset-chips"></div>
+        <div class="rx-save">
+          <input type="text" id="c-rx-name" maxlength="64" placeholder="Название набора">
+          <button class="tinybtn" id="c-rx-save" type="button">Сохранить набор</button>
+        </div>
+      </div>
+    </div>
     <div class="field">
       <label id="c-date-l">Дата</label>
       <input type="date" id="c-date">
@@ -336,6 +366,9 @@ const I18N = {
     c_max_media:"Не больше 10 файлов", c_uploading:"Загрузка файла…",
     c_edit:"Редактировать пост", c_update:"Сохранить",
     c_reorder:"Переставить", c_remove:"Убрать",
+    rx_title:"Реакции-затравки", rx_cap:n=>`до ${n}`, rx_presets:"Наборы",
+    rx_save_preset:"Сохранить набор", rx_name_ph:"Название набора",
+    rx_need_name:"Укажите название набора", rx_need_emoji:"Выберите эмодзи для набора",
   },
   en: {
     title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
@@ -358,6 +391,9 @@ const I18N = {
     c_max_media:"Up to 10 files", c_uploading:"Uploading…",
     c_edit:"Edit post", c_update:"Save",
     c_reorder:"Reorder", c_remove:"Remove",
+    rx_title:"Seed reactions", rx_cap:n=>`up to ${n}`, rx_presets:"Presets",
+    rx_save_preset:"Save preset", rx_name_ph:"Preset name",
+    rx_need_name:"Name the preset", rx_need_emoji:"Pick emoji for the preset",
   },
 };
 // Server error keys → readable text, shared by every modal.
@@ -381,6 +417,10 @@ const ERR = {
     not_found:"Канал недоступен",
     bot_unavailable:"Бот недоступен, попробуйте позже",
     rate_limited:"Слишком много запросов, подождите минуту",
+    emoji_not_allowed:"Эмодзи недоступно на вашем тарифе",
+    too_many_reactions:"Слишком много реакций для тарифа",
+    presets_not_allowed:"Наборы доступны на Pro и Premium",
+    empty_reactions:"Выберите хотя бы одно эмодзи",
   },
   en:{
     rights_user_admin_required:"You are not an admin of this channel",
@@ -401,6 +441,10 @@ const ERR = {
     not_found:"Channel unavailable",
     bot_unavailable:"Bot unavailable, try again later",
     rate_limited:"Too many requests, wait a minute",
+    emoji_not_allowed:"That emoji is not on your plan",
+    too_many_reactions:"Too many reactions for your plan",
+    presets_not_allowed:"Presets are available on Pro and Premium",
+    empty_reactions:"Pick at least one emoji",
   },
 };
 const errText = key => (ERR[LANG] || ERR.en)[key] || t("err")(key);
@@ -523,6 +567,9 @@ function applyStaticLabels(){
   document.getElementById("c-time-l").textContent = t("c_time");
   document.getElementById("c-add").textContent = t("c_add_media");
   document.getElementById("c-above-l").textContent = t("c_above");
+  document.getElementById("c-rx-l").textContent = t("rx_title");
+  document.getElementById("c-rx-name").placeholder = t("rx_name_ph");
+  document.getElementById("c-rx-save").textContent = t("rx_save_preset");
   document.getElementById("c-cancel").textContent = t("c_cancel");
   document.getElementById("c-save").textContent = t("c_save");
   const b = document.getElementById("tz-banner");
@@ -704,6 +751,81 @@ const cErr = document.getElementById("c-err");
 let composeMedia = [];
 let composeEditId = null;   // null = new post
 let composeRequestId = null;
+let rxMeta = null;          // {plan,cap,palette,any_emoji,presets_allowed,presets}
+let rxSelected = [];        // ordered seed emojis, capped at rxMeta.cap
+
+// The palette shown is the plan's set plus any already-selected emoji (so a
+// premium custom pick renders as a toggleable chip too).
+function renderReactions(){
+  const field = document.getElementById("c-rx-field");
+  if(!rxMeta){ field.hidden = true; return; }
+  field.hidden = false;
+  document.getElementById("c-rx-cap").textContent = t("rx_cap")(rxMeta.cap);
+  const pal = [...rxMeta.palette];
+  for(const e of rxSelected) if(!pal.includes(e)) pal.push(e);
+  document.getElementById("c-rx-palette").innerHTML =
+    pal.map(e=>`<button type="button" class="rx-chip${rxSelected.includes(e)?" on":""}" data-rx="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join("")
+    + (rxMeta.any_emoji ? `<span class="rx-add"><input id="c-rx-input" maxlength="8" placeholder="🙂"><button type="button" class="tinybtn" id="c-rx-add">+</button></span>` : "");
+  const pres = document.getElementById("c-rx-presets");
+  pres.hidden = !rxMeta.presets_allowed;
+  if(rxMeta.presets_allowed){
+    document.getElementById("c-rx-preset-chips").innerHTML = rxMeta.presets.map(p=>
+      `<span class="rx-preset" data-preset="${escapeHtml(p.post_type)}">${escapeHtml(p.emojis.join(""))} <b>${escapeHtml(p.post_type)}</b> <span class="x" data-del="${escapeHtml(p.post_type)}">×</span></span>`).join("");
+  }
+}
+function rxAdd(e){
+  if(rxSelected.includes(e)) return;
+  if(rxSelected.length >= rxMeta.cap) rxSelected.shift();   // FIFO drop over cap
+  rxSelected.push(e);
+}
+function toggleEmoji(e){
+  const i = rxSelected.indexOf(e);
+  if(i >= 0) rxSelected.splice(i,1); else rxAdd(e);
+  renderReactions();
+}
+function loadPreset(name){
+  const p = rxMeta.presets.find(x=>x.post_type===name);
+  if(!p) return;
+  rxSelected = p.emojis.slice(0, rxMeta.cap);
+  renderReactions();
+}
+async function deletePreset(name){
+  try{ await api(`/api/my/reactions/preset/${encodeURIComponent(name)}/delete`,{method:"POST"}); }
+  catch(e){ cErr.textContent = errText(e.message); return; }
+  rxMeta.presets = rxMeta.presets.filter(p=>p.post_type!==name);
+  renderReactions();
+}
+async function savePreset(){
+  const name = (document.getElementById("c-rx-name").value||"").trim();
+  if(!name){ cErr.textContent = t("rx_need_name"); return; }
+  if(!rxSelected.length){ cErr.textContent = t("rx_need_emoji"); return; }
+  try{
+    const r = await api("/api/my/reactions/preset",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ post_type:name, emojis:rxSelected }),
+    });
+    const ex = rxMeta.presets.find(p=>p.post_type===name);
+    if(ex) ex.emojis = r.emojis; else rxMeta.presets.push({post_type:name, emojis:r.emojis});
+    document.getElementById("c-rx-name").value = "";
+    renderReactions();
+  }catch(e){ cErr.textContent = errText(e.message); }
+}
+document.getElementById("c-rx-field").addEventListener("click",(e)=>{
+  const del = e.target.closest("[data-del]");
+  if(del){ e.stopPropagation(); deletePreset(del.dataset.del); return; }
+  const chip = e.target.closest("[data-rx]");
+  if(chip){ toggleEmoji(chip.dataset.rx); return; }
+  const pre = e.target.closest("[data-preset]");
+  if(pre){ loadPreset(pre.dataset.preset); return; }
+  if(e.target.id === "c-rx-add"){
+    const inp = document.getElementById("c-rx-input");
+    const v = (inp.value||"").trim();
+    if(v){ rxAdd(v); }
+    inp.value = "";
+    renderReactions();
+  }
+});
+document.getElementById("c-rx-save").addEventListener("click", savePreset);
 
 function newRequestId(){
   if(window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -755,9 +877,11 @@ async function openCompose(postId){
   const start = localInputParts(Math.floor(Date.now()/1000) + 3600);
   document.getElementById("c-date").value = start.date;
   document.getElementById("c-time").value = start.time;
+  rxSelected = []; rxMeta = null; renderReactions();
   const sel = document.getElementById("c-dest");
   sel.innerHTML = `<option value="">${t("c_loading")}</option>`;
   compose.classList.add("open");
+  api("/api/my/reactions").then(m=>{ rxMeta = m; renderReactions(); }).catch(()=>{});
   try{
     const d = await api("/api/my/destinations");
     sel.innerHTML = d.destinations.length
@@ -786,6 +910,8 @@ async function prefillCompose(id){
   document.getElementById("c-time").value = when.time;
   composeMedia = (d.media || []).map(m=>({ type:m.type, keep:m.idx, url:null }));
   renderComposeMedia();
+  rxSelected = Array.isArray(d.reactions) ? d.reactions.slice() : [];
+  renderReactions();
   for(const m of composeMedia) if(m.type === "photo") loadComposeThumb(id, m);
 }
 
@@ -933,6 +1059,7 @@ document.getElementById("c-save").addEventListener("click", async ()=>{
           ? { type:m.type, file_id:m.file_id }
           : { keep:m.keep }),
         caption_above: document.getElementById("c-above").checked,
+        reactions: rxSelected,
         request_id: composeRequestId,
       }),
     });

@@ -13,6 +13,7 @@ from aiogram.utils.web_app import check_webapp_signature, parse_webapp_init_data
 from aiohttp import web
 
 import core.limits as limits
+import core.reactions as reactions
 from core.limits import ResourceLimitError
 from core.services import admin_broadcast_svc, rights_svc
 from core.state import ScheduledPostRow, StateStore
@@ -400,6 +401,10 @@ async def start_webapp_server(
         except (ValueError, TypeError):
             return None
 
+    def _parse_reactions(raw: str | None) -> list:
+        parsed = _parse_entities(raw)
+        return [str(e) for e in parsed] if isinstance(parsed, list) else []
+
     async def api_my_post_detail(request: web.Request) -> web.Response:
         user = _require_user(request)
         if user is None:
@@ -424,6 +429,7 @@ async def start_webapp_server(
                 "caption": row.caption,
                 "caption_entities": _parse_entities(row.caption_entities_json),
                 "media": [{"idx": i, "type": m["type"]} for i, m in enumerate(media)],
+                "reactions": _parse_reactions(row.reaction_emojis_json),
             }
         )
 
@@ -641,6 +647,21 @@ async def start_webapp_server(
         if not check.is_valid:
             return None, web.json_response({"error": check.error_key}, status=400)
 
+        # Seed reactions: the client resolves palette/preset to a plain emoji
+        # list; the server is the trust boundary that enforces the plan's palette
+        # and count cap (never trust the client).
+        raw_reactions = payload.get("reactions")
+        emojis: list[str] = []
+        if isinstance(raw_reactions, list):
+            emojis = [str(e) for e in raw_reactions if isinstance(e, str)]
+        elif raw_reactions not in (None, ""):
+            return None, web.json_response({"error": "bad_request"}, status=400)
+        try:
+            emojis = reactions.sanitize_emojis(await store.get_user_plan(user_id), emojis)
+        except reactions.ReactionValidationError as exc:
+            return None, web.json_response({"error": exc.reason}, status=400)
+        reaction_emojis_json = json.dumps(emojis, ensure_ascii=False) if emojis else None
+
         # Same rights gate as the bot flow: the destination link outlives the
         # rights that created it, so both sides must be re-checked live.
         if bot is None:
@@ -659,6 +680,7 @@ async def start_webapp_server(
                 "caption_above": bool(payload.get("caption_above")),
                 "scheduled_at_utc": parsed.utc_epoch,
                 "request_id": str(payload.get("request_id") or "").strip()[:128] or None,
+                "reaction_emojis_json": reaction_emojis_json,
             },
             None,
         )
@@ -683,6 +705,7 @@ async def start_webapp_server(
                     caption_above=data["caption_above"],
                     media_items=data["media_items"],
                     request_id=data["request_id"],
+                    reaction_emojis_json=data["reaction_emojis_json"],
                 )
             else:
                 post_id = await store.create_scheduled_text_post(
@@ -692,6 +715,7 @@ async def start_webapp_server(
                     text=data["text"],
                     entities_json=None,
                     request_id=data["request_id"],
+                    reaction_emojis_json=data["reaction_emojis_json"],
                 )
         except ResourceLimitError as exc:
             return web.json_response({"error": f"limit_{exc.resource}"}, status=409)
@@ -732,6 +756,7 @@ async def start_webapp_server(
         updates: dict[str, object] = {
             "scheduled_at_utc": data["scheduled_at_utc"],
             "chat_id": data["chat_id"],
+            "reaction_emojis_json": data["reaction_emojis_json"],
         }
         if data["media_items"]:
             updates |= {
@@ -755,6 +780,64 @@ async def start_webapp_server(
         return web.json_response(
             {"ok": True, "id": post_id, "scheduled_at_utc": data["scheduled_at_utc"]}
         )
+
+    async def api_my_reactions(request: web.Request) -> web.Response:
+        """Reaction meta for the composer: the plan's palette/cap plus presets."""
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        plan = await store.get_user_plan(user_id)
+        palette = reactions.palette_for(plan)
+        presets = [
+            {"post_type": p["post_type"], "emojis": _parse_reactions(p["emojis_json"])}
+            for p in await store.list_reaction_presets(user_id)
+        ]
+        return web.json_response(
+            {
+                "plan": plan,
+                "cap": limits.limit_for(plan, "reactions"),
+                "palette": list(palette) if palette is not None else [],
+                "any_emoji": palette is None,
+                "presets_allowed": reactions.presets_allowed(plan),
+                "presets": presets,
+            }
+        )
+
+    async def api_my_reaction_preset_save(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        plan = await store.get_user_plan(user_id)
+        if not reactions.presets_allowed(plan):
+            return web.json_response({"error": "presets_not_allowed"}, status=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_request"}, status=400)
+        post_type = str((payload or {}).get("post_type") or "").strip()[:64]
+        raw = (payload or {}).get("emojis")
+        if not post_type or not isinstance(raw, list):
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            emojis = reactions.sanitize_emojis(plan, [str(e) for e in raw if isinstance(e, str)])
+        except reactions.ReactionValidationError as exc:
+            return web.json_response({"error": exc.reason}, status=400)
+        if not emojis:
+            return web.json_response({"error": "empty_reactions"}, status=400)
+        await store.upsert_reaction_preset(user_id, post_type, json.dumps(emojis, ensure_ascii=False))
+        return web.json_response({"ok": True, "post_type": post_type, "emojis": emojis})
+
+    async def api_my_reaction_preset_delete(request: web.Request) -> web.Response:
+        user = _require_user(request)
+        if user is None:
+            return web.json_response({"error": "forbidden"}, status=403)
+        user_id = int(user["id"])
+        post_type = str(request.match_info.get("post_type") or "").strip()
+        if not post_type or not await store.delete_reaction_preset(user_id, post_type):
+            return web.json_response({"error": "not_found"}, status=404)
+        return web.json_response({"ok": True})
 
     async def api_stats(request: web.Request) -> web.Response:
         if _require_admin(request) is None:
@@ -842,6 +925,9 @@ async def start_webapp_server(
     app.router.add_post("/api/my/post/{id}/reschedule", api_my_reschedule)
     app.router.add_post("/api/my/post/{id}/cancel", api_my_cancel)
     app.router.add_post("/api/my/recurring/{id}/cancel", api_my_recurring_cancel)
+    app.router.add_get("/api/my/reactions", api_my_reactions)
+    app.router.add_post("/api/my/reactions/preset", api_my_reaction_preset_save)
+    app.router.add_post("/api/my/reactions/preset/{post_type}/delete", api_my_reaction_preset_delete)
 
     runner = web.AppRunner(app)
     await runner.setup()

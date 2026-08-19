@@ -53,6 +53,7 @@ class StateStoreBase:
         await run_migrations(self._conn)
         await self._reconcile_user_columns()
         await self._reconcile_scheduled_post_columns()
+        await self._reconcile_reaction_presets()
         await self._requeue_stuck_sending()
 
     async def _requeue_stuck_sending(self) -> None:
@@ -87,11 +88,32 @@ class StateStoreBase:
         post_column_names = {str(row["name"]) for row in post_columns}
         if "request_id" not in post_column_names:
             await self._conn.execute("ALTER TABLE scheduled_posts ADD COLUMN request_id TEXT NULL")
+        if "reaction_emojis_json" not in post_column_names:
+            await self._conn.execute("ALTER TABLE scheduled_posts ADD COLUMN reaction_emojis_json TEXT NULL")
         await self._conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_user_request_id
             ON scheduled_posts(user_id, request_id)
             WHERE request_id IS NOT NULL
+            """
+        )
+        await self._conn.commit()
+
+    async def _reconcile_reaction_presets(self) -> None:
+        # reaction_presets (migration 010) is created here, not in the migration
+        # file: a new CREATE TABLE in a late migration would break baselining of
+        # legacy pre-migration DBs (see 010_reactions.sql). IF NOT EXISTS makes
+        # this a no-op once present, covering fresh/upgraded/baselined DBs.
+        await self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reaction_presets (
+                user_id INTEGER NOT NULL,
+                post_type TEXT NOT NULL,
+                emojis_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, post_type),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
             """
         )
         await self._conn.commit()

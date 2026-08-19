@@ -34,6 +34,7 @@ class PostsMixin:
         text: str,
         entities_json: str | None,
         request_id: str | None = None,
+        reaction_emojis_json: str | None = None,
     ) -> str:
         if request_id:
             existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
@@ -51,6 +52,7 @@ class PostsMixin:
                 entities_json=entities_json,
                 created_at=int(time.time()),
                 request_id=request_id,
+                reaction_emojis_json=reaction_emojis_json,
             )
             await self._conn.commit()
         except Exception:
@@ -73,6 +75,7 @@ class PostsMixin:
         caption_above: bool | None,
         media_items: list[dict[str, str]],
         request_id: str | None = None,
+        reaction_emojis_json: str | None = None,
     ) -> str:
         if request_id:
             existing = await self._get_post_id_by_request_id(user_id=user_id, request_id=request_id)
@@ -93,6 +96,7 @@ class PostsMixin:
                 media_items=media_items,
                 created_at=int(time.time()),
                 request_id=request_id,
+                reaction_emojis_json=reaction_emojis_json,
             )
             await self._conn.commit()
         except Exception:
@@ -186,15 +190,16 @@ class PostsMixin:
         entities_json: str | None,
         created_at: int,
         request_id: str | None = None,
+        reaction_emojis_json: str | None = None,
     ) -> None:
         await self._conn.execute(
             """
             INSERT INTO scheduled_posts(
                 id, user_id, chat_id, scheduled_at_utc, status, kind, text, entities_json,
-                attempts, next_retry_at_utc, created_at, request_id
-            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?, ?)
+                attempts, next_retry_at_utc, created_at, request_id, reaction_emojis_json
+            ) VALUES(?, ?, ?, ?, 'pending', 'text', ?, ?, 0, NULL, ?, ?, ?)
             """,
-            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, created_at, request_id),
+            (post_id, user_id, chat_id, scheduled_at_utc, text, entities_json, created_at, request_id, reaction_emojis_json),
         )
 
     async def _insert_scheduled_media_post(
@@ -210,14 +215,15 @@ class PostsMixin:
         media_items: list[dict[str, str]],
         created_at: int,
         request_id: str | None = None,
+        reaction_emojis_json: str | None = None,
     ) -> None:
         await self._conn.execute(
             """
             INSERT INTO scheduled_posts(
                 id, user_id, chat_id, scheduled_at_utc, status, kind,
                 caption, caption_entities_json, caption_above,
-                attempts, next_retry_at_utc, created_at, request_id
-            ) VALUES(?, ?, ?, ?, 'pending', 'media', ?, ?, ?, 0, NULL, ?, ?)
+                attempts, next_retry_at_utc, created_at, request_id, reaction_emojis_json
+            ) VALUES(?, ?, ?, ?, 'pending', 'media', ?, ?, ?, 0, NULL, ?, ?, ?)
             """,
             (
                 post_id,
@@ -229,6 +235,7 @@ class PostsMixin:
                 None if caption_above is None else int(caption_above),
                 created_at,
                 request_id,
+                reaction_emojis_json,
             ),
         )
         for idx, item in enumerate(media_items):
@@ -249,6 +256,7 @@ class PostsMixin:
             "caption_entities_json",
             "caption_above",
             "media_items",
+            "reaction_emojis_json",
         }
 
     async def list_pending_posts(self, user_id: int, limit: int = 10, offset: int = 0) -> list["ScheduledPostRow"]:
@@ -340,6 +348,7 @@ class PostsMixin:
 
             next_scheduled_at_utc = int(updates.get("scheduled_at_utc", current_post.scheduled_at_utc))
             next_chat_id = int(updates.get("chat_id", current_post.chat_id))
+            next_reactions = updates.get("reaction_emojis_json", current_post.reaction_emojis_json)
 
             if content_update_requested:
                 next_kind = str(updates.get("kind", current_post.kind))
@@ -406,7 +415,8 @@ class PostsMixin:
                         entities_json=?,
                         caption=?,
                         caption_entities_json=?,
-                        caption_above=?
+                        caption_above=?,
+                        reaction_emojis_json=?
                     WHERE id=?
                     """,
                     (
@@ -418,6 +428,7 @@ class PostsMixin:
                         normalized_caption,
                         normalized_caption_entities,
                         normalized_caption_above,
+                        next_reactions,
                         post_id,
                     ),
                 )
@@ -436,10 +447,11 @@ class PostsMixin:
                     """
                     UPDATE scheduled_posts
                     SET scheduled_at_utc=?,
-                        chat_id=?
+                        chat_id=?,
+                        reaction_emojis_json=?
                     WHERE id=?
                     """,
-                    (next_scheduled_at_utc, next_chat_id, post_id),
+                    (next_scheduled_at_utc, next_chat_id, next_reactions, post_id),
                 )
                 if cur.rowcount != 1:
                     await self._conn.rollback()

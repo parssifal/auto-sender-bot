@@ -39,6 +39,7 @@ from core.state.models import (
     TeamMember,
 )
 from core.state.posts import PostsMixin
+from core.state.reactions import ReactionPresetsMixin
 from core.state.recurring import RecurringMixin
 from core.state.row_mappers import RowMappersMixin
 from core.state.stats import StatsMixin
@@ -68,6 +69,7 @@ class StateStore(
     TeamsMixin,
     DraftsMixin,
     PostsMixin,
+    ReactionPresetsMixin,
     RecurringMixin,
     StatsMixin,
     RowMappersMixin,

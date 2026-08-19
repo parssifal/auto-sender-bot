@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
@@ -9,6 +10,7 @@ from datetime import date, datetime, time as clock_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
+from aiogram.types import ReactionTypeEmoji
 from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
@@ -243,6 +245,34 @@ async def scheduler_loop(
     logger.info("Scheduler stopped")
 
 
+async def _seed_reactions(bot: Bot, post: ScheduledPostRow, message_ids: tuple[int, ...]) -> None:
+    """Seed the post's emoji reactions on its first message. Best-effort.
+
+    Two things only a live channel can confirm — the real per-call emoji ceiling
+    and whether the chosen emoji are in the channel's ``available_reactions`` —
+    mean any error here is expected in the wild. The post is already sent, so we
+    log and return; never let this raise back into the send path.
+    """
+    raw = post.reaction_emojis_json
+    if not raw or not message_ids:
+        return
+    try:
+        emojis = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Post %s has unparseable reaction_emojis_json", post.id)
+        return
+    if not emojis:
+        return
+    try:
+        await bot.set_message_reaction(
+            chat_id=post.chat_id,
+            message_id=message_ids[0],
+            reaction=[ReactionTypeEmoji(emoji=str(e)) for e in emojis],
+        )
+    except Exception:
+        logger.warning("Failed to seed reactions on post %s (chat %s)", post.id, post.chat_id, exc_info=True)
+
+
 async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow, now_utc: int) -> None:
     if post.status != "pending":
         return
@@ -272,10 +302,10 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
             return
 
         if post.kind == "text":
-            await send_text(bot=bot, chat_id=post.chat_id, text=post.text or "", entities_json=post.entities_json)
+            stats = await send_text(bot=bot, chat_id=post.chat_id, text=post.text or "", entities_json=post.entities_json)
         elif post.kind == "media":
             media = await store.get_post_media(post.id)
-            await send_media_post(
+            stats = await send_media_post(
                 bot=bot,
                 chat_id=post.chat_id,
                 media_items=media,
@@ -288,6 +318,10 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
 
         await _mark_sent_with_next_recurring(store=store, post=post, now_utc=now_utc, sent_at_utc=sent_at_utc)
         logger.info("Sent post %s to chat %s", post.id, post.chat_id)
+        # Reactions are pure social-proof gravy: the post is already delivered and
+        # marked sent, so a reaction failure must never fail it. _seed_reactions
+        # swallows and logs everything internally.
+        await _seed_reactions(bot=bot, post=post, message_ids=stats.message_ids)
     except TelegramRetryAfter as exc:
         next_retry_at = int(time.time()) + int(getattr(exc, "retry_after", 1)) + 1
         await _mark_retry_or_failed_with_bot(

@@ -84,6 +84,7 @@ class ScheduledPostRow:
     created_at: int
     sent_at: int | None
     last_error: str | None
+    reaction_emojis_json: str | None = None
 
 
 @dataclass(frozen=True)
