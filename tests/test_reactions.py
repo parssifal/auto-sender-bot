@@ -15,13 +15,13 @@ CHAT_ID = -1001
 
 # --- palette / cap enforcement (server-side, never trust the client) -------- #
 
-def test_cap_by_plan_basic_pro_premium() -> None:
-    # Within cap passes.
+def test_single_reaction_cap_every_plan() -> None:
+    # A bot can seed exactly one reaction (Telegram caps non-premium accounts at
+    # one per message), so the cap is 1 on every plan.
     assert reactions.sanitize_emojis("basic", ["👍"]) == ["👍"]
-    assert reactions.sanitize_emojis("pro", ["👍", "😂"]) == ["👍", "😂"]
-    assert reactions.sanitize_emojis("premium", ["🦄", "🎃", "🥑"]) == ["🦄", "🎃", "🥑"]
-    # One over the cap is rejected for each plan (basic 1 / pro 2 / premium 3).
-    for plan, over in (("basic", ["👍", "❤️"]), ("pro", ["👍", "❤️", "🔥"]), ("premium", ["🦄", "🎃", "🥑", "🐙"])):
+    assert reactions.sanitize_emojis("pro", ["😂"]) == ["😂"]
+    assert reactions.sanitize_emojis("premium", ["🦄"]) == ["🦄"]
+    for plan, over in (("basic", ["👍", "❤️"]), ("pro", ["👍", "😂"]), ("premium", ["🦄", "🎃"])):
         with pytest.raises(reactions.ReactionValidationError) as exc:
             reactions.sanitize_emojis(plan, over)
         assert exc.value.reason == "too_many_reactions"
@@ -53,8 +53,9 @@ def test_display_palette_premium_is_concrete() -> None:
     assert reactions.display_palette("pro") == reactions.PRO_PALETTE
 
 
-def test_dedupe_preserves_order() -> None:
-    assert reactions.sanitize_emojis("pro", ["👍", "👍", "😂"]) == ["👍", "😂"]
+def test_dedupe_to_single() -> None:
+    # De-dupe collapses a repeated pick to one, which is within the cap of 1.
+    assert reactions.sanitize_emojis("pro", ["👍", "👍"]) == ["👍"]
 
 
 def test_presets_allowed_by_plan() -> None:

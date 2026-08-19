@@ -1,10 +1,17 @@
-"""Seed-reaction palettes and per-plan validation (single source of truth).
+"""Seed-reaction palette and per-plan validation (single source of truth).
 
-The bot reacts to its own just-published message so the post carries emoji
-"seeds" (social proof), one count each — see ``core/scheduler.py``. What a user
-may seed is gated by plan here, and enforced server-side (never trust the
-client): the allowed *palette* widens by tier and the *count* is capped by
-``limit_for(plan, "reactions")`` (basic 1 / pro 2 / premium 3).
+The bot reacts to its own just-published message so the post carries an emoji
+"seed" (social proof) — see ``core/scheduler.py``. It's exactly ONE reaction:
+setMessageReaction sets an account's whole reaction set (it replaces, not
+appends), and Telegram caps a non-premium account — bots can't be Premium — at
+one reaction per message. Multiple distinct reactions only exist when multiple
+real accounts react, which a single bot cannot fake.
+
+So plans differ by the *palette* a user may seed from, not the count (which is
+always 1, ``limit_for(plan, "reactions")``): basic a choice of three, pro an
+extended set, premium anything the channel's ``available_reactions`` allows
+(validated by Telegram at send time, not here). Enforced server-side — never
+trust the client.
 """
 from __future__ import annotations
 
@@ -103,26 +110,22 @@ def sanitize_emojis(plan: str, emojis: list[str]) -> list[str]:
 
 
 if __name__ == "__main__":
-    # Self-check: palette membership + count cap, per plan.
+    # Self-check: palette membership + single-reaction cap, per plan.
     assert sanitize_emojis("basic", ["👍"]) == ["👍"]
-    assert sanitize_emojis("basic", ["👍", "👍"]) == ["👍"]  # de-dupe
-    try:
-        sanitize_emojis("basic", ["👍", "❤️"])  # over basic cap of 1
-        raise AssertionError("expected too_many_reactions")
-    except ReactionValidationError as e:
-        assert e.reason == "too_many_reactions"
+    assert sanitize_emojis("basic", ["👍", "👍"]) == ["👍"]  # de-dupe to one
+    for plan, over in (("basic", ["👍", "❤️"]), ("pro", ["👍", "😂"]), ("premium", ["🦄", "🎃"])):
+        try:
+            sanitize_emojis(plan, over)  # two distinct reactions — a bot can seed one
+            raise AssertionError("expected too_many_reactions")
+        except ReactionValidationError as e:
+            assert e.reason == "too_many_reactions"
     try:
         sanitize_emojis("basic", ["😂"])  # not in basic palette
         raise AssertionError("expected emoji_not_allowed")
     except ReactionValidationError as e:
         assert e.reason == "emoji_not_allowed"
-    assert sanitize_emojis("pro", ["👍", "😂"]) == ["👍", "😂"]
-    try:
-        sanitize_emojis("pro", ["👍", "😂", "🔥"])  # over pro cap of 2
-        raise AssertionError("expected too_many_reactions")
-    except ReactionValidationError as e:
-        assert e.reason == "too_many_reactions"
-    assert sanitize_emojis("premium", ["🦄", "🎃", "🥑"]) == ["🦄", "🎃", "🥑"]  # any emoji, cap 3
+    assert sanitize_emojis("pro", ["😂"]) == ["😂"]           # in pro palette
+    assert sanitize_emojis("premium", ["🦄"]) == ["🦄"]       # premium: any single emoji
     try:
         sanitize_emojis("premium", ["hello"])  # plain text is not an emoji
         raise AssertionError("expected emoji_not_allowed")

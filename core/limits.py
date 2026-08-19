@@ -24,12 +24,14 @@ MAX_DRAFTS_PER_USER = 500
 MAX_RECURRING_PER_USER = 200
 
 # Per-plan allowances (posts/destinations/drafts/recurring/reactions).
-# ``reactions`` is unused in Phase 1 (reactions ship in Phase 2) but carried
-# here so the tier table is the single source of truth.
+# ``reactions`` is fixed at 1 for every plan: the bot seeds reactions on its own
+# post via setMessageReaction, and Telegram caps a non-premium account (bots can't
+# be Premium) at ONE reaction per message. Plans differ by the *palette* a user may
+# seed from (see ``core.reactions``), not the count.
 PLAN_LIMITS: dict[str, dict[str, int]] = {
     "basic":   {"posts": 100,  "destinations": 5,   "drafts": 50,  "recurring": 10,  "reactions": 1},
-    "pro":     {"posts": 300,  "destinations": 20,  "drafts": 150, "recurring": 50,  "reactions": 2},
-    "premium": {"posts": 1000, "destinations": 100, "drafts": 500, "recurring": 200, "reactions": 3},
+    "pro":     {"posts": 300,  "destinations": 20,  "drafts": 150, "recurring": 50,  "reactions": 1},
+    "premium": {"posts": 1000, "destinations": 100, "drafts": 500, "recurring": 200, "reactions": 1},
 }
 
 # Referral bonus (Phase 3): activation (referee's first delivered post) grants
