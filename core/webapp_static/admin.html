@@ -265,6 +265,7 @@
         <div class="f"><div class="k">Регистрация</div><div class="val num" id="ucCreated" style="font-size:14px">—</div></div>
         <div class="f"><div class="k">Статусы</div><div class="val num" id="ucStatuses" style="font-size:13px">—</div></div>
         <div class="f"><div class="k">Тариф</div><div class="val num" id="ucPlan" style="font-size:14px">—</div></div>
+        <div class="f"><div class="k">Рефералы</div><div class="val num" id="ucReferrals" style="font-size:14px">—</div></div>
       </div>
       <div class="plan-grant">
         <div class="k">Выдать тариф</div>
@@ -597,6 +598,9 @@
     currentUserId = p.user_id;
     $("planResult").textContent = "";
     $("ucPlan").textContent = planLabel(p);
+    var invited = (p.referred_count||0) + " (актив. " + (p.referred_activated||0) + ")";
+    if(p.referred_by){ invited += " · от " + p.referred_by; }
+    $("ucReferrals").textContent = invited;
     $("ucChannels").textContent = nf.format(p.channels);
     $("ucPosts").textContent = nf.format(p.posts);
     $("ucLang").textContent = p.language || "—";

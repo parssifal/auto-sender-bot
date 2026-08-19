@@ -32,6 +32,12 @@ PLAN_LIMITS: dict[str, dict[str, int]] = {
     "premium": {"posts": 1000, "destinations": 100, "drafts": 500, "recurring": 200, "reactions": 3},
 }
 
+# Referral bonus (Phase 3): activation (referee's first delivered post) grants
+# both referrer and referee this many days of Pro. REFERRAL_BONUS_CAP_DAYS is the
+# per-user lifetime ceiling on accumulated referral-bonus days (anti-farm).
+REFERRAL_BONUS_DAYS = 7
+REFERRAL_BONUS_CAP_DAYS = 90
+
 # Resource -> module attribute holding its global ceiling. Resources without an
 # entry (e.g. "reactions") have no separate ceiling and use the plan value as-is.
 _CEILING_ATTR = {

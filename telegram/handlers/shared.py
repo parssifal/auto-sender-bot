@@ -203,6 +203,18 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
             await _handle_team_invite_start(store, message, state, user_id=message.from_user.id, token=start_arg[3:])
             return
 
+        if start_arg.startswith("ref_") and len(start_arg) > 4:
+            # Capture-only: the bonus is paid later, on the referee's first
+            # delivered post. capture_referral enforces every anti-abuse gate
+            # (self-referral, first-start-only, once, referrer-must-exist).
+            try:
+                referrer_id = int(start_arg[4:])
+            except ValueError:
+                referrer_id = None
+            if referrer_id is not None:
+                await store.capture_referral(message.from_user.id, referrer_id)
+            # Fall through to the normal welcome flow.
+
         lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         if webapp_url:
@@ -220,6 +232,24 @@ def build_router(store: StateStore, *, webapp_url: str | None = None) -> Router:
         lang = await _user_lang(store, message.from_user.id)
         await state.clear()
         await message.answer(tr(lang, "cancelled"), reply_markup=await _main_menu_for(store, message.from_user.id))
+
+    @router.message(Command("invite"))
+    async def cmd_invite(message: Message, state: FSMContext, bot: Bot) -> None:
+        await store.ensure_user(
+            message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+        )
+        lang = await _user_lang(store, message.from_user.id)
+        await state.clear()
+        bot_user = await bot.me()
+        bot_username = getattr(bot_user, "username", None)
+        payload = f"ref_{message.from_user.id}"
+        link = f"https://t.me/{bot_username}?start={payload}" if bot_username else f"/start {payload}"
+        await message.answer(
+            tr(lang, "referral_invite", link=link),
+            reply_markup=await _main_menu_for(store, message.from_user.id),
+        )
 
     @router.callback_query(F.data == TimePicker.NOOP_CALLBACK)
     async def cb_time_picker_noop(query: CallbackQuery) -> None:

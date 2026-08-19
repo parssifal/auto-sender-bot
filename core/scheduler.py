@@ -273,6 +273,42 @@ async def _seed_reactions(bot: Bot, post: ScheduledPostRow, message_ids: tuple[i
         logger.warning("Failed to seed reactions on post %s (chat %s)", post.id, post.chat_id, exc_info=True)
 
 
+def _referral_bonus_text(days: int) -> str:
+    # Inline RU string (not i18n): core must not import telegram (see webapp.py),
+    # matching the _failure_notice_text precedent for scheduler-side DMs.
+    return (
+        f"🎁 Реферальный бонус: вам начислено +{days} дней тарифа Pro.\n"
+        "Спасибо, что приглашаете друзей!"
+    )
+
+
+async def _notify_referral_bonus(bot: Bot, *, user_id: int, days: int) -> None:
+    if days <= 0:  # nothing granted (already at cap or on a better plan)
+        return
+    try:
+        await bot.send_message(chat_id=user_id, text=_referral_bonus_text(days))
+    except Exception:
+        logger.info("Could not DM referral bonus notice to user %s", user_id)
+
+
+async def _maybe_grant_referral_bonus(bot: Bot, store: StateStore, post: ScheduledPostRow) -> None:
+    """Pay the referral bonus on the author's first delivered post. Best-effort.
+
+    The post is already sent and marked; referral bookkeeping is gravy that must
+    never fail it, so every error — grant or notify — is swallowed here. Idempotent
+    at the store level, so re-calling on later posts of a recurring series no-ops.
+    """
+    try:
+        result = await store.grant_referral_bonus(referee_id=post.user_id, now=int(time.time()))
+    except Exception:
+        logger.warning("Referral bonus grant failed for user %s (post %s)", post.user_id, post.id, exc_info=True)
+        return
+    if result is None:
+        return
+    await _notify_referral_bonus(bot, user_id=post.user_id, days=result.referee_days)
+    await _notify_referral_bonus(bot, user_id=result.referrer_id, days=result.referrer_days)
+
+
 async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow, now_utc: int) -> None:
     if post.status != "pending":
         return
@@ -322,6 +358,9 @@ async def _process_due_post(bot: Bot, store: StateStore, post: ScheduledPostRow,
         # marked sent, so a reaction failure must never fail it. _seed_reactions
         # swallows and logs everything internally.
         await _seed_reactions(bot=bot, post=post, message_ids=stats.message_ids)
+        # Referral activation: the first delivered post pays both parties +7d Pro.
+        # Best-effort and idempotent — never fails the already-delivered post.
+        await _maybe_grant_referral_bonus(bot=bot, store=store, post=post)
     except TelegramRetryAfter as exc:
         next_retry_at = int(time.time()) + int(getattr(exc, "retry_after", 1)) + 1
         await _mark_retry_or_failed_with_bot(

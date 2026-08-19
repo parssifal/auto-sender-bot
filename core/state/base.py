@@ -79,6 +79,12 @@ class StateStoreBase:
             await self._conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'basic'")
         if "plan_expires_at" not in user_column_names:
             await self._conn.execute("ALTER TABLE users ADD COLUMN plan_expires_at INTEGER NULL")
+        if "referred_by" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER NULL")
+        if "referral_bonus_granted" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN referral_bonus_granted INTEGER NOT NULL DEFAULT 0")
+        if "referral_bonus_days" not in user_column_names:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN referral_bonus_days INTEGER NOT NULL DEFAULT 0")
         await self._conn.commit()
 
     async def _reconcile_scheduled_post_columns(self) -> None:

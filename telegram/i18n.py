@@ -121,6 +121,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "- Name: {team_name}\n"
             "- Role: {role}"
         ),
+        "referral_invite": (
+            "Invite friends! When someone you invited publishes their first post, "
+            "you BOTH get +7 days of Pro.\n\n"
+            "Your link: {link}"
+        ),
         "team_members_none": "You do not have teams yet.",
         "team_members_choose": "Your teams:\n\n{lines}\n\nRun /team_members <team_id>.",
         "team_members_choose_item": "team={team_id} - {team_name} - {role}",
@@ -514,6 +519,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Вы уже состоите в этой команде. team={team_id}\n"
             "- Название: {team_name}\n"
             "- Роль: {role}"
+        ),
+        "referral_invite": (
+            "Приглашайте друзей! Когда приглашённый вами человек опубликует "
+            "первый пост, вы ОБА получите +7 дней тарифа Pro.\n\n"
+            "Ваша ссылка: {link}"
         ),
         "team_members_none": "У вас пока нет команд.",
         "team_members_choose": "Ваши команды:\n\n{lines}\n\nЗапустите /team_members <team_id>.",

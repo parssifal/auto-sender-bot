@@ -114,11 +114,12 @@ class StatsMixin:
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         row = await self._execute_fetchone(
             "SELECT user_id, timezone, language, username, first_name, created_at, "
-            "plan, plan_expires_at FROM users WHERE user_id=?",
+            "plan, plan_expires_at, referred_by FROM users WHERE user_id=?",
             (user_id,),
         )
         if row is None:
             return None
+        referral = await self.get_referral_stats(user_id)
         channels = await self.count_user_destinations(user_id)
         posts_row = await self._execute_fetchone(
             "SELECT COUNT(1) AS cnt FROM scheduled_posts WHERE user_id=?",
@@ -141,6 +142,9 @@ class StatsMixin:
             "created_at": int(row["created_at"]),
             "plan": row["plan"] or "basic",
             "plan_expires_at": None if row["plan_expires_at"] is None else int(row["plan_expires_at"]),
+            "referred_by": None if row["referred_by"] is None else int(row["referred_by"]),
+            "referred_count": referral["referred_count"],
+            "referred_activated": referral["referred_activated"],
             "channels": channels,
             "posts": posts,
             "posts_by_status": posts_by_status,
