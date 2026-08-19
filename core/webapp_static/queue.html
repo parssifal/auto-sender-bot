@@ -170,9 +170,15 @@
     border-radius:999px; padding:6px 12px; font-size:19px; line-height:1; cursor:pointer}
   button.rx-chip:active{transform:scale(.94)}
   button.rx-chip.on{border-color:var(--accent); background:color-mix(in srgb,var(--accent) 16%, transparent)}
-  .rx-add{display:inline-flex; gap:6px; align-items:center}
-  .rx-add input{width:56px; appearance:none; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink);
-    border-radius:10px; padding:6px 8px; font-size:17px; text-align:center}
+  .rx-more{appearance:none; border:1px dashed var(--line-strong); background:transparent; color:var(--muted);
+    border-radius:999px; padding:6px 13px; font-size:14px; font-weight:700; cursor:pointer}
+  .rx-more:active{transform:scale(.94)}
+  .rx-hint{font-size:11.5px; color:var(--faint); font-weight:600}
+  #rx-picker{z-index:30}
+  #rx-picker .modal{padding-left:14px; padding-right:14px}
+  emoji-picker{width:100%; height:min(58vh,430px); --background:var(--surface); --border-color:var(--line-strong);
+    --input-border-color:var(--line-strong); --input-font-color:var(--ink); --input-placeholder-color:var(--faint);
+    --indicator-color:var(--accent); --emoji-size:1.5rem; --category-font-color:var(--muted)}
   .rx-presets{margin-top:12px; display:flex; flex-direction:column; gap:9px}
   .rx-preset-chips{display:flex; flex-wrap:wrap; gap:8px}
   .rx-preset{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line-strong); background:var(--surface-2);
@@ -280,6 +286,8 @@
       <label><span id="c-rx-l">Реакции-затравки</span> <span class="rx-cap" id="c-rx-cap"></span></label>
       <div class="rx-palette" id="c-rx-palette"></div>
       <div class="rx-presets" id="c-rx-presets" hidden>
+        <label style="margin:0"><span id="c-rx-presets-l">Наборы</span></label>
+        <div class="rx-hint" id="c-rx-presets-hint"></div>
         <div class="rx-preset-chips" id="c-rx-preset-chips"></div>
         <div class="rx-save">
           <input type="text" id="c-rx-name" maxlength="64" placeholder="Название набора">
@@ -299,6 +307,13 @@
       <button class="act" id="c-cancel">Отмена</button>
       <button class="act primary" id="c-save">Запланировать</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="rx-picker">
+  <div class="modal">
+    <h3 id="rxp-title">Эмодзи</h3>
+    <div id="rxp-mount"></div>
   </div>
 </div>
 
@@ -369,6 +384,8 @@ const I18N = {
     rx_title:"Реакции-затравки", rx_cap:n=>`до ${n}`, rx_presets:"Наборы",
     rx_save_preset:"Сохранить набор", rx_name_ph:"Название набора",
     rx_need_name:"Укажите название набора", rx_need_emoji:"Выберите эмодзи для набора",
+    rx_add_emoji:"＋ эмодзи", rx_picker_title:"Выберите эмодзи", rx_picker_fail:"Не удалось открыть эмодзи",
+    rx_presets_hint:"Соберите набор один раз — потом ставится одним тапом.",
   },
   en: {
     title:"My posts", sub:"Post queue", queue:"Dispatch queue", recurring:"On schedule", admin_btn:"Admin panel",
@@ -394,6 +411,8 @@ const I18N = {
     rx_title:"Seed reactions", rx_cap:n=>`up to ${n}`, rx_presets:"Presets",
     rx_save_preset:"Save preset", rx_name_ph:"Preset name",
     rx_need_name:"Name the preset", rx_need_emoji:"Pick emoji for the preset",
+    rx_add_emoji:"＋ emoji", rx_picker_title:"Pick an emoji", rx_picker_fail:"Couldn't open emoji picker",
+    rx_presets_hint:"Build a set once — then seed it in one tap.",
   },
 };
 // Server error keys → readable text, shared by every modal.
@@ -570,6 +589,9 @@ function applyStaticLabels(){
   document.getElementById("c-rx-l").textContent = t("rx_title");
   document.getElementById("c-rx-name").placeholder = t("rx_name_ph");
   document.getElementById("c-rx-save").textContent = t("rx_save_preset");
+  document.getElementById("c-rx-presets-l").textContent = t("rx_presets");
+  document.getElementById("c-rx-presets-hint").textContent = t("rx_presets_hint");
+  document.getElementById("rxp-title").textContent = t("rx_picker_title");
   document.getElementById("c-cancel").textContent = t("c_cancel");
   document.getElementById("c-save").textContent = t("c_save");
   const b = document.getElementById("tz-banner");
@@ -753,19 +775,27 @@ let composeEditId = null;   // null = new post
 let composeRequestId = null;
 let rxMeta = null;          // {plan,cap,palette,any_emoji,presets_allowed,presets}
 let rxSelected = [];        // ordered seed emojis, capped at rxMeta.cap
+// Recently-picked custom emoji (premium), kept client-side so an "any emoji"
+// choice is one tap next time instead of reopening the picker.
+let rxRecent = (()=>{ try{ return JSON.parse(localStorage.getItem("rx_recent")||"[]").filter(x=>typeof x==="string").slice(0,12); }catch{ return []; } })();
+function rxPushRecent(e){
+  rxRecent = [e, ...rxRecent.filter(x=>x!==e)].slice(0,12);
+  try{ localStorage.setItem("rx_recent", JSON.stringify(rxRecent)); }catch{}
+}
 
-// The palette shown is the plan's set plus any already-selected emoji (so a
-// premium custom pick renders as a toggleable chip too).
+// The palette shown is the plan's quick set, plus recent custom picks and any
+// already-selected emoji (so a premium custom pick renders as a toggleable chip).
 function renderReactions(){
   const field = document.getElementById("c-rx-field");
   if(!rxMeta){ field.hidden = true; return; }
   field.hidden = false;
   document.getElementById("c-rx-cap").textContent = t("rx_cap")(rxMeta.cap);
   const pal = [...rxMeta.palette];
+  if(rxMeta.any_emoji) for(const e of rxRecent) if(!pal.includes(e)) pal.push(e);
   for(const e of rxSelected) if(!pal.includes(e)) pal.push(e);
   document.getElementById("c-rx-palette").innerHTML =
     pal.map(e=>`<button type="button" class="rx-chip${rxSelected.includes(e)?" on":""}" data-rx="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join("")
-    + (rxMeta.any_emoji ? `<span class="rx-add"><input id="c-rx-input" maxlength="8" placeholder="🙂"><button type="button" class="tinybtn" id="c-rx-add">+</button></span>` : "");
+    + (rxMeta.any_emoji ? `<button type="button" class="rx-more" id="c-rx-more">${t("rx_add_emoji")}</button>` : "");
   const pres = document.getElementById("c-rx-presets");
   pres.hidden = !rxMeta.presets_allowed;
   if(rxMeta.presets_allowed){
@@ -817,15 +847,31 @@ document.getElementById("c-rx-field").addEventListener("click",(e)=>{
   if(chip){ toggleEmoji(chip.dataset.rx); return; }
   const pre = e.target.closest("[data-preset]");
   if(pre){ loadPreset(pre.dataset.preset); return; }
-  if(e.target.id === "c-rx-add"){
-    const inp = document.getElementById("c-rx-input");
-    const v = (inp.value||"").trim();
-    if(v){ rxAdd(v); }
-    inp.value = "";
-    renderReactions();
-  }
+  if(e.target.id === "c-rx-more"){ openRxPicker(); }
 });
 document.getElementById("c-rx-save").addEventListener("click", savePreset);
+
+// Emoji picker (premium "any emoji"): vendored emoji-picker-element, loaded on
+// first open. dataSource is pinned to our origin (CSP blocks the CDN default).
+const rxPickerOverlay = document.getElementById("rx-picker");
+let rxPickerEl = null;
+async function openRxPicker(){
+  if(!rxPickerEl){
+    try{
+      const { Picker } = await import("/app/vendor/emoji/index.js");
+      rxPickerEl = new Picker({ dataSource: "/app/vendor/emoji/data.json" });
+      rxPickerEl.addEventListener("emoji-click", (ev)=>{
+        const u = ev.detail && ev.detail.unicode;
+        if(!u) return;
+        rxAdd(u); rxPushRecent(u); renderReactions();
+      });
+      document.getElementById("rxp-mount").appendChild(rxPickerEl);
+    }catch(err){ cErr.textContent = t("rx_picker_fail"); return; }
+  }
+  rxPickerOverlay.classList.add("open");
+}
+// Backdrop tap closes; taps inside the sheet don't bubble out to it.
+rxPickerOverlay.addEventListener("click", (e)=>{ if(e.target === rxPickerOverlay) rxPickerOverlay.classList.remove("open"); });
 
 function newRequestId(){
   if(window.crypto?.randomUUID) return window.crypto.randomUUID();

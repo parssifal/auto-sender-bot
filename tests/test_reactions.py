@@ -34,8 +34,23 @@ def test_palette_membership_rejected() -> None:
     with pytest.raises(reactions.ReactionValidationError) as exc:
         reactions.sanitize_emojis("pro", ["🦄"])  # not in pro palette
     assert exc.value.reason == "emoji_not_allowed"
-    # Premium accepts anything.
+    # Premium accepts any emoji, but not plain text typed into the free input.
     assert reactions.sanitize_emojis("premium", ["🦄"]) == ["🦄"]
+    for junk in ("hello", "123", "a", ":fire:", ""):
+        with pytest.raises(reactions.ReactionValidationError) as exc:
+            reactions.sanitize_emojis("premium", [junk])
+        assert exc.value.reason == "emoji_not_allowed"
+    # A keycap emoji carries an ASCII digit but is still a real emoji — kept.
+    assert reactions.sanitize_emojis("premium", ["1️⃣"]) == ["1️⃣"]
+
+
+def test_display_palette_premium_is_concrete() -> None:
+    # Validation whitelist is None (any emoji) but the UI quick set is concrete —
+    # premium must never be handed an empty palette row.
+    assert reactions.palette_for("premium") is None
+    assert reactions.display_palette("premium") == reactions.PREMIUM_PALETTE
+    assert reactions.display_palette("basic") == reactions.BASIC_PALETTE
+    assert reactions.display_palette("pro") == reactions.PRO_PALETTE
 
 
 def test_dedupe_preserves_order() -> None:

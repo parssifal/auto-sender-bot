@@ -797,7 +797,9 @@ async def start_webapp_server(
             {
                 "plan": plan,
                 "cap": limits.limit_for(plan, "reactions"),
-                "palette": list(palette) if palette is not None else [],
+                # Quick-pick set is always concrete (premium too — never an empty
+                # row); ``any_emoji`` says whether the free picker is also offered.
+                "palette": list(reactions.display_palette(plan)),
                 "any_emoji": palette is None,
                 "presets_allowed": reactions.presets_allowed(plan),
                 "presets": presets,
@@ -928,6 +930,9 @@ async def start_webapp_server(
     app.router.add_get("/api/my/reactions", api_my_reactions)
     app.router.add_post("/api/my/reactions/preset", api_my_reaction_preset_save)
     app.router.add_post("/api/my/reactions/preset/{post_type}/delete", api_my_reaction_preset_delete)
+    # Vendored emoji-picker-element (JS + emojibase data.json), same-origin so the
+    # CSP's connect-src/script-src 'self' allows it. Read-only static dir.
+    app.router.add_static("/app/vendor/", _STATIC_DIR / "vendor")
 
     runner = web.AppRunner(app)
     await runner.setup()

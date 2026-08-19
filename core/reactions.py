@@ -15,15 +15,51 @@ import core.limits as limits
 # (validated by Telegram at send time, not here).
 BASIC_PALETTE: tuple[str, ...] = ("👍", "❤️", "🔥")
 PRO_PALETTE: tuple[str, ...] = ("👍", "❤️", "🔥", "😂", "🙏", "👏", "🎉")
+# Premium may seed *any* emoji (validated only as "looks like emoji", below), but
+# still needs a rich tap-first quick set so it isn't handed an empty palette and
+# a text box. Purely a display default — see ``palette_for`` vs ``display_palette``.
+PREMIUM_PALETTE: tuple[str, ...] = (
+    "👍", "❤️", "🔥", "😂", "🙏", "👏", "🎉", "😮",
+    "😍", "🤔", "💯", "🥰", "😢", "🤯", "⚡", "🙌",
+)
 
 
 def palette_for(plan: str) -> tuple[str, ...] | None:
-    """Allowed emoji for ``plan``; ``None`` means unrestricted (premium)."""
+    """Emoji ``plan`` is *restricted to*; ``None`` means unrestricted (premium).
+
+    This is the validation whitelist, not what the UI shows — premium is ``None``
+    (any emoji passes ``sanitize_emojis``). For the picker's quick set use
+    ``display_palette``.
+    """
     if plan == "premium":
         return None
     if plan == "pro":
         return PRO_PALETTE
     return BASIC_PALETTE
+
+
+def display_palette(plan: str) -> tuple[str, ...]:
+    """Quick-pick emoji to render for ``plan`` (always a concrete set).
+
+    Same as ``palette_for`` except premium — unrestricted for validation — gets a
+    curated default set to tap instead of an empty row.
+    """
+    return PREMIUM_PALETTE if plan == "premium" else palette_for(plan)  # type: ignore[return-value]
+
+
+def _looks_like_emoji(token: str) -> bool:
+    """Heuristic reject for the premium "any emoji" path: block plain text.
+
+    Telegram's channel ``available_reactions`` is the real authority (checked at
+    send time), so this only has to stop the obvious junk — a crafted request
+    sending words/numbers. A token that is entirely ASCII (or empty / absurdly
+    long) is text, not an emoji; anything with a non-ASCII codepoint passes,
+    which keeps every real emoji including keycaps like ``1️⃣`` (the ASCII digit
+    rides with U+FE0F U+20E3).
+    ponytail: heuristic, not a full Unicode-emoji test; the send-time check is the
+    real ceiling. Upgrade to a proper emoji regex only if junk still slips in.
+    """
+    return bool(token) and len(token) <= 16 and not token.isascii()
 
 
 def presets_allowed(plan: str) -> bool:
@@ -55,7 +91,10 @@ def sanitize_emojis(plan: str, emojis: list[str]) -> list[str]:
         emoji = str(raw)
         if emoji in cleaned:
             continue
-        if palette is not None and emoji not in palette:
+        if palette is not None:
+            if emoji not in palette:
+                raise ReactionValidationError("emoji_not_allowed")
+        elif not _looks_like_emoji(emoji):  # premium free input: reject plain text
             raise ReactionValidationError("emoji_not_allowed")
         cleaned.append(emoji)
     if len(cleaned) > cap:
@@ -84,4 +123,11 @@ if __name__ == "__main__":
     except ReactionValidationError as e:
         assert e.reason == "too_many_reactions"
     assert sanitize_emojis("premium", ["🦄", "🎃", "🥑"]) == ["🦄", "🎃", "🥑"]  # any emoji, cap 3
+    try:
+        sanitize_emojis("premium", ["hello"])  # plain text is not an emoji
+        raise AssertionError("expected emoji_not_allowed")
+    except ReactionValidationError as e:
+        assert e.reason == "emoji_not_allowed"
+    assert display_palette("premium") == PREMIUM_PALETTE  # premium gets a quick set, not []
+    assert display_palette("basic") == BASIC_PALETTE
     print("core.reactions self-check OK")

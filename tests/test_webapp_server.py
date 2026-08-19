@@ -198,3 +198,18 @@ async def test_broadcast_happy_path_returns_summary(bcast_server):
     sent = bcast_server._fake_bot.sent
     assert {chat_id for chat_id, _ in sent} == {ADMIN_ID, 101, 102}
     assert [text for _, text in sent] == ["hello all"] * 3
+
+
+@pytest.mark.asyncio
+async def test_vendored_emoji_picker_served(server) -> None:
+    # The composer's premium picker loads emoji-picker-element same-origin (the CSP
+    # blocks a CDN). Assert the static route serves the ESM module with a JS
+    # content-type and the emojibase data, both unauthenticated.
+    async with ClientSession() as session:
+        async with session.get(server.url("/app/vendor/emoji/index.js")) as resp:
+            assert resp.status == 200
+            assert "javascript" in resp.headers["Content-Type"]
+            assert "export" in await resp.text()
+        async with session.get(server.url("/app/vendor/emoji/data.json")) as resp:
+            assert resp.status == 200
+            assert isinstance(await resp.json(), list)
